@@ -33,6 +33,7 @@ dependencies = [
     "cloud-sql-python-connector[pg8000,psycopg]>=1.20.1",
     "pg8000>=1.31.5",
     "firebase-admin>=7.3.0",
+    "dspy-ai>=3.2.1",
 ]
 
 [dependency-groups]
