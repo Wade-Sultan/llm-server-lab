@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
-from pydantic import BaseModel, ConfigDict
-from typing import Any
+from pydantic import BaseModel, ConfigDict, Field
+from typing import Any, Callable, Literal
 
 class ChatMessage(BaseModel):
     role: str # User or Assistant
@@ -49,3 +49,12 @@ class ChatResponse(BaseModel):
     ready: bool
     build: dict[str, Any] | None = None  # full build object when ready
     build_key: str | None = None
+
+class UserPreferences(BaseModel):
+    """Optional high-level preferences that sit outside the per-use-case Q&A."""
+    preferred_brand_cpu: Literal["amd", "intel", "no_preference"] = "no_preference"
+    preferred_brand_gpu: Literal["nvidia", "amd", "no_preference"] = "no_preference"
+    form_factor: Literal["atx", "matx", "itx", "no_preference"] = "no_preference"
+    rgb_lighting: bool = False
+    wifi_required: bool = True
+    color_theme: str | None = Field(None, description="e.g. 'black', 'white', 'black & red'")
