@@ -7,3 +7,6 @@ htmlcov
 .cache
 .venv
 .env
+
+# DSPy weights
+app/services/recommender/components/weights/*.json
