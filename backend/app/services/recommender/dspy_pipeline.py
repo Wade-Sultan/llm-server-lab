@@ -48,7 +48,7 @@ from app.services.recommender.db.queries import (
     get_ram_candidates,
     get_storage_candidates,
 )
-from app.services.recommender.pipeline import BuildRequest
+from app.schemas.chat import BuildRequest
 
 
 # ---------------------------------------------------------------------------
