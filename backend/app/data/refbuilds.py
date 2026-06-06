@@ -1,16 +1,38 @@
-from typing import TypedDict
+from typing import Any, TypedDict
+
 
 class Part(TypedDict):
     component: str
     brand: str
     model: str
-    approx_price: int  # USD
+    approx_price: int
+
 
 class Build(TypedDict):
     label: str
     description: str
     total_approx: int
-    parts: list[Part]
+    parts: list[dict[str, Any]]  # Part fields + component-type spec fields for seeding
+
+
+# ---------------------------------------------------------------------------
+# Spec field reference by component type
+# ---------------------------------------------------------------------------
+# CPU:          socket, tdp_watts, has_igpu, ddr_generation (list[str]),
+#               cores, threads, base_clock_ghz, boost_clock_ghz, l3_cache_mb
+# CPU Cooler:   supported_sockets (list[str]), cooler_type,
+#               max_tdp_watts, height_mm (air) | radiator_size_mm (aio)
+# Motherboard:  socket, form_factor, ddr_generation (str), memory_slots,
+#               has_wifi, chipset
+# RAM:          ddr_generation (str), speed_mhz, modules, capacity_gb
+# Storage:      storage_type, form_factor, interface, capacity_gb,
+#               read_speed_mbps, write_speed_mbps
+# GPU:          chipset, gpu_brand (lowercase), vram_gb, tdp_watts,
+#               length_mm, vram_type, pcie_generation
+# PSU:          wattage, form_factor, efficiency_rating
+# Case:         size, supported_mobo_form_factors (list[str]),
+#               max_gpu_length_mm, max_cooler_height_mm
+# ---------------------------------------------------------------------------
 
 BUILDS: dict[str, Build] = {
     "1080_entry": {
@@ -18,164 +40,515 @@ BUILDS: dict[str, Build] = {
         "description": "Solid 1080p performance for popular titles without breaking the bank.",
         "total_approx": 1100,
         "parts": [
-            {"component": "CPU", "brand": "AMD", "model": "Ryzen 5 5500", "approx_price": 85},
-            {"component": "CPU Cooler", "brand": "Thermalright", "model": "Assassin 120 SE", "approx_price": 35},
-            {"component": "Motherboard", "brand": "Gigabyte", "model": "B550 Eagle", "approx_price": 100},
-            {"component": "RAM", "brand": "Corsair", "model": "Vengeance 16GB DDR4", "approx_price": 140},
-            {"component": "Storage", "brand": "Samsung", "model": "990 Pro 1TB", "approx_price": 200},
-            {"component": "GPU", "brand": "AMD", "model": "Radeon RX 7600", "approx_price": 300},
-            {"component": "PSU", "brand": "Corsair", "model": "RM 650e", "approx_price": 80},
-            {"component": "Case", "brand": "NZXT", "model": "H5", "approx_price": 100},
+            {
+                "component": "CPU", "brand": "AMD", "model": "Ryzen 5 5500", "approx_price": 85,
+                "socket": "AM4", "tdp_watts": 65, "has_igpu": False,
+                "ddr_generation": ["ddr4"], "cores": 6, "threads": 12,
+                "base_clock_ghz": 3.6, "boost_clock_ghz": 4.2, "l3_cache_mb": 16,
+            },
+            {
+                "component": "CPU Cooler", "brand": "Thermalright", "model": "Assassin 120 SE", "approx_price": 35,
+                "supported_sockets": ["AM4", "AM5", "LGA1700", "LGA1851"],
+                "cooler_type": "air", "max_tdp_watts": 200, "height_mm": 155,
+            },
+            {
+                "component": "Motherboard", "brand": "Gigabyte", "model": "B550 Eagle", "approx_price": 100,
+                "socket": "AM4", "form_factor": "atx", "ddr_generation": "ddr4",
+                "memory_slots": 4, "has_wifi": False, "chipset": "B550",
+            },
+            {
+                "component": "RAM", "brand": "Corsair", "model": "Vengeance 16GB DDR4", "approx_price": 140,
+                "ddr_generation": "ddr4", "speed_mhz": 3200, "modules": 2, "capacity_gb": 16,
+            },
+            {
+                "component": "Storage", "brand": "Samsung", "model": "990 Pro 1TB", "approx_price": 200,
+                "storage_type": "nvme", "form_factor": "m2_2280", "interface": "pcie_gen4",
+                "capacity_gb": 1024, "read_speed_mbps": 7450, "write_speed_mbps": 6900,
+            },
+            {
+                "component": "GPU", "brand": "AMD", "model": "Radeon RX 7600", "approx_price": 300,
+                "chipset": "RX 7600", "gpu_brand": "amd", "vram_gb": 8,
+                "tdp_watts": 165, "length_mm": 240, "vram_type": "gddr6", "pcie_generation": 4,
+            },
+            {
+                "component": "PSU", "brand": "Corsair", "model": "RM 650e", "approx_price": 80,
+                "wattage": 650, "form_factor": "atx", "efficiency_rating": "80plus_gold",
+            },
+            {
+                "component": "Case", "brand": "NZXT", "model": "H5", "approx_price": 100,
+                "size": "mid_tower", "supported_mobo_form_factors": ["atx", "matx", "itx"],
+                "max_gpu_length_mm": 365, "max_cooler_height_mm": 185,
+            },
         ],
     },
+
     "1080_competitive": {
         "label": "Competitive 1080p",
         "description": "240+ FPS at 1080p from most popular FPS titles.",
         "total_approx": 2700,
         "parts": [
-            {"component": "CPU", "brand": "AMD", "model": "Ryzen 9 9950X3D", "approx_price": 550},
-            {"component": "CPU Cooler", "brand": "Corsair", "model": "iCUE Titan 360", "approx_price": 160},
-            {"component": "Motherboard", "brand": "Gigabyte", "model": "B850 AORUS Elite", "approx_price": 210},
-            {"component": "RAM", "brand": "Corsair", "model": "Vengeance RGB 32GB DDR5", "approx_price": 400},
-            {"component": "Storage", "brand": "Samsung", "model": "990 Pro 2TB", "approx_price": 330},
-            {"component": "GPU", "brand": "Nvidia", "model": "RTX 5070", "approx_price": 650},
-            {"component": "PSU", "brand": "Corsair", "model": "RM 1000x", "approx_price": 180},
-            {"component": "Case", "brand": "Corsair", "model": "5000D", "approx_price": 180},
+            {
+                "component": "CPU", "brand": "AMD", "model": "Ryzen 9 9950X3D", "approx_price": 550,
+                "socket": "AM5", "tdp_watts": 170, "has_igpu": False,
+                "ddr_generation": ["ddr5"], "cores": 16, "threads": 32,
+                "base_clock_ghz": 4.0, "boost_clock_ghz": 5.7, "l3_cache_mb": 128,
+            },
+            {
+                "component": "CPU Cooler", "brand": "Corsair", "model": "iCUE Titan 360", "approx_price": 160,
+                "supported_sockets": ["AM4", "AM5", "LGA1700", "LGA1851"],
+                "cooler_type": "aio_360", "radiator_size_mm": 360,
+            },
+            {
+                "component": "Motherboard", "brand": "Gigabyte", "model": "B850 AORUS Elite", "approx_price": 210,
+                "socket": "AM5", "form_factor": "atx", "ddr_generation": "ddr5",
+                "memory_slots": 4, "has_wifi": True, "chipset": "B850",
+            },
+            {
+                "component": "RAM", "brand": "Corsair", "model": "Vengeance RGB 32GB DDR5", "approx_price": 400,
+                "ddr_generation": "ddr5", "speed_mhz": 6000, "modules": 2, "capacity_gb": 32,
+            },
+            {
+                "component": "Storage", "brand": "Samsung", "model": "990 Pro 2TB", "approx_price": 330,
+                "storage_type": "nvme", "form_factor": "m2_2280", "interface": "pcie_gen4",
+                "capacity_gb": 2048, "read_speed_mbps": 7450, "write_speed_mbps": 6900,
+            },
+            {
+                "component": "GPU", "brand": "Nvidia", "model": "RTX 5070", "approx_price": 650,
+                "chipset": "RTX 5070", "gpu_brand": "nvidia", "vram_gb": 12,
+                "tdp_watts": 250, "length_mm": 336, "vram_type": "gddr7", "pcie_generation": 5,
+            },
+            {
+                "component": "PSU", "brand": "Corsair", "model": "RM1000x", "approx_price": 180,
+                "wattage": 1000, "form_factor": "atx", "efficiency_rating": "80plus_gold",
+            },
+            {
+                "component": "Case", "brand": "Corsair", "model": "5000D", "approx_price": 180,
+                "size": "mid_tower", "supported_mobo_form_factors": ["atx", "matx", "itx"],
+                "max_gpu_length_mm": 420, "max_cooler_height_mm": 185,
+            },
         ],
     },
+
     "1440_mid": {
         "label": "Mid level 1440p",
         "description": "Solid 1440p performance for popular titles at high settings.",
         "total_approx": 2000,
         "parts": [
-            {"component": "CPU", "brand": "AMD", "model": "Ryzen 5 7600X", "approx_price": 180},
-            {"component": "CPU Cooler", "brand": "Thermalright", "model": "Assassin 120 SE RGB", "approx_price": 40},
-            {"component": "Motherboard", "brand": "Gigabyte", "model": "B850 AORUS Elite", "approx_price": 210},
-            {"component": "RAM", "brand": "Corsair", "model": "Vengeance RGB 32GB DDR5", "approx_price": 400},
-            {"component": "Storage", "brand": "Samsung", "model": "990 Pro 2TB", "approx_price": 330},
-            {"component": "GPU", "brand": "Nvidia", "model": "RTX 5070", "approx_price": 650},
-            {"component": "PSU", "brand": "Corsair", "model": "RM850e", "approx_price": 125},
-            {"component": "Case", "brand": "NZXT", "model": "H5", "approx_price": 80},
+            {
+                "component": "CPU", "brand": "AMD", "model": "Ryzen 5 7600X", "approx_price": 180,
+                "socket": "AM5", "tdp_watts": 105, "has_igpu": False,
+                "ddr_generation": ["ddr5"], "cores": 6, "threads": 12,
+                "base_clock_ghz": 4.7, "boost_clock_ghz": 5.3, "l3_cache_mb": 32,
+            },
+            {
+                "component": "CPU Cooler", "brand": "Thermalright", "model": "Assassin 120 SE RGB", "approx_price": 40,
+                "supported_sockets": ["AM4", "AM5", "LGA1700", "LGA1851"],
+                "cooler_type": "air", "max_tdp_watts": 200, "height_mm": 155,
+            },
+            {
+                "component": "Motherboard", "brand": "Gigabyte", "model": "B850 AORUS Elite", "approx_price": 210,
+                "socket": "AM5", "form_factor": "atx", "ddr_generation": "ddr5",
+                "memory_slots": 4, "has_wifi": True, "chipset": "B850",
+            },
+            {
+                "component": "RAM", "brand": "Corsair", "model": "Vengeance RGB 32GB DDR5", "approx_price": 400,
+                "ddr_generation": "ddr5", "speed_mhz": 6000, "modules": 2, "capacity_gb": 32,
+            },
+            {
+                "component": "Storage", "brand": "Samsung", "model": "990 Pro 2TB", "approx_price": 330,
+                "storage_type": "nvme", "form_factor": "m2_2280", "interface": "pcie_gen4",
+                "capacity_gb": 2048, "read_speed_mbps": 7450, "write_speed_mbps": 6900,
+            },
+            {
+                "component": "GPU", "brand": "Nvidia", "model": "RTX 5070", "approx_price": 650,
+                "chipset": "RTX 5070", "gpu_brand": "nvidia", "vram_gb": 12,
+                "tdp_watts": 250, "length_mm": 336, "vram_type": "gddr7", "pcie_generation": 5,
+            },
+            {
+                "component": "PSU", "brand": "Corsair", "model": "RM850e", "approx_price": 125,
+                "wattage": 850, "form_factor": "atx", "efficiency_rating": "80plus_gold",
+            },
+            {
+                "component": "Case", "brand": "NZXT", "model": "H5", "approx_price": 80,
+                "size": "mid_tower", "supported_mobo_form_factors": ["atx", "matx", "itx"],
+                "max_gpu_length_mm": 365, "max_cooler_height_mm": 185,
+            },
         ],
     },
+
     "1440_uppermid": {
         "label": "Upper mid level 1440p",
         "description": "Solid 1440p performance for FPS titles (144+ FPS) and access to latest AAA titles.",
         "total_approx": 2700,
         "parts": [
-            {"component": "CPU", "brand": "AMD", "model": "Ryzen 7 9700X", "approx_price": 300},
-            {"component": "CPU Cooler", "brand": "Corsair", "model": "iCUE Titan 240", "approx_price": 140},
-            {"component": "Motherboard", "brand": "Gigabyte", "model": "B850 AORUS Elite", "approx_price": 210},
-            {"component": "RAM", "brand": "Corsair", "model": "Vengeance RGB 32GB DDR5", "approx_price": 400},
-            {"component": "Storage", "brand": "Samsung", "model": "990 Pro 2TB", "approx_price": 330},
-            {"component": "GPU", "brand": "Nvidia", "model": "RTX 5070 Ti", "approx_price": 1000},
-            {"component": "PSU", "brand": "Corsair", "model": "RM850e", "approx_price": 125},
-            {"component": "Case", "brand": "Corsair", "model": "5000D", "approx_price": 180},
+            {
+                "component": "CPU", "brand": "AMD", "model": "Ryzen 7 9700X", "approx_price": 300,
+                "socket": "AM5", "tdp_watts": 65, "has_igpu": False,
+                "ddr_generation": ["ddr5"], "cores": 8, "threads": 16,
+                "base_clock_ghz": 3.8, "boost_clock_ghz": 5.5, "l3_cache_mb": 32,
+            },
+            {
+                "component": "CPU Cooler", "brand": "Corsair", "model": "iCUE Titan 240", "approx_price": 140,
+                "supported_sockets": ["AM4", "AM5", "LGA1700", "LGA1851"],
+                "cooler_type": "aio_240", "radiator_size_mm": 240,
+            },
+            {
+                "component": "Motherboard", "brand": "Gigabyte", "model": "B850 AORUS Elite", "approx_price": 210,
+                "socket": "AM5", "form_factor": "atx", "ddr_generation": "ddr5",
+                "memory_slots": 4, "has_wifi": True, "chipset": "B850",
+            },
+            {
+                "component": "RAM", "brand": "Corsair", "model": "Vengeance RGB 32GB DDR5", "approx_price": 400,
+                "ddr_generation": "ddr5", "speed_mhz": 6000, "modules": 2, "capacity_gb": 32,
+            },
+            {
+                "component": "Storage", "brand": "Samsung", "model": "990 Pro 2TB", "approx_price": 330,
+                "storage_type": "nvme", "form_factor": "m2_2280", "interface": "pcie_gen4",
+                "capacity_gb": 2048, "read_speed_mbps": 7450, "write_speed_mbps": 6900,
+            },
+            {
+                "component": "GPU", "brand": "Nvidia", "model": "RTX 5070 Ti", "approx_price": 1000,
+                "chipset": "RTX 5070 Ti", "gpu_brand": "nvidia", "vram_gb": 16,
+                "tdp_watts": 300, "length_mm": 336, "vram_type": "gddr7", "pcie_generation": 5,
+            },
+            {
+                "component": "PSU", "brand": "Corsair", "model": "RM850e", "approx_price": 125,
+                "wattage": 850, "form_factor": "atx", "efficiency_rating": "80plus_gold",
+            },
+            {
+                "component": "Case", "brand": "Corsair", "model": "5000D", "approx_price": 180,
+                "size": "mid_tower", "supported_mobo_form_factors": ["atx", "matx", "itx"],
+                "max_gpu_length_mm": 420, "max_cooler_height_mm": 185,
+            },
         ],
     },
+
     "1440_creator": {
         "label": "Creator 1440p",
         "description": "Able to breeze through virtually any title at 1440p while streaming and edit the videos later.",
         "total_approx": 4800,
         "parts": [
-            {"component": "CPU", "brand": "Intel", "model": "Ultra 9 285K", "approx_price": 550},
-            {"component": "CPU Cooler", "brand": "Corsair", "model": "iCUE Titan 360", "approx_price": 180},
-            {"component": "GPU", "brand": "Nvidia", "model": "RTX 5080", "approx_price": 1600},
-            {"component": "Motherboard", "brand": "Asus", "model": "ProArt Z890-Creator", "approx_price": 450},
-            {"component": "RAM", "brand": "Corsair", "model": "Vengeance 64GB DDR5 6000MHz", "approx_price": 1000},
-            {"component": "Storage", "brand": "Samsung", "model": "990 Pro 4TB NVMe SSD", "approx_price": 660},
-            {"component": "PSU", "brand": "Corsair", "model": "RM1000x", "approx_price": 180},
-            {"component": "Case", "brand": "Corsair", "model": "5000D", "approx_price": 180},
+            {
+                "component": "CPU", "brand": "Intel", "model": "Ultra 9 285K", "approx_price": 550,
+                "socket": "LGA1851", "tdp_watts": 125, "has_igpu": False,
+                "ddr_generation": ["ddr5"], "cores": 24, "threads": 32,
+                "base_clock_ghz": 3.7, "boost_clock_ghz": 5.7, "l3_cache_mb": 36,
+            },
+            {
+                "component": "CPU Cooler", "brand": "Corsair", "model": "iCUE Titan 360", "approx_price": 180,
+                "supported_sockets": ["AM4", "AM5", "LGA1700", "LGA1851"],
+                "cooler_type": "aio_360", "radiator_size_mm": 360,
+            },
+            {
+                "component": "GPU", "brand": "Nvidia", "model": "RTX 5080", "approx_price": 1600,
+                "chipset": "RTX 5080", "gpu_brand": "nvidia", "vram_gb": 16,
+                "tdp_watts": 360, "length_mm": 336, "vram_type": "gddr7", "pcie_generation": 5,
+            },
+            {
+                "component": "Motherboard", "brand": "Asus", "model": "ProArt Z890-Creator", "approx_price": 450,
+                "socket": "LGA1851", "form_factor": "atx", "ddr_generation": "ddr5",
+                "memory_slots": 4, "has_wifi": True, "chipset": "Z890",
+            },
+            {
+                "component": "RAM", "brand": "Corsair", "model": "Vengeance 64GB DDR5 6000MHz", "approx_price": 1000,
+                "ddr_generation": "ddr5", "speed_mhz": 6000, "modules": 2, "capacity_gb": 64,
+            },
+            {
+                "component": "Storage", "brand": "Samsung", "model": "990 Pro 4TB NVMe SSD", "approx_price": 660,
+                "storage_type": "nvme", "form_factor": "m2_2280", "interface": "pcie_gen4",
+                "capacity_gb": 4096, "read_speed_mbps": 7450, "write_speed_mbps": 6900,
+            },
+            {
+                "component": "PSU", "brand": "Corsair", "model": "RM1000x", "approx_price": 180,
+                "wattage": 1000, "form_factor": "atx", "efficiency_rating": "80plus_gold",
+            },
+            {
+                "component": "Case", "brand": "Corsair", "model": "5000D", "approx_price": 180,
+                "size": "mid_tower", "supported_mobo_form_factors": ["atx", "matx", "itx"],
+                "max_gpu_length_mm": 420, "max_cooler_height_mm": 185,
+            },
         ],
     },
+
     "1440_competitive": {
         "label": "Competitive 1440p",
         "description": "240+ FPS at 1440p from most popular FPS titles.",
         "total_approx": 3600,
         "parts": [
-            {"component": "CPU", "brand": "AMD", "model": "Ryzen 9 9950X3D", "approx_price": 550},
-            {"component": "CPU Cooler", "brand": "Corsair", "model": "iCUE Titan 360", "approx_price": 160},
-            {"component": "Motherboard", "brand": "Gigabyte", "model": "B850 AORUS Elite", "approx_price": 210},
-            {"component": "RAM", "brand": "Corsair", "model": "Vengeance RGB 32GB DDR5", "approx_price": 400},
-            {"component": "Storage", "brand": "Samsung", "model": "990 Pro 2TB", "approx_price": 330},
-            {"component": "GPU", "brand": "Nvidia", "model": "RTX 5080", "approx_price": 1600},
-            {"component": "PSU", "brand": "Corsair", "model": "RM 1000x", "approx_price": 180},
-            {"component": "Case", "brand": "Corsair", "model": "5000D", "approx_price": 180},
+            {
+                "component": "CPU", "brand": "AMD", "model": "Ryzen 9 9950X3D", "approx_price": 550,
+                "socket": "AM5", "tdp_watts": 170, "has_igpu": False,
+                "ddr_generation": ["ddr5"], "cores": 16, "threads": 32,
+                "base_clock_ghz": 4.0, "boost_clock_ghz": 5.7, "l3_cache_mb": 128,
+            },
+            {
+                "component": "CPU Cooler", "brand": "Corsair", "model": "iCUE Titan 360", "approx_price": 160,
+                "supported_sockets": ["AM4", "AM5", "LGA1700", "LGA1851"],
+                "cooler_type": "aio_360", "radiator_size_mm": 360,
+            },
+            {
+                "component": "Motherboard", "brand": "Gigabyte", "model": "B850 AORUS Elite", "approx_price": 210,
+                "socket": "AM5", "form_factor": "atx", "ddr_generation": "ddr5",
+                "memory_slots": 4, "has_wifi": True, "chipset": "B850",
+            },
+            {
+                "component": "RAM", "brand": "Corsair", "model": "Vengeance RGB 32GB DDR5", "approx_price": 400,
+                "ddr_generation": "ddr5", "speed_mhz": 6000, "modules": 2, "capacity_gb": 32,
+            },
+            {
+                "component": "Storage", "brand": "Samsung", "model": "990 Pro 2TB", "approx_price": 330,
+                "storage_type": "nvme", "form_factor": "m2_2280", "interface": "pcie_gen4",
+                "capacity_gb": 2048, "read_speed_mbps": 7450, "write_speed_mbps": 6900,
+            },
+            {
+                "component": "GPU", "brand": "Nvidia", "model": "RTX 5080", "approx_price": 1600,
+                "chipset": "RTX 5080", "gpu_brand": "nvidia", "vram_gb": 16,
+                "tdp_watts": 360, "length_mm": 336, "vram_type": "gddr7", "pcie_generation": 5,
+            },
+            {
+                "component": "PSU", "brand": "Corsair", "model": "RM1000x", "approx_price": 180,
+                "wattage": 1000, "form_factor": "atx", "efficiency_rating": "80plus_gold",
+            },
+            {
+                "component": "Case", "brand": "Corsair", "model": "5000D", "approx_price": 180,
+                "size": "mid_tower", "supported_mobo_form_factors": ["atx", "matx", "itx"],
+                "max_gpu_length_mm": 420, "max_cooler_height_mm": 185,
+            },
         ],
     },
+
     "1440_localllm": {
         "label": "Local LLM 1440p",
         "description": "1440p machine designed to inference and lightly fine-tune ML models and play competitive FPS games at 240 FPS, or AAA titles at 60+ FPS on high graphics.",
         "total_approx": 3700,
         "parts": [
-            {"component": "CPU", "brand": "AMD", "model": "Ryzen 7 9700X", "approx_price": 300},
-            {"component": "CPU Cooler", "brand": "Corsair", "model": "iCue Titan 360", "approx_price": 160},
-            {"component": "Motherboard", "brand": "Gigabyte", "model": "B850 AORUS Elite", "approx_price": 210},
-            {"component": "RAM", "brand": "Corsair", "model": "Vengeance 64GB DDR5 6000MHz", "approx_price": 1000},
-            {"component": "Storage", "brand": "Samsung", "model": "990 Pro 4TB NVMe SSD", "approx_price": 660},
-            {"component": "GPU", "brand": "Nvidia", "model": "RTX 3090 (used)", "approx_price": 1000},
-            {"component": "PSU", "brand": "Corsair", "model": "RM1000x", "approx_price": 180},
-            {"component": "Case", "brand": "Corsair", "model": "5000D", "approx_price": 180},
+            {
+                "component": "CPU", "brand": "AMD", "model": "Ryzen 7 9700X", "approx_price": 300,
+                "socket": "AM5", "tdp_watts": 65, "has_igpu": False,
+                "ddr_generation": ["ddr5"], "cores": 8, "threads": 16,
+                "base_clock_ghz": 3.8, "boost_clock_ghz": 5.5, "l3_cache_mb": 32,
+            },
+            {
+                "component": "CPU Cooler", "brand": "Corsair", "model": "iCUE Titan 360", "approx_price": 160,
+                "supported_sockets": ["AM4", "AM5", "LGA1700", "LGA1851"],
+                "cooler_type": "aio_360", "radiator_size_mm": 360,
+            },
+            {
+                "component": "Motherboard", "brand": "Gigabyte", "model": "B850 AORUS Elite", "approx_price": 210,
+                "socket": "AM5", "form_factor": "atx", "ddr_generation": "ddr5",
+                "memory_slots": 4, "has_wifi": True, "chipset": "B850",
+            },
+            {
+                "component": "RAM", "brand": "Corsair", "model": "Vengeance 64GB DDR5 6000MHz", "approx_price": 1000,
+                "ddr_generation": "ddr5", "speed_mhz": 6000, "modules": 2, "capacity_gb": 64,
+            },
+            {
+                "component": "Storage", "brand": "Samsung", "model": "990 Pro 4TB NVMe SSD", "approx_price": 660,
+                "storage_type": "nvme", "form_factor": "m2_2280", "interface": "pcie_gen4",
+                "capacity_gb": 4096, "read_speed_mbps": 7450, "write_speed_mbps": 6900,
+            },
+            {
+                "component": "GPU", "brand": "Nvidia", "model": "RTX 3090 (used)", "approx_price": 1000,
+                "chipset": "RTX 3090", "gpu_brand": "nvidia", "vram_gb": 24,
+                "tdp_watts": 350, "length_mm": 336, "vram_type": "gddr6x", "pcie_generation": 4,
+            },
+            {
+                "component": "PSU", "brand": "Corsair", "model": "RM1000x", "approx_price": 180,
+                "wattage": 1000, "form_factor": "atx", "efficiency_rating": "80plus_gold",
+            },
+            {
+                "component": "Case", "brand": "Corsair", "model": "5000D", "approx_price": 180,
+                "size": "mid_tower", "supported_mobo_form_factors": ["atx", "matx", "itx"],
+                "max_gpu_length_mm": 420, "max_cooler_height_mm": 185,
+            },
         ],
     },
+
     "2160_cinematic": {
         "label": "Cinematic 4k",
         "description": "4k build able to play the latest AAA titles at 60+ FPS.",
         "total_approx": 3900,
         "parts": [
-            {"component": "CPU", "brand": "AMD", "model": "Ryzen 7 9800X3D", "approx_price": 450},
-            {"component": "CPU Cooler", "brand": "Corsair", "model": "iCue Titan 360", "approx_price": 160},
-            {"component": "GPU", "brand": "Nvidia", "model": "RTX 5080", "approx_price": 1600},
-            {"component": "Motherboard", "brand": "Gigabyte", "model": "B850 AORUS Elite", "approx_price": 210},
-            {"component": "RAM", "brand": "Corsair", "model": "Vengeance 32GB DDR5 6000MHz", "approx_price": 400},
-            {"component": "Storage", "brand": "Samsung", "model": "990 Pro 4TB NVMe SSD", "approx_price": 660},
-            {"component": "PSU", "brand": "Corsair", "model": "RM1000x", "approx_price": 180},
-            {"component": "Case", "brand": "Corsair", "model": "5000D", "approx_price": 180},
+            {
+                "component": "CPU", "brand": "AMD", "model": "Ryzen 7 9800X3D", "approx_price": 450,
+                "socket": "AM5", "tdp_watts": 120, "has_igpu": False,
+                "ddr_generation": ["ddr5"], "cores": 8, "threads": 16,
+                "base_clock_ghz": 4.7, "boost_clock_ghz": 5.2, "l3_cache_mb": 96,
+            },
+            {
+                "component": "CPU Cooler", "brand": "Corsair", "model": "iCUE Titan 360", "approx_price": 160,
+                "supported_sockets": ["AM4", "AM5", "LGA1700", "LGA1851"],
+                "cooler_type": "aio_360", "radiator_size_mm": 360,
+            },
+            {
+                "component": "GPU", "brand": "Nvidia", "model": "RTX 5080", "approx_price": 1600,
+                "chipset": "RTX 5080", "gpu_brand": "nvidia", "vram_gb": 16,
+                "tdp_watts": 360, "length_mm": 336, "vram_type": "gddr7", "pcie_generation": 5,
+            },
+            {
+                "component": "Motherboard", "brand": "Gigabyte", "model": "B850 AORUS Elite", "approx_price": 210,
+                "socket": "AM5", "form_factor": "atx", "ddr_generation": "ddr5",
+                "memory_slots": 4, "has_wifi": True, "chipset": "B850",
+            },
+            {
+                "component": "RAM", "brand": "Corsair", "model": "Vengeance 32GB DDR5 6000MHz", "approx_price": 400,
+                "ddr_generation": "ddr5", "speed_mhz": 6000, "modules": 2, "capacity_gb": 32,
+            },
+            {
+                "component": "Storage", "brand": "Samsung", "model": "990 Pro 4TB NVMe SSD", "approx_price": 660,
+                "storage_type": "nvme", "form_factor": "m2_2280", "interface": "pcie_gen4",
+                "capacity_gb": 4096, "read_speed_mbps": 7450, "write_speed_mbps": 6900,
+            },
+            {
+                "component": "PSU", "brand": "Corsair", "model": "RM1000x", "approx_price": 180,
+                "wattage": 1000, "form_factor": "atx", "efficiency_rating": "80plus_gold",
+            },
+            {
+                "component": "Case", "brand": "Corsair", "model": "5000D", "approx_price": 180,
+                "size": "mid_tower", "supported_mobo_form_factors": ["atx", "matx", "itx"],
+                "max_gpu_length_mm": 420, "max_cooler_height_mm": 185,
+            },
         ],
     },
+
     "2160_creator": {
         "label": "Creator 4k",
         "description": "4k build for playing the latest AAA titles and streaming/editing in 4k.",
         "total_approx": 5000,
         "parts": [
-            {"component": "CPU", "brand": "Intel", "model": "Ultra 9 285K", "approx_price": 550},
-            {"component": "CPU Cooler", "brand": "NZXT", "model": "Kraken Elite 360", "approx_price": 250},
-            {"component": "GPU", "brand": "Nvidia", "model": "RTX 5080", "approx_price": 1600},
-            {"component": "Motherboard", "brand": "Asus", "model": "ProArt Z890-Creator", "approx_price": 450},
-            {"component": "RAM", "brand": "Corsair", "model": "Vengeance 64GB DDR5 6000MHz", "approx_price": 1000},
-            {"component": "Storage", "brand": "Samsung", "model": "990 Pro 4TB NVMe SSD", "approx_price": 660},
-            {"component": "PSU", "brand": "Corsair", "model": "RM1000x", "approx_price": 180},
-            {"component": "Case", "brand": "NZXT", "model": "H9", "approx_price": 250},
+            {
+                "component": "CPU", "brand": "Intel", "model": "Ultra 9 285K", "approx_price": 550,
+                "socket": "LGA1851", "tdp_watts": 125, "has_igpu": False,
+                "ddr_generation": ["ddr5"], "cores": 24, "threads": 32,
+                "base_clock_ghz": 3.7, "boost_clock_ghz": 5.7, "l3_cache_mb": 36,
+            },
+            {
+                "component": "CPU Cooler", "brand": "NZXT", "model": "Kraken Elite 360", "approx_price": 250,
+                "supported_sockets": ["AM4", "AM5", "LGA1700", "LGA1851"],
+                "cooler_type": "aio_360", "radiator_size_mm": 360,
+            },
+            {
+                "component": "GPU", "brand": "Nvidia", "model": "RTX 5080", "approx_price": 1600,
+                "chipset": "RTX 5080", "gpu_brand": "nvidia", "vram_gb": 16,
+                "tdp_watts": 360, "length_mm": 336, "vram_type": "gddr7", "pcie_generation": 5,
+            },
+            {
+                "component": "Motherboard", "brand": "Asus", "model": "ProArt Z890-Creator", "approx_price": 450,
+                "socket": "LGA1851", "form_factor": "atx", "ddr_generation": "ddr5",
+                "memory_slots": 4, "has_wifi": True, "chipset": "Z890",
+            },
+            {
+                "component": "RAM", "brand": "Corsair", "model": "Vengeance 64GB DDR5 6000MHz", "approx_price": 1000,
+                "ddr_generation": "ddr5", "speed_mhz": 6000, "modules": 2, "capacity_gb": 64,
+            },
+            {
+                "component": "Storage", "brand": "Samsung", "model": "990 Pro 4TB NVMe SSD", "approx_price": 660,
+                "storage_type": "nvme", "form_factor": "m2_2280", "interface": "pcie_gen4",
+                "capacity_gb": 4096, "read_speed_mbps": 7450, "write_speed_mbps": 6900,
+            },
+            {
+                "component": "PSU", "brand": "Corsair", "model": "RM1000x", "approx_price": 180,
+                "wattage": 1000, "form_factor": "atx", "efficiency_rating": "80plus_gold",
+            },
+            {
+                "component": "Case", "brand": "NZXT", "model": "H9", "approx_price": 250,
+                "size": "mid_tower", "supported_mobo_form_factors": ["atx", "matx", "itx"],
+                "max_gpu_length_mm": 420, "max_cooler_height_mm": 185,
+            },
         ],
     },
+
     "2160_localllm": {
         "label": "Local LLM 4k",
         "description": "Local LLM machine for models of around 35B parameters and an elite 4K gaming computer.",
         "total_approx": 7000,
         "parts": [
-            {"component": "CPU", "brand": "AMD", "model": "Ryzen 7 9700X", "approx_price": 300},
-            {"component": "CPU Cooler", "brand": "NZXT", "model": "Kraken Elite 360", "approx_price": 250},
-            {"component": "Motherboard", "brand": "ASUS", "model": "TUF X870E-PLUS", "approx_price": 300},
-            {"component": "RAM", "brand": "Corsair", "model": "Vengeance 64GB DDR5 6000MHz", "approx_price": 1000},
-            {"component": "Storage", "brand": "Samsung", "model": "990 Pro 4TB NVMe SSD", "approx_price": 660},
-            {"component": "GPU", "brand": "Nvidia", "model": "RTX 5090", "approx_price": 4000},
-            {"component": "PSU", "brand": "Corsair", "model": "RM1200x", "approx_price": 200},
-            {"component": "Case", "brand": "NZXT", "model": "H9", "approx_price": 250},
+            {
+                "component": "CPU", "brand": "AMD", "model": "Ryzen 7 9700X", "approx_price": 300,
+                "socket": "AM5", "tdp_watts": 65, "has_igpu": False,
+                "ddr_generation": ["ddr5"], "cores": 8, "threads": 16,
+                "base_clock_ghz": 3.8, "boost_clock_ghz": 5.5, "l3_cache_mb": 32,
+            },
+            {
+                "component": "CPU Cooler", "brand": "NZXT", "model": "Kraken Elite 360", "approx_price": 250,
+                "supported_sockets": ["AM4", "AM5", "LGA1700", "LGA1851"],
+                "cooler_type": "aio_360", "radiator_size_mm": 360,
+            },
+            {
+                "component": "Motherboard", "brand": "ASUS", "model": "TUF X870E-PLUS", "approx_price": 300,
+                "socket": "AM5", "form_factor": "atx", "ddr_generation": "ddr5",
+                "memory_slots": 4, "has_wifi": True, "chipset": "X870E",
+            },
+            {
+                "component": "RAM", "brand": "Corsair", "model": "Vengeance 64GB DDR5 6000MHz", "approx_price": 1000,
+                "ddr_generation": "ddr5", "speed_mhz": 6000, "modules": 2, "capacity_gb": 64,
+            },
+            {
+                "component": "Storage", "brand": "Samsung", "model": "990 Pro 4TB NVMe SSD", "approx_price": 660,
+                "storage_type": "nvme", "form_factor": "m2_2280", "interface": "pcie_gen4",
+                "capacity_gb": 4096, "read_speed_mbps": 7450, "write_speed_mbps": 6900,
+            },
+            {
+                "component": "GPU", "brand": "Nvidia", "model": "RTX 5090", "approx_price": 4000,
+                "chipset": "RTX 5090", "gpu_brand": "nvidia", "vram_gb": 32,
+                "tdp_watts": 575, "length_mm": 340, "vram_type": "gddr7", "pcie_generation": 5,
+            },
+            {
+                "component": "PSU", "brand": "Corsair", "model": "RM1200x", "approx_price": 200,
+                "wattage": 1200, "form_factor": "atx", "efficiency_rating": "80plus_gold",
+            },
+            {
+                "component": "Case", "brand": "NZXT", "model": "H9", "approx_price": 250,
+                "size": "mid_tower", "supported_mobo_form_factors": ["atx", "matx", "itx"],
+                "max_gpu_length_mm": 420, "max_cooler_height_mm": 185,
+            },
         ],
     },
+
     "2160_localllmpro": {
         "label": "Local LLM Pro 4k",
         "description": "Local LLM machine for models of around 70B parameters.",
         "total_approx": 12000,
         "parts": [
-            {"component": "CPU", "brand": "AMD", "model": "Ryzen 7 9700X", "approx_price": 300},
-            {"component": "CPU Cooler", "brand": "NZXT", "model": "Kraken Elite 360", "approx_price": 250},
-            {"component": "Motherboard", "brand": "ASUS", "model": "TUF X870E-PLUS", "approx_price": 300},
-            {"component": "RAM", "brand": "Corsair", "model": "Vengeance 64GB DDR5 6000MHz", "approx_price": 1000},
-            {"component": "Storage", "brand": "Samsung", "model": "990 Pro 4TB NVMe SSD", "approx_price": 660},
-            {"component": "GPU", "brand": "Nvidia", "model": "RTX PRO 6000 Blackwell", "approx_price": 9000},
-            {"component": "PSU", "brand": "Corsair", "model": "RM1200x", "approx_price": 200},
-            {"component": "Case", "brand": "NZXT", "model": "H9", "approx_price": 250},
+            {
+                "component": "CPU", "brand": "AMD", "model": "Ryzen 7 9700X", "approx_price": 300,
+                "socket": "AM5", "tdp_watts": 65, "has_igpu": False,
+                "ddr_generation": ["ddr5"], "cores": 8, "threads": 16,
+                "base_clock_ghz": 3.8, "boost_clock_ghz": 5.5, "l3_cache_mb": 32,
+            },
+            {
+                "component": "CPU Cooler", "brand": "NZXT", "model": "Kraken Elite 360", "approx_price": 250,
+                "supported_sockets": ["AM4", "AM5", "LGA1700", "LGA1851"],
+                "cooler_type": "aio_360", "radiator_size_mm": 360,
+            },
+            {
+                "component": "Motherboard", "brand": "ASUS", "model": "TUF X870E-PLUS", "approx_price": 300,
+                "socket": "AM5", "form_factor": "atx", "ddr_generation": "ddr5",
+                "memory_slots": 4, "has_wifi": True, "chipset": "X870E",
+            },
+            {
+                "component": "RAM", "brand": "Corsair", "model": "Vengeance 64GB DDR5 6000MHz", "approx_price": 1000,
+                "ddr_generation": "ddr5", "speed_mhz": 6000, "modules": 2, "capacity_gb": 64,
+            },
+            {
+                "component": "Storage", "brand": "Samsung", "model": "990 Pro 4TB NVMe SSD", "approx_price": 660,
+                "storage_type": "nvme", "form_factor": "m2_2280", "interface": "pcie_gen4",
+                "capacity_gb": 4096, "read_speed_mbps": 7450, "write_speed_mbps": 6900,
+            },
+            {
+                "component": "GPU", "brand": "Nvidia", "model": "RTX PRO 6000 Blackwell", "approx_price": 9000,
+                "chipset": "RTX PRO 6000 Blackwell", "gpu_brand": "nvidia", "vram_gb": 96,
+                "tdp_watts": 300, "length_mm": 267, "vram_type": "gddr7", "pcie_generation": 5,
+            },
+            {
+                "component": "PSU", "brand": "Corsair", "model": "RM1200x", "approx_price": 200,
+                "wattage": 1200, "form_factor": "atx", "efficiency_rating": "80plus_gold",
+            },
+            {
+                "component": "Case", "brand": "NZXT", "model": "H9", "approx_price": 250,
+                "size": "mid_tower", "supported_mobo_form_factors": ["atx", "matx", "itx"],
+                "max_gpu_length_mm": 420, "max_cooler_height_mm": 185,
+            },
         ],
     },
 }

@@ -19,10 +19,19 @@ class ReferenceBuild(Base):
     updated_at  = Column(DateTime(timezone=True), nullable=False,
                          server_default=func.now(), onupdate=func.now())
 
+    pc_build_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("pc_builds.id", ondelete="SET NULL"),
+        nullable=True,
+        unique=True,
+        index=True,
+    )
+
     parts = relationship(
         "ReferenceBuildPart", back_populates="build",
         cascade="all, delete-orphan", order_by="ReferenceBuildPart.sort_order",
     )
+    pc_build = relationship("PCBuild")
 class ReferenceBuildPart(Base):
     __tablename__ = "reference_build_parts"
 
