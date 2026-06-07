@@ -1,27 +1,28 @@
 from __future__ import annotations
- 
+   
 import json
 import os
 import logging
 from typing import AsyncIterator
- 
+   
 import anthropic
- 
+   
 from app.data.refbuilds import Build
 from app.schemas.chat import BuildProfile, ChatMessage
 from app.services.resolver import resolve_build
+from app.services.chat_models import ChatModelConfig
 from app.core.db import SessionLocal
-
- 
+  
+   
 logger = logging.getLogger(__name__)
- 
+  
 # ---------------------------------------------------------------------------
 # Client
 # ---------------------------------------------------------------------------
- 
+  
 _client: anthropic.AsyncAnthropic | None = None
- 
- 
+  
+  
 def _get_client() -> anthropic.AsyncAnthropic:
     global _client
     if _client is None:
@@ -30,12 +31,12 @@ def _get_client() -> anthropic.AsyncAnthropic:
             raise EnvironmentError("ANTHROPIC_API_KEY is not set.")
         _client = anthropic.AsyncAnthropic(api_key=api_key)
     return _client
- 
- 
+  
+  
 # ---------------------------------------------------------------------------
 # Stage 1 — Extract BuildProfile
 # ---------------------------------------------------------------------------
- 
+  
 _EXTRACT_SYSTEM = """\
 You are the intake analyst for Palladium, a PC-build recommendation service.
  
@@ -52,25 +53,25 @@ Respond with a JSON object matching this schema EXACTLY (no markdown, no explana
 }
  
 Rules:
-- primary_use must be exactly one of: gaming, video_editing, local_llm, general
-- gaming_resolution is only set when primary_use is "gaming"; otherwise null
-- budget_tier: entry (~$450-700), mid (~$800-1300), high (~$1300-1900), elite (~$2000+)
-- Infer budget_tier from context clues (resolution targets, game types, workload intensity)
-  even if the user doesn't state a dollar amount.
-- If the user mentions multiple use cases, pick the most demanding one as primary_use.
-- If you cannot determine a field, use sensible defaults:
-  primary_use="general", budget_tier="mid", gaming_resolution=null.
-- Output ONLY the JSON object. No markdown fences. No preamble.
-"""
- 
- 
+ - primary_use must be exactly one of: gaming, video_editing, local_llm, general
+ - gaming_resolution is only set when primary_use is "gaming"; otherwise null
+ - budget_tier: entry (~$450-700), mid (~$800-1300), high (~$1300-1900), elite (~$2000+)
+ - Infer budget_tier from context clues (resolution targets, game types, workload intensity)
+   even if the user doesn't state a dollar amount.
+ - If the user mentions multiple use cases, pick the most demanding one as primary_use.
+ - If you cannot determine a field, use sensible defaults:
+   primary_use="general", budget_tier="mid", gaming_resolution=null.
+ - Output ONLY the JSON object. No markdown fences. No preamble.
+ """
+  
+  
 async def extract_profile(messages: list[ChatMessage]) -> BuildProfile:
     """
     Call Claude to extract a BuildProfile from the conversation so far.
     Uses a small, fast model (Haiku) since this is a structured extraction task.
     """
     client = _get_client()
- 
+  
     # Build the messages for the extraction call
     api_messages = []
     for msg in messages:
@@ -78,24 +79,24 @@ async def extract_profile(messages: list[ChatMessage]) -> BuildProfile:
             "role": msg.role if msg.role in ("user", "assistant") else "user",
             "content": msg.content,
         })
- 
+  
     response = await client.messages.create(
-        model="claude-haiku-4-5-20251001",
+        model=ChatModelConfig.get_extract_model(),
         max_tokens=512,
         temperature=0.0,
         system=_EXTRACT_SYSTEM,
         messages=api_messages,
     )
- 
+  
     raw = response.content[0].text.strip()
- 
+  
     # Strip markdown fences if the model added them despite instructions
     if raw.startswith("```"):
         raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]
     if raw.endswith("```"):
         raw = raw[: raw.rfind("```")]
     raw = raw.strip()
- 
+  
     try:
         data = json.loads(raw)
     except json.JSONDecodeError:
@@ -104,14 +105,14 @@ async def extract_profile(messages: list[ChatMessage]) -> BuildProfile:
             "primary_use": "general",
             "budget_tier": "mid",
         }
- 
+  
     return BuildProfile(**data)
- 
- 
+  
+  
 # ---------------------------------------------------------------------------
 # Stage 2 — Stream Recommendation
 # ---------------------------------------------------------------------------
- 
+  
 _RECOMMEND_SYSTEM = """\
 You are Palladium's build advisor — friendly, knowledgeable, and concise.
  
@@ -120,18 +121,18 @@ compatibility engine. Your job is to present it to the user in a clear, \
 enthusiastic, and helpful way.
  
 Guidelines:
-- Start with a short sentence acknowledging what the user wants.
-- Present the build name and a one-line summary.
-- Walk through each component with 1-2 sentences explaining why it fits.
-- Mention the approximate total price at the end.
-- Use markdown formatting: **bold** for part names, bullet points for the list.
-- Keep the whole response under 400 words.
-- Do NOT invent specs or prices that aren't in the build data.
-- Do NOT suggest alternative parts — this is the recommended build.
-- Be warm and direct. No filler phrases like "Great question!" or "Absolutely!"
-"""
- 
- 
+ - Start with a short sentence acknowledging what the user wants.
+ - Present the build name and a one-line summary.
+ - Walk through each component with 1-2 sentences explaining why it fits.
+ - Mention the approximate total price at the end.
+ - Use markdown formatting: **bold** for part names, bullet points for the list.
+ - Keep the whole response under 400 words.
+ - Do NOT invent specs or prices that aren't in the build data.
+ - Do NOT suggest alternative parts — this is the recommended build.
+ - Be warm and direct. No filler phrases like "Great question!" or "Absolutely!"
+ """
+  
+  
 def _format_build_context(
     profile: BuildProfile,
     build_key: str,
@@ -160,8 +161,8 @@ PARTS:
 {parts_text}
  
 Present this build to the user now."""
- 
- 
+  
+  
 async def stream_recommendation(
     messages: list[ChatMessage],
     profile: BuildProfile,
@@ -173,9 +174,9 @@ async def stream_recommendation(
     Yields raw text chunks (not SSE-formatted — the route handles that).
     """
     client = _get_client()
- 
+  
     context = _format_build_context(profile, build_key, build)
- 
+  
     # Include conversation history so the LLM can reference what the user said,
     # then append the build context as a final user message.
     api_messages: list[dict] = []
@@ -185,9 +186,9 @@ async def stream_recommendation(
             "content": msg.content,
         })
     api_messages.append({"role": "user", "content": context})
- 
+  
     async with client.messages.stream(
-        model="claude-haiku-4-5-20251001",
+        model=ChatModelConfig.get_recommend_model(),
         max_tokens=1024,
         temperature=0.5,
         system=_RECOMMEND_SYSTEM,
@@ -195,12 +196,12 @@ async def stream_recommendation(
     ) as stream:
         async for text in stream.text_stream:
             yield text
- 
- 
+  
+  
 # ---------------------------------------------------------------------------
 # Conversational fallback (not enough info yet)
 # ---------------------------------------------------------------------------
- 
+  
 _ELICIT_SYSTEM = """\
 You are Palladium's friendly intake assistant. Your job is to learn enough \
 about the user's needs to recommend a PC build.
@@ -215,9 +216,9 @@ Keep responses under 80 words. Use markdown sparingly.
  
 If the user has already provided a configurator payload (JSON with useCases), \
 you have enough information — respond with exactly: READY_TO_RECOMMEND
-"""
- 
- 
+ """
+  
+  
 async def stream_elicitation(
     messages: list[ChatMessage],
 ) -> AsyncIterator[str]:
@@ -226,16 +227,16 @@ async def stream_elicitation(
     If the LLM determines there's enough info, it returns "READY_TO_RECOMMEND".
     """
     client = _get_client()
- 
+  
     api_messages = []
     for msg in messages:
         api_messages.append({
             "role": msg.role if msg.role in ("user", "assistant") else "user",
             "content": msg.content,
         })
- 
+  
     async with client.messages.stream(
-        model="claude-haiku-4-5-20251001",
+        model=ChatModelConfig.get_elicit_model(),
         max_tokens=256,
         temperature=0.6,
         system=_ELICIT_SYSTEM,
@@ -243,8 +244,8 @@ async def stream_elicitation(
     ) as stream:
         async for text in stream.text_stream:
             yield text
- 
- 
+  
+  
 # Checks if there's enoug info to give a solid recommendation
  
 async def has_enough_info(messages: list[ChatMessage]) -> bool:
@@ -254,28 +255,28 @@ async def has_enough_info(messages: list[ChatMessage]) -> bool:
     natural-language context.
     """
     combined = " ".join(m.content for m in messages if m.role == "user")
- 
+  
     # Fast path: configurator payload is present
     if '"useCases"' in combined or '"use_cases"' in combined:
         return True
- 
+  
     # Fast path: explicit use-case keywords + some detail
     use_keywords = {"gaming", "video editing", "streaming", "ai", "machine learning",
                     "productivity", "nas", "server", "creative", "3d rendering"}
     detail_keywords = {"1080p", "1440p", "4k", "budget", "fps", "vram",
                        "cheap", "expensive", "high-end", "mid-range", "entry"}
- 
+  
     combined_lower = combined.lower()
     has_use = any(kw in combined_lower for kw in use_keywords)
     has_detail = any(kw in combined_lower for kw in detail_keywords)
- 
+  
     return has_use and has_detail
- 
- 
+  
+  
 # ---------------------------------------------------------------------------
 # Public API — orchestrate the full flow
 # ---------------------------------------------------------------------------
- 
+  
 async def run_chat_turn(
     messages: list[ChatMessage],
 ) -> AsyncIterator[dict]:
@@ -288,7 +289,7 @@ async def run_chat_turn(
     """
     # Check if we have enough info to recommend
     ready = await has_enough_info(messages)
- 
+  
     if not ready:
         # Elicitation mode — gather more info
         buffer = ""
@@ -299,21 +300,21 @@ async def run_chat_turn(
                 ready = True
                 break
             yield {"type": "token", "text": chunk}
- 
+  
         if not ready:
             yield {"type": "done"}
             return
- 
+  
     # --- We have enough info: extract → resolve → recommend ---
- 
+  
     yield {"type": "progress", "step": "analyzing", "message": "Analyzing your requirements…"}
- 
+  
     profile = await extract_profile(messages)
- 
+  
     yield {"type": "progress", "step": "resolving", "message": "Selecting your parts…"}
     with SessionLocal() as db:
         build_key, build = resolve_build(profile, db)
- 
+  
     yield {
         "type": "build",
         "key": build_key,
@@ -325,10 +326,10 @@ async def run_chat_turn(
             "profile": profile.model_dump(),
         },
     }
- 
+  
     yield {"type": "progress", "step": "presenting", "message": "Preparing your recommendation…"}
- 
+  
     async for chunk in stream_recommendation(messages, profile, build_key, build):
         yield {"type": "token", "text": chunk}
- 
+  
     yield {"type": "done"}
