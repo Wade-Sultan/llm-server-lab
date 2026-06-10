@@ -12,6 +12,7 @@ import {
 import { useRouter } from "next/navigation"
 import { useCallback, useEffect, useState } from "react"
 import { auth } from "@/lib/firebase"
+import { wakeUpBuilder } from "@/lib/wake-up-builder"
 
 interface UseAuthReturn {
   user: User | null
@@ -67,6 +68,7 @@ export default function useAuth(): UseAuthReturn {
     async (email: string, password: string) => {
       try {
         await signInWithEmailAndPassword(auth, email, password)
+        wakeUpBuilder()
         router.push("/build/new")
         return { error: null }
       } catch (err) {
@@ -87,8 +89,7 @@ export default function useAuth(): UseAuthReturn {
         if (fullName) {
           await updateProfile(user, { displayName: fullName })
         }
-        // Navigate to login after signup. Firebase may require email
-        // verification depending on your project settings.
+        wakeUpBuilder()
         router.push("/login")
         return { error: null }
       } catch (err) {
@@ -138,3 +139,4 @@ export default function useAuth(): UseAuthReturn {
     updatePassword,
   }
 }
+
