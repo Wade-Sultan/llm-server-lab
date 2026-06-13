@@ -8,7 +8,7 @@ Runs components in dependency order, passing each decision into the next
 as a hard constraint.
 
 Dependency order:
-    CPU → Cooler → Motherboard → RAM → Storage → GPU → PSU → Case → Fans
+    DDR → CPU → Cooler → Motherboard → RAM → Storage → GPU → PSU → Case → Fans
 
 Budget allocation:
     _allocate_budget() splits the total into per-slot ceilings.  These are
@@ -30,6 +30,7 @@ from sqlmodel import Session
 
 from app.services.recommender.components.decidecase import DecideCase, load_program as load_case
 from app.services.recommender.components.decidecpu import DecideCPU, load_program as load_cpu
+from app.services.recommender.components.decideddr import DecideDDR, load_program as load_ddr
 from app.services.recommender.components.decidecpucooler import DecideCPUCooler, load_program as load_cooler
 from app.services.recommender.components.decidefans import DecideFans, load_program as load_fans
 from app.services.recommender.components.decidegpu import DecideGPU, load_program as load_gpu
@@ -41,6 +42,7 @@ from app.services.recommender.db.queries import (
     get_case_candidates,
     get_cooler_candidates,
     get_cpu_candidates,
+    get_ddr_candidates,
     get_fan_candidates,
     get_gpu_candidates,
     get_motherboard_candidates,
@@ -158,6 +160,18 @@ def _emit(state: DSPyBuildState, step: str, message: str) -> None:
 # ---------------------------------------------------------------------------
 # Pipeline steps
 # ---------------------------------------------------------------------------
+
+def _step_ddr(state: DSPyBuildState, session: Session, budget: dict, program: DecideDDR) -> None:
+    _emit(state, "ddr", "Deciding memory generation…")
+    candidates = get_ddr_candidates(session, budget["cpu"])
+    result = program(
+        use_cases=str(state.request.use_cases),
+        budget_total=state.request.budget_usd,
+        candidates=candidates,
+    )
+    state.cpu_ddr_gen = result.ddr_gen
+    state.thresholds["ddr"] = result.reconsideration_threshold
+
 
 def _step_cpu(state: DSPyBuildState, session: Session, budget: dict, program: DecideCPU) -> None:
     _emit(state, "cpu", "Choosing your CPU…")
@@ -328,6 +342,7 @@ def run_pipeline(
     budget = _allocate_budget(request.budget_usd, request.use_cases)
 
     try:
+        _step_ddr(state, session, budget, load_ddr())
         _step_cpu(state, session, budget, load_cpu())
         _step_cooler(state, session, budget, load_cooler())
         _step_motherboard(state, session, budget, load_motherboard())

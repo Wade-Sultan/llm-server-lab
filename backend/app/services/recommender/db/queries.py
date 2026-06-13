@@ -29,6 +29,7 @@ from app.services.recommender.db.filters import (
     storage_filters,
 )
 from app.schemas.chat import UserPreferences
+from collections import defaultdict
 
 
 def _run(session: Session, conditions: list) -> list[PCPart]:
@@ -269,3 +270,53 @@ def get_fan_candidates(
 ) -> str:
     parts = _run(session, fan_filters(budget_ceiling_usd, case_fan_slots))
     return _to_candidates_string(parts, _serialize_fan)
+
+
+def get_ddr_candidates(session: Session, budget_ceiling_usd: int) -> str:
+    """
+    Return a JSON summary of DDR4 vs DDR5 platform costs within budget.
+    Aggregates avg prices from CPUs, motherboards, and RAM grouped by ddr_gen.
+    """
+    all_cpus = _run(session, [PCPart.category == "cpu"])
+    all_mobos = _run(session, [PCPart.category == "motherboard"])
+    all_ram = _run(session, [PCPart.category == "ram"])
+
+    cpu_prices: dict[str, list[float]] = defaultdict(list)
+    cpu_counts: dict[str, int] = defaultdict(int)
+    mobo_prices: dict[str, list[float]] = defaultdict(list)
+    ram_prices: dict[str, list[float]] = defaultdict(list)
+
+    for p in all_cpus:
+        gen = (p.specs or {}).get("ddr_gen")
+        price = _price(p)
+        if gen and price and price <= budget_ceiling_usd:
+            cpu_prices[gen].append(price)
+            cpu_counts[gen] += 1
+
+    for p in all_mobos:
+        gen = (p.specs or {}).get("ddr_gen")
+        price = _price(p)
+        if gen and price:
+            mobo_prices[gen].append(price)
+
+    for p in all_ram:
+        gen = (p.specs or {}).get("ddr_gen")
+        price = _price(p)
+        if gen and price:
+            ram_prices[gen].append(price)
+
+    def _avg(lst: list[float]) -> float | None:
+        return round(sum(lst) / len(lst), 2) if lst else None
+
+    gens = sorted(set(cpu_prices) | set(mobo_prices) | set(ram_prices))
+    rows = [
+        {
+            "ddr_gen": gen,
+            "avg_cpu_price_usd": _avg(cpu_prices[gen]),
+            "avg_mobo_price_usd": _avg(mobo_prices[gen]),
+            "avg_ram_price_usd": _avg(ram_prices[gen]),
+            "cpu_count": cpu_counts[gen],
+        }
+        for gen in gens
+    ]
+    return json.dumps(rows, indent=None)
