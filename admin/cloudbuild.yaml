@@ -1,0 +1,35 @@
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-t'
+      - 'us-central1-docker.pkg.dev/$PROJECT_ID/palladium/admin:$COMMIT_SHA'
+      - '-t'
+      - 'us-central1-docker.pkg.dev/$PROJECT_ID/palladium/admin:latest'
+      - '.'
+    dir: 'admin'
+    env:
+      - 'DOCKER_BUILDKIT=1'
+
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - '--all-tags'
+      - 'us-central1-docker.pkg.dev/$PROJECT_ID/palladium/admin'
+
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: 'gcloud'
+    args:
+      - 'compute'
+      - 'ssh'
+      - 'palladium-admin'
+      - '--zone=us-central1-a'
+      - '--tunnel-through-iap'
+      - '--command=docker pull us-central1-docker.pkg.dev/$PROJECT_ID/palladium/admin:$COMMIT_SHA && sudo systemctl restart palladium-admin'
+
+images:
+  - 'us-central1-docker.pkg.dev/$PROJECT_ID/palladium/admin:$COMMIT_SHA'
+  - 'us-central1-docker.pkg.dev/$PROJECT_ID/palladium/admin:latest'
+
+options:
+  logging: CLOUD_LOGGING_ONLY
