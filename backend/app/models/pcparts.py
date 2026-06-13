@@ -155,6 +155,20 @@ class CPU(PCPart):
     max_memory_gb = Column(Integer, nullable=True)
     series = Column(String(100), nullable=True)
 
+    @property
+    def specs(self) -> dict:
+        return {
+            "brand": self.brand,
+            "cores": self.cores,
+            "threads": self.threads,
+            "base_clock_ghz": self.base_clock_ghz,
+            "boost_clock_ghz": self.boost_clock_ghz,
+            "tdp_w": self.tdp_watts,
+            "socket": self.socket,
+            "ddr_gen": self.ddr_generation,
+            "has_integrated_graphics": self.has_igpu,
+        }
+
     __mapper_args__ = {"polymorphic_identity": "cpu"}
 
 
@@ -180,6 +194,15 @@ class CPUCooler(PCPart):
     fan_size_mm = Column(Integer, nullable=True)
     noise_dba = Column(Float, nullable=True)
     has_rgb = Column(Boolean, nullable=True)
+
+    @property
+    def specs(self) -> dict:
+        return {
+            "type": self.cooler_type,
+            "max_tdp_w": self.max_tdp_watts,
+            "noise_db": self.noise_dba,
+            "height_mm": self.height_mm,
+        }
 
     __mapper_args__ = {"polymorphic_identity": "cpucooler"}
 
@@ -213,6 +236,21 @@ class Motherboard(PCPart):
     usb_type_c_count = Column(Integer, nullable=True)
     audio_codec = Column(String(50), nullable=True)
 
+    @property
+    def specs(self) -> dict:
+        return {
+            "socket": self.socket,
+            "chipset": self.chipset,
+            "form_factor": self.form_factor,
+            "ddr_gen": self.ddr_generation,
+            "ram_slots": self.memory_slots,
+            "m2_slots": self.m2_slots,
+            "sata_ports": self.sata_ports,
+            "has_wifi": self.has_wifi,
+            "supports_bios_flashback": None,
+            "vrm_quality": None,
+        }
+
     __mapper_args__ = {"polymorphic_identity": "motherboard"}
 
 
@@ -239,6 +277,15 @@ class RAM(PCPart):
     has_rgb = Column(Boolean, nullable=True)
     is_ecc = Column(Boolean, nullable=True)
 
+    @property
+    def specs(self) -> dict:
+        return {
+            "ddr_gen": self.ddr_generation,
+            "capacity_gb": self.capacity_gb,
+            "speed_mhz": self.speed_mhz,
+            "kit_count": self.modules,
+        }
+
     __mapper_args__ = {"polymorphic_identity": "ram"}
 
 
@@ -263,6 +310,15 @@ class Storage(PCPart):
     has_dram_cache = Column(Boolean, nullable=True)
     endurance_tbw = Column(Integer, nullable=True)
     rpm = Column(Integer, nullable=True)  
+
+    @property
+    def specs(self) -> dict:
+        return {
+            "interface": self.interface,
+            "capacity_gb": self.capacity_gb,
+            "seq_read_mbs": self.read_speed_mbps,
+            "seq_write_mbs": self.write_speed_mbps,
+        }
 
     __mapper_args__ = {"polymorphic_identity": "storage"}
 
@@ -312,6 +368,16 @@ class GPU(PCPart):
     hdmi_version = Column(Text, nullable=True)
     dp_version = Column(Text, nullable=True)
 
+    @property
+    def specs(self) -> dict:
+        return {
+            "brand": self.brand,
+            "vram_gb": self.vram_gb,
+            "tdp_w": self.tdp_watts,
+            "length_mm": self.length_mm,
+            "pcie_slots": self.width_slots,
+        }
+
     __mapper_args__ = {"polymorphic_identity": "gpu"}
 
 
@@ -338,6 +404,15 @@ class PSU(PCPart):
     eps_connectors = Column(Integer, nullable=True)
     fan_size_mm = Column(Integer, nullable=True)
     is_fanless = Column(Boolean, nullable=True)
+
+    @property
+    def specs(self) -> dict:
+        return {
+            "wattage": self.wattage,
+            "efficiency": self.efficiency_rating,
+            "modular": self.modular,
+            "form_factor": self.form_factor,
+        }
 
     __mapper_args__ = {"polymorphic_identity": "psu"}
 
@@ -376,6 +451,17 @@ class Case(PCPart):
     usb_front_type_a = Column(Integer, nullable=True)
     usb_front_type_c = Column(Integer, nullable=True)
 
+    @property
+    def specs(self) -> dict:
+        return {
+            "size": self.size,
+            "supported_mobo_sizes": self.supported_mobo_form_factors,
+            "max_gpu_length_mm": self.max_gpu_length_mm,
+            "max_cooler_height_mm": self.max_cooler_height_mm,
+            "fan_slots": self.max_fan_slots,
+            "included_fans": self.included_fan_count,
+        }
+
     __mapper_args__ = {"polymorphic_identity": "case"}
 
 
@@ -400,5 +486,14 @@ class Fan(PCPart):
     bearing_type = Column(String(30), nullable=True)
     is_static_pressure = Column(Boolean, nullable=True)
     pack_count = Column(Integer, nullable=True)
+
+    @property
+    def specs(self) -> dict:
+        return {
+            "size_mm": self.size_mm,
+            "airflow_cfm": self.airflow_cfm,
+            "noise_db": self.noise_dba,
+            "pack_count": self.pack_count,
+        }
 
     __mapper_args__ = {"polymorphic_identity": "fan"}
