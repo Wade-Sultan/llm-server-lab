@@ -1,0 +1,51 @@
+'use server';
+
+import { revalidatePath } from 'next/cache';
+import { db } from '@/lib/prisma';
+
+export interface RamFormData {
+  name: string;
+  manufacturer: string;
+  modelNumber: string;
+  yearReleased: number | null;
+  isActive: boolean;
+  ddrGeneration: string;
+  speedMhz: number | null;
+  modules: number | null;
+  capacityGb: number | null;
+  heightMm: number | null;
+  moduleCapacityGb: number | null;
+  casLatency: number | null;
+  voltage: number | null;
+  hasRgb: boolean;
+  isEcc: boolean;
+}
+
+const partData = (d: RamFormData) => ({
+  name: d.name, manufacturer: d.manufacturer || null,
+  modelNumber: d.modelNumber || null, yearReleased: d.yearReleased, isActive: d.isActive,
+});
+
+const specificData = (d: RamFormData) => ({
+  ddrGeneration: d.ddrGeneration || null, speedMhz: d.speedMhz, modules: d.modules,
+  capacityGb: d.capacityGb, heightMm: d.heightMm, moduleCapacityGb: d.moduleCapacityGb,
+  casLatency: d.casLatency, voltage: d.voltage, hasRgb: d.hasRgb, isEcc: d.isEcc,
+});
+
+export async function createRam(data: RamFormData) {
+  await db.pcPart.create({ data: { ...partData(data), partType: 'ram', ram: { create: specificData(data) } } });
+  revalidatePath('/ram');
+}
+
+export async function updateRam(id: string, data: RamFormData) {
+  await db.$transaction([
+    db.pcPart.update({ where: { id }, data: partData(data) }),
+    db.ram.update({ where: { id }, data: specificData(data) }),
+  ]);
+  revalidatePath('/ram');
+}
+
+export async function deleteRam(id: string) {
+  await db.pcPart.delete({ where: { id } });
+  revalidatePath('/ram');
+}

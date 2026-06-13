@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
-# admin/deploy.sh — deploy Palladium admin to Compute Engine
+# admin/deploy.sh — deploy Palladium admin (Next.js) to Compute Engine
 set -euo pipefail
 
 # ---- Config ----
 INSTANCE="palladium-admin"
 ZONE="us-central1-a"
 PROJECT="${GCP_PROJECT:-$(gcloud config get-value project 2>/dev/null)}"
-SERVICE="palladium-admin"
 BRANCH="${BRANCH:-main}"
 
 # ---- Colors ----
@@ -41,7 +40,7 @@ gcloud compute ssh "$INSTANCE" \
   --command="bash -s" <<'REMOTE'
 set -euo pipefail
 
-export PATH="/usr/local/bin:/usr/bin:$HOME/.mix:$PATH"
+export PATH="/usr/local/bin:/usr/bin:$HOME/.nvm/versions/node/$(node --version 2>/dev/null || echo 'v22')/bin:$PATH"
 source /etc/profile 2>/dev/null || true
 
 cd ~/palladium
@@ -52,20 +51,21 @@ git reset --hard origin/main
 cd admin
 
 echo "==> Loading secrets"
-export MIX_ENV=prod
 DB_PASS=$(gcloud secrets versions access latest --secret=palladium-db-password-prod)
-export DATABASE_URL="ecto://palladium_app:${DB_PASS}@localhost:5432/palladium"
-export SECRET_KEY_BASE=$(gcloud secrets versions access latest --secret=palladium-admin-secret-key)
+ADMIN_PASS=$(gcloud secrets versions access latest --secret=palladium-admin-password 2>/dev/null || echo "admin")
 
-echo "==> Building release"
-mix deps.get --only prod
-mix deps.compile
-mix compile
-mix assets.deploy
-mix release --overwrite
+export DATABASE_URL="postgresql://palladium_app:${DB_PASS}@localhost:5432/palladium"
+export ADMIN_PASSWORD="${ADMIN_PASS}"
+export NODE_ENV=production
 
-echo "==> Running migrations"
-_build/prod/rel/admin/bin/admin eval "Admin.Release.migrate"
+echo "==> Installing dependencies"
+npm ci --production=false
+
+echo "==> Generating Prisma client"
+npx prisma generate
+
+echo "==> Building"
+npm run build
 
 echo "==> Restarting service"
 sudo systemctl restart palladium-admin

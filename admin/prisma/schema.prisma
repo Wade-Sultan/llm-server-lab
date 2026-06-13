@@ -1,0 +1,268 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model PcPart {
+  id           String   @id @default(uuid()) @db.Uuid
+  name         String
+  manufacturer String?
+  modelNumber  String?  @map("model_number")
+  yearReleased Int?     @map("year_released")
+  partType     String   @map("part_type")
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  cpu         Cpu?
+  gpu         Gpu?
+  motherboard Motherboard?
+  ram         Ram?
+  storage     Storage?
+  psu         Psu?
+  pcCase      PcCase?
+  cpuCooler   CpuCooler?
+  fan         Fan?
+
+  @@map("pc_parts")
+}
+
+model Cpu {
+  id                String   @id @db.Uuid
+  pcPart            PcPart   @relation(fields: [id], references: [id], onDelete: Cascade)
+  brand             String?
+  socket            String?
+  tdpWatts          Int?     @map("tdp_watts")
+  hasIgpu           Boolean  @default(false) @map("has_igpu")
+  ddrGeneration     String[] @map("ddr_generation")
+  supportedFeatures String[] @map("supported_features")
+  benchmarkScores   Json?    @map("benchmark_scores")
+  cores             Int?
+  threads           Int?
+  baseClockGhz      Float?   @map("base_clock_ghz")
+  boostClockGhz     Float?   @map("boost_clock_ghz")
+  l3CacheMb         Int?     @map("l3_cache_mb")
+  pcieGeneration    Int?     @map("pcie_generation")
+  maxMemoryGb       Int?     @map("max_memory_gb")
+  series            String?
+
+  @@map("cpus")
+}
+
+model Gpu {
+  id                  String   @id @db.Uuid
+  pcPart              PcPart   @relation(fields: [id], references: [id], onDelete: Cascade)
+  brand               String?
+  chipset             String?
+  vramGb              Int?     @map("vram_gb")
+  tdpWatts            Int?     @map("tdp_watts")
+  lengthMm            Int?     @map("length_mm")
+  pciePowerPins       String?  @map("pcie_power_pins")
+  recommendedPsuWatts Int?     @map("recommended_psu_watts")
+  supportedFeatures   String[] @map("supported_features")
+  benchmarkScores     Json?    @map("benchmark_scores")
+  vramType            String?  @map("vram_type")
+  widthSlots          Float?   @map("width_slots")
+  pcieGeneration      Int?     @map("pcie_generation")
+  baseClockMhz        Int?     @map("base_clock_mhz")
+  boostClockMhz       Int?     @map("boost_clock_mhz")
+  hasRayTracing       Boolean  @default(false) @map("has_ray_tracing")
+  cudaCores           Int?     @map("cuda_cores")
+  tensorCores         Int?     @map("tensor_cores")
+  streamProcessors    Int?     @map("stream_processors")
+  matrixCores         Int?     @map("matrix_cores")
+  displayOutputs      String?  @map("display_outputs")
+  hdmiVersion         String?  @map("hdmi_version")
+  dpVersion           String?  @map("dp_version")
+
+  @@map("gpus")
+}
+
+model Motherboard {
+  id             String  @id @db.Uuid
+  pcPart         PcPart  @relation(fields: [id], references: [id], onDelete: Cascade)
+  socket         String?
+  formFactor     String? @map("form_factor")
+  ddrGeneration  String? @map("ddr_generation")
+  memorySlots    Int?    @map("memory_slots")
+  hasWifi        Boolean @default(false) @map("has_wifi")
+  m2Slots        Int?    @map("m2_slots")
+  m2PcieGen      Int?    @map("m2_pcie_gen")
+  chipset        String?
+  maxMemoryGb    Int?    @map("max_memory_gb")
+  sataPorts      Int?    @map("sata_ports")
+  pcieX16Slots   Int?    @map("pcie_x16_slots")
+  pcieGeneration Int?    @map("pcie_generation")
+  hasBluetooth   Boolean @default(false) @map("has_bluetooth")
+  usbTypeACount  Int?    @map("usb_type_a_count")
+  usbTypeCCount  Int?    @map("usb_type_c_count")
+  audioCodec     String? @map("audio_codec")
+
+  @@map("motherboards")
+}
+
+model Ram {
+  id               String  @id @db.Uuid
+  pcPart           PcPart  @relation(fields: [id], references: [id], onDelete: Cascade)
+  ddrGeneration    String? @map("ddr_generation")
+  speedMhz         Int?    @map("speed_mhz")
+  modules          Int?
+  capacityGb       Int?    @map("capacity_gb")
+  heightMm         Int?    @map("height_mm")
+  moduleCapacityGb Int?    @map("module_capacity_gb")
+  casLatency       Int?    @map("cas_latency")
+  voltage          Float?
+  hasRgb           Boolean @default(false) @map("has_rgb")
+  isEcc            Boolean @default(false) @map("is_ecc")
+
+  @@map("ram")
+}
+
+model Storage {
+  id             String  @id @db.Uuid
+  pcPart         PcPart  @relation(fields: [id], references: [id], onDelete: Cascade)
+  storageType    String? @map("storage_type")
+  formFactor     String? @map("form_factor")
+  interface      String?
+  capacityGb     Int?    @map("capacity_gb")
+  readSpeedMbps  Int?    @map("read_speed_mbps")
+  writeSpeedMbps Int?    @map("write_speed_mbps")
+  hasDramCache   Boolean @default(false) @map("has_dram_cache")
+  enduranceTbw   Int?    @map("endurance_tbw")
+  rpm            Int?
+
+  @@map("storage")
+}
+
+model Psu {
+  id                  String  @id @db.Uuid
+  pcPart              PcPart  @relation(fields: [id], references: [id], onDelete: Cascade)
+  wattage             Int?
+  formFactor          String? @map("form_factor")
+  efficiencyRating    String? @map("efficiency_rating")
+  pcie8pinConnectors  Int?    @map("pcie_8pin_connectors")
+  pcie12pinConnectors Int?    @map("pcie_12pin_connectors")
+  pcie16pinConnectors Int?    @map("pcie_16pin_connectors")
+  depthMm             Int?    @map("depth_mm")
+  modular             String?
+  epsConnectors       Int?    @map("eps_connectors")
+  fanSizeMm           Int?    @map("fan_size_mm")
+  isFanless           Boolean @default(false) @map("is_fanless")
+
+  @@map("psus")
+}
+
+model PcCase {
+  id                       String   @id @db.Uuid
+  pcPart                   PcPart   @relation(fields: [id], references: [id], onDelete: Cascade)
+  supportedMoboFormFactors String[] @map("supported_mobo_form_factors")
+  maxGpuLengthMm           Int?     @map("max_gpu_length_mm")
+  maxCoolerHeightMm        Int?     @map("max_cooler_height_mm")
+  maxRadiatorFrontMm       Int?     @map("max_radiator_front_mm")
+  maxRadiatorTopMm         Int?     @map("max_radiator_top_mm")
+  maxPsuLengthMm           Int?     @map("max_psu_length_mm")
+  includedFanCount         Int?     @map("included_fan_count")
+  chamberCount             Int?     @map("chamber_count")
+  frontPanelMesh           Boolean  @default(false) @map("front_panel_mesh")
+  color                    String?
+  size                     String?
+  driveBays35              Int?     @map("drive_bays_35")
+  driveBays25              Int?     @map("drive_bays_25")
+  maxFanSlots              Int?     @map("max_fan_slots")
+  hasGlassPanel            Boolean  @default(false) @map("has_glass_panel")
+  weightKg                 Float?   @map("weight_kg")
+  lengthMm                 Int?     @map("length_mm")
+  widthMm                  Int?     @map("width_mm")
+  heightMm                 Int?     @map("height_mm")
+  usbFrontTypeA            Int?     @map("usb_front_type_a")
+  usbFrontTypeC            Int?     @map("usb_front_type_c")
+
+  @@map("cases")
+}
+
+model CpuCooler {
+  id               String   @id @db.Uuid
+  pcPart           PcPart   @relation(fields: [id], references: [id], onDelete: Cascade)
+  supportedSockets String[] @map("supported_sockets")
+  coolerType       String?  @map("cooler_type")
+  maxTdpWatts      Int?     @map("max_tdp_watts")
+  heightMm         Int?     @map("height_mm")
+  radiatorSizeMm   Int?     @map("radiator_size_mm")
+  fanCount         Int?     @map("fan_count")
+  fanSizeMm        Int?     @map("fan_size_mm")
+  noiseDba         Float?   @map("noise_dba")
+  hasRgb           Boolean  @default(false) @map("has_rgb")
+
+  @@map("cpu_coolers")
+}
+
+model Fan {
+  id               String  @id @db.Uuid
+  pcPart           PcPart  @relation(fields: [id], references: [id], onDelete: Cascade)
+  sizeMm           Int?    @map("size_mm")
+  maxRpm           Int?    @map("max_rpm")
+  airflowCfm       Float?  @map("airflow_cfm")
+  noiseDba         Float?  @map("noise_dba")
+  isPwm            Boolean @default(false) @map("is_pwm")
+  hasRgb           Boolean @default(false) @map("has_rgb")
+  bearingType      String? @map("bearing_type")
+  isStaticPressure Boolean @default(false) @map("is_static_pressure")
+  packCount        Int?    @map("pack_count")
+
+  @@map("fans")
+}
+
+model ReferenceBuild {
+  id          String   @id @default(uuid()) @db.Uuid
+  buildKey    String   @unique @map("build_key")
+  label       String
+  description String?
+  totalApprox Int?     @map("total_approx")
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@map("reference_builds")
+}
+
+model User {
+  id          String   @id @db.Uuid
+  email       String   @unique
+  username    String?
+  firebaseUid String?  @map("firebase_uid")
+  isActive    Boolean  @default(true) @map("is_active")
+  isSuperuser Boolean  @default(false) @map("is_superuser")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@map("users")
+}
+
+model Conversation {
+  id        String    @id @db.Uuid
+  userId    String?   @db.Uuid @map("user_id")
+  buildId   String?   @db.Uuid @map("build_id")
+  title     String?
+  summary   String?
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  messages  Message[]
+
+  @@map("conversations")
+}
+
+model Message {
+  id             String       @id @db.Uuid
+  conversationId String       @db.Uuid @map("conversation_id")
+  conversation   Conversation @relation(fields: [conversationId], references: [id])
+  role           String
+  content        String?
+  metadata       Json?
+  createdAt      DateTime     @default(now()) @map("created_at")
+
+  @@map("messages")
+}
