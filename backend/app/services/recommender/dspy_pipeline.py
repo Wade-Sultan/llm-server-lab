@@ -50,6 +50,7 @@ from app.services.recommender.db.queries import (
     get_ram_candidates,
     get_storage_candidates,
 )
+from app.crud import components as crud_components
 from app.schemas.chat import BuildRequest
 
 
@@ -184,9 +185,11 @@ def _step_cpu(state: DSPyBuildState, session: Session, budget: dict, program: De
     )
     state.cpu_name = result.cpu_name
     state.thresholds["cpu"] = result.reconsideration_threshold
-    # Extract socket + DDR gen from the DB for downstream steps
-    # TODO: look up cpu_socket and cpu_ddr_gen from pc_parts by result.cpu_name
-    #       and set state.cpu_socket, state.cpu_tdp_w, state.cpu_ddr_gen
+    cpu = crud_components.get_cpu_by_name(session, result.cpu_name)
+    if cpu:
+        state.cpu_socket = cpu.socket
+        state.cpu_tdp_w = cpu.tdp_watts
+        state.cpu_ddr_gen = (cpu.ddr_generation or ["ddr5"])[-1]
 
 
 def _step_cooler(state: DSPyBuildState, session: Session, budget: dict, program: DecideCPUCooler) -> None:
@@ -225,7 +228,11 @@ def _step_motherboard(state: DSPyBuildState, session: Session, budget: dict, pro
     )
     state.mobo_name = result.motherboard_name
     state.thresholds["motherboard"] = result.reconsideration_threshold
-    # TODO: look up mobo_form_factor, mobo_m2_slots, mobo_sata_ports by name
+    mobo = crud_components.get_motherboard_by_name(session, result.motherboard_name)
+    if mobo:
+        state.mobo_form_factor = mobo.form_factor
+        state.mobo_m2_slots = mobo.m2_slots or 0
+        state.mobo_sata_ports = mobo.sata_ports or 0
 
 
 def _step_ram(state: DSPyBuildState, session: Session, budget: dict, program: DecideRAM) -> None:
@@ -270,7 +277,9 @@ def _step_gpu(state: DSPyBuildState, session: Session, budget: dict, program: De
     if state.gpu_required:
         state.gpu_name = result.gpu_name
         state.thresholds["gpu"] = result.reconsideration_threshold
-        # TODO: look up gpu_tdp_w by name
+        gpu = crud_components.get_gpu_by_name(session, result.gpu_name)
+        if gpu:
+            state.gpu_tdp_w = gpu.tdp_watts
 
 
 def _step_psu(state: DSPyBuildState, session: Session, budget: dict, program: DecidePSU) -> None:
@@ -368,7 +377,14 @@ def run_pipeline_post_case(
     Runs the fans step and finalizes the build.
     """
     state.case_name = case_name
-    # TODO: look up case_included_fans and case_fan_slots from pc_parts by case_name
+    case = crud_components.get_case_by_name(session, case_name)
+    if case:
+        state.case_included_fans = case.included_fan_count or 0
+        state.case_max_gpu_length_mm = case.max_gpu_length_mm
+        # Build fan slot list from available slots (e.g. three 120mm → [120, 120, 120])
+        slot_size = 120  # default; cases don't store per-slot sizes separately
+        total_slots = (case.max_fan_slots or 0) - state.case_included_fans
+        state.case_fan_slots = [slot_size] * max(total_slots, 0)
     budget = _allocate_budget(state.request.budget_usd, state.request.use_cases)
     try:
         _step_fans(state, session, budget, load_fans())

@@ -1,7 +1,7 @@
 "use client"
 
-import { UnderConstruction } from "@/components/Common/UnderConstruction"
+import { VideoGuides } from "@/components/pages/VideoGuides"
 
 export default function GuidesPage() {
-  return <UnderConstruction pageName="Guides" />
+  return <VideoGuides />
 }

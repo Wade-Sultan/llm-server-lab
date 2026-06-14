@@ -1,3 +1,4 @@
+from app.crud import components
 from app.crud.users import (
     authenticate,
     create_user,
