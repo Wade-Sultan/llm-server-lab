@@ -15,18 +15,25 @@ Budget allocation:
     soft maximums passed to the DB query layer — they don't prevent the LLM
     from picking a cheaper option (and it should, often).
 
-This pipeline is synchronous. Call it from FastAPI via run_in_executor or
-a background task to avoid blocking the event loop.
+Status messages:
+    Each step emits two levels of progress via the optional progress_callback:
+      1. A step-start message (before the DB query) from _emit().
+      2. DSPy-native messages (module_start, lm_start) forwarded from
+         BuildStatusProvider through _call_streamified().
+    The pipeline is fully async — await run_pipeline() from an async context.
 """
 
 from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
-from typing import Callable
+from typing import Any, Callable
 
 import dspy
+from dspy.streaming.messages import StatusMessage
 from sqlmodel import Session
+
+from app.services.recommender.status_provider import BuildStatusProvider
 
 from app.services.recommender.components.decidecase import DecideCase, load_program as load_case
 from app.services.recommender.components.decidecpu import DecideCPU, load_program as load_cpu
@@ -53,6 +60,9 @@ from app.services.recommender.db.queries import (
 from app.crud import components as crud_components
 from app.schemas.chat import BuildRequest
 
+# Module-level singleton — stateless, safe to share across concurrent requests
+_status_provider = BuildStatusProvider()
+
 
 # ---------------------------------------------------------------------------
 # DSPy configuration
@@ -67,6 +77,34 @@ def configure_dspy() -> None:
         temperature=0.3,
     )
     dspy.configure(lm=lm)
+
+
+# ---------------------------------------------------------------------------
+# Streamified execution helper
+# ---------------------------------------------------------------------------
+
+async def _call_streamified(
+    program: dspy.Module,
+    status_fn: Callable[[str], None],
+    **kwargs: Any,
+) -> dspy.Prediction:
+    """
+    Run a DSPy module wrapped with streamify and forward any StatusMessage
+    objects to status_fn before returning the final Prediction.
+
+    A fresh stream is created per call, so concurrent pipeline runs are
+    fully isolated even though they share the same _status_provider singleton.
+    """
+    streamed = dspy.streamify(program, status_message_provider=_status_provider)
+    result: dspy.Prediction | None = None
+    async for item in streamed(**kwargs):
+        if isinstance(item, StatusMessage) and item.message:
+            status_fn(item.message)
+        elif isinstance(item, dspy.Prediction):
+            result = item
+    if result is None:
+        raise RuntimeError("DSPy streamify yielded no Prediction")
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -162,10 +200,12 @@ def _emit(state: DSPyBuildState, step: str, message: str) -> None:
 # Pipeline steps
 # ---------------------------------------------------------------------------
 
-def _step_ddr(state: DSPyBuildState, session: Session, budget: dict, program: DecideDDR) -> None:
+async def _step_ddr(state: DSPyBuildState, session: Session, budget: dict, program: DecideDDR) -> None:
     _emit(state, "ddr", "Deciding memory generation…")
     candidates = get_ddr_candidates(session, budget["cpu"])
-    result = program(
+    result = await _call_streamified(
+        program,
+        status_fn=lambda msg: _emit(state, "ddr", msg),
         use_cases=str(state.request.use_cases),
         budget_total=state.request.budget_usd,
         candidates=candidates,
@@ -174,10 +214,12 @@ def _step_ddr(state: DSPyBuildState, session: Session, budget: dict, program: De
     state.thresholds["ddr"] = result.reconsideration_threshold
 
 
-def _step_cpu(state: DSPyBuildState, session: Session, budget: dict, program: DecideCPU) -> None:
+async def _step_cpu(state: DSPyBuildState, session: Session, budget: dict, program: DecideCPU) -> None:
     _emit(state, "cpu", "Choosing your CPU…")
     candidates = get_cpu_candidates(session, budget["cpu"], state.request.preferences)
-    result = program(
+    result = await _call_streamified(
+        program,
+        status_fn=lambda msg: _emit(state, "cpu", msg),
         use_cases=str(state.request.use_cases),
         budget_total=state.request.budget_usd,
         cpu_budget_ceiling=budget["cpu"],
@@ -192,13 +234,15 @@ def _step_cpu(state: DSPyBuildState, session: Session, budget: dict, program: De
         state.cpu_ddr_gen = (cpu.ddr_generation or ["ddr5"])[-1]
 
 
-def _step_cooler(state: DSPyBuildState, session: Session, budget: dict, program: DecideCPUCooler) -> None:
+async def _step_cooler(state: DSPyBuildState, session: Session, budget: dict, program: DecideCPUCooler) -> None:
     _emit(state, "cooler", "Picking a cooler…")
     candidates = get_cooler_candidates(
         session, state.cpu_tdp_w, state.cpu_socket, budget["cooler"],
         state.request.preferences.form_factor,
     )
-    result = program(
+    result = await _call_streamified(
+        program,
+        status_fn=lambda msg: _emit(state, "cooler", msg),
         use_cases=str(state.request.use_cases),
         cpu_name=state.cpu_name,
         cpu_tdp_w=state.cpu_tdp_w,
@@ -209,7 +253,7 @@ def _step_cooler(state: DSPyBuildState, session: Session, budget: dict, program:
     state.thresholds["cooler"] = result.reconsideration_threshold
 
 
-def _step_motherboard(state: DSPyBuildState, session: Session, budget: dict, program: DecideMotherboard) -> None:
+async def _step_motherboard(state: DSPyBuildState, session: Session, budget: dict, program: DecideMotherboard) -> None:
     _emit(state, "motherboard", "Selecting a motherboard…")
     candidates = get_motherboard_candidates(
         session,
@@ -219,7 +263,9 @@ def _step_motherboard(state: DSPyBuildState, session: Session, budget: dict, pro
         form_factor=state.request.preferences.form_factor,
         wifi_required=state.request.preferences.wifi_required,
     )
-    result = program(
+    result = await _call_streamified(
+        program,
+        status_fn=lambda msg: _emit(state, "motherboard", msg),
         use_cases=str(state.request.use_cases),
         cpu_name=state.cpu_name,
         ddr_gen=state.cpu_ddr_gen,
@@ -235,10 +281,12 @@ def _step_motherboard(state: DSPyBuildState, session: Session, budget: dict, pro
         state.mobo_sata_ports = mobo.sata_ports or 0
 
 
-def _step_ram(state: DSPyBuildState, session: Session, budget: dict, program: DecideRAM) -> None:
+async def _step_ram(state: DSPyBuildState, session: Session, budget: dict, program: DecideRAM) -> None:
     _emit(state, "ram", "Choosing RAM…")
     candidates = get_ram_candidates(session, state.cpu_ddr_gen, budget["ram"])
-    result = program(
+    result = await _call_streamified(
+        program,
+        status_fn=lambda msg: _emit(state, "ram", msg),
         use_cases=str(state.request.use_cases),
         ddr_gen=state.cpu_ddr_gen,
         budget_ceiling=budget["ram"],
@@ -248,12 +296,14 @@ def _step_ram(state: DSPyBuildState, session: Session, budget: dict, program: De
     state.thresholds["ram"] = result.reconsideration_threshold
 
 
-def _step_storage(state: DSPyBuildState, session: Session, budget: dict, program: DecideStorage) -> None:
+async def _step_storage(state: DSPyBuildState, session: Session, budget: dict, program: DecideStorage) -> None:
     _emit(state, "storage", "Selecting storage…")
     candidates = get_storage_candidates(
         session, budget["storage"], state.mobo_m2_slots, state.mobo_sata_ports,
     )
-    result = program(
+    result = await _call_streamified(
+        program,
+        status_fn=lambda msg: _emit(state, "storage", msg),
         use_cases=str(state.request.use_cases),
         budget_ceiling=budget["storage"],
         candidates=candidates,
@@ -262,12 +312,14 @@ def _step_storage(state: DSPyBuildState, session: Session, budget: dict, program
     state.thresholds["storage"] = result.reconsideration_threshold
 
 
-def _step_gpu(state: DSPyBuildState, session: Session, budget: dict, program: DecideGPU) -> None:
+async def _step_gpu(state: DSPyBuildState, session: Session, budget: dict, program: DecideGPU) -> None:
     _emit(state, "gpu", "Finding your GPU…")
     candidates = get_gpu_candidates(
         session, budget["gpu"], state.case_max_gpu_length_mm, state.request.preferences,
     )
-    result = program(
+    result = await _call_streamified(
+        program,
+        status_fn=lambda msg: _emit(state, "gpu", msg),
         use_cases=str(state.request.use_cases),
         budget_total=state.request.budget_usd,
         gpu_budget_ceiling=budget["gpu"],
@@ -282,7 +334,7 @@ def _step_gpu(state: DSPyBuildState, session: Session, budget: dict, program: De
             state.gpu_tdp_w = gpu.tdp_watts
 
 
-def _step_psu(state: DSPyBuildState, session: Session, budget: dict, program: DecidePSU) -> None:
+async def _step_psu(state: DSPyBuildState, session: Session, budget: dict, program: DecidePSU) -> None:
     _emit(state, "psu", "Calculating power supply…")
     # Add 20% headroom over combined TDP
     system_tdp = state.cpu_tdp_w + state.gpu_tdp_w
@@ -290,7 +342,9 @@ def _step_psu(state: DSPyBuildState, session: Session, budget: dict, program: De
     # Determine PSU form factor from case
     psu_form_factor = state.psu_form_factor  # updated after case step if ITX
     candidates = get_psu_candidates(session, min_wattage, budget["psu"], psu_form_factor)
-    result = program(
+    result = await _call_streamified(
+        program,
+        status_fn=lambda msg: _emit(state, "psu", msg),
         required_wattage=min_wattage,
         budget_ceiling=budget["psu"],
         candidates=candidates,
@@ -298,12 +352,14 @@ def _step_psu(state: DSPyBuildState, session: Session, budget: dict, program: De
     state.psu_name = result.psu_name
 
 
-def _step_case(state: DSPyBuildState, session: Session, budget: dict, program: DecideCase) -> None:
+async def _step_case(state: DSPyBuildState, session: Session, budget: dict, program: DecideCase) -> None:
     _emit(state, "case", "Picking case options for you…")
     candidates = get_case_candidates(
         session, budget["case"], state.mobo_form_factor, state.psu_form_factor,
     )
-    result = program(
+    result = await _call_streamified(
+        program,
+        status_fn=lambda msg: _emit(state, "case", msg),
         use_cases=str(state.request.use_cases),
         mobo_form_factor=state.mobo_form_factor,
         budget_ceiling=budget["case"],
@@ -317,10 +373,12 @@ def _step_case(state: DSPyBuildState, session: Session, budget: dict, program: D
     # Pipeline pauses here — case_name is set externally after user picks
 
 
-def _step_fans(state: DSPyBuildState, session: Session, budget: dict, program: DecideFans) -> None:
+async def _step_fans(state: DSPyBuildState, session: Session, budget: dict, program: DecideFans) -> None:
     _emit(state, "fans", "Checking airflow…")
     candidates = get_fan_candidates(session, budget["fans"], state.case_fan_slots)
-    result = program(
+    result = await _call_streamified(
+        program,
+        status_fn=lambda msg: _emit(state, "fans", msg),
         cpu_tdp_w=state.cpu_tdp_w,
         gpu_tdp_w=state.gpu_tdp_w,
         case_included_fans=state.case_included_fans,
@@ -335,13 +393,18 @@ def _step_fans(state: DSPyBuildState, session: Session, budget: dict, program: D
 # Public entry point
 # ---------------------------------------------------------------------------
 
-def run_pipeline(
+async def run_pipeline(
     request: BuildRequest,
     session: Session,
     progress_callback: Callable[[str, str], None] | None = None,
 ) -> DSPyBuildState:
     """
     Run the full DSPy component-by-component pipeline.
+
+    Each step emits progress via progress_callback at two levels:
+      - A step-start message before the DB query (_emit).
+      - DSPy-native messages (module_start, lm_start) from BuildStatusProvider,
+        forwarded via _call_streamified as the module runs.
 
     Returns a DSPyBuildState with all decisions populated up to (but not
     including) the case selection, which requires a round-trip to the user.
@@ -351,15 +414,15 @@ def run_pipeline(
     budget = _allocate_budget(request.budget_usd, request.use_cases)
 
     try:
-        _step_ddr(state, session, budget, load_ddr())
-        _step_cpu(state, session, budget, load_cpu())
-        _step_cooler(state, session, budget, load_cooler())
-        _step_motherboard(state, session, budget, load_motherboard())
-        _step_ram(state, session, budget, load_ram())
-        _step_storage(state, session, budget, load_storage())
-        _step_gpu(state, session, budget, load_gpu())
-        _step_psu(state, session, budget, load_psu())
-        _step_case(state, session, budget, load_case())
+        await _step_ddr(state, session, budget, load_ddr())
+        await _step_cpu(state, session, budget, load_cpu())
+        await _step_cooler(state, session, budget, load_cooler())
+        await _step_motherboard(state, session, budget, load_motherboard())
+        await _step_ram(state, session, budget, load_ram())
+        await _step_storage(state, session, budget, load_storage())
+        await _step_gpu(state, session, budget, load_gpu())
+        await _step_psu(state, session, budget, load_psu())
+        await _step_case(state, session, budget, load_case())
         # Pipeline pauses — return state with case_options populated
     except Exception as exc:
         state.error = str(exc)
@@ -367,7 +430,7 @@ def run_pipeline(
     return state
 
 
-def run_pipeline_post_case(
+async def run_pipeline_post_case(
     state: DSPyBuildState,
     session: Session,
     case_name: str,
@@ -387,7 +450,7 @@ def run_pipeline_post_case(
         state.case_fan_slots = [slot_size] * max(total_slots, 0)
     budget = _allocate_budget(state.request.budget_usd, state.request.use_cases)
     try:
-        _step_fans(state, session, budget, load_fans())
+        await _step_fans(state, session, budget, load_fans())
     except Exception as exc:
         state.error = str(exc)
     return state
