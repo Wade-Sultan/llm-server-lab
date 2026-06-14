@@ -1,9 +1,11 @@
 "use client"
 
 import { AssistantRuntimeProvider, useLocalRuntime } from "@assistant-ui/react"
-import { useMemo, useRef } from "react"
+import { useEffect, useMemo, useRef } from "react"
 import type { ReactNode } from "react"
+import { toast } from "sonner"
 
+import { useConversationStateStore } from "@/hooks/useConversationState"
 import { createModelAdapter } from "./model-adapter"
 
 const INITIAL_SUGGESTIONS = [
@@ -24,6 +26,13 @@ export function ChatRuntimeProvider({ children }: ChatRuntimeProviderProps) {
   const runtime = useLocalRuntime(adapter, {
     initialMessages: [],
   })
+
+  const phase = useConversationStateStore((s) => s.phase)
+  useEffect(() => {
+    if (phase === "complete") {
+      toast.success("Build ready!")
+    }
+  }, [phase])
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>

@@ -3,6 +3,7 @@ import type { Metadata } from "next"
 import { DM_Sans, Raleway } from "next/font/google"
 import type React from "react"
 import { ThemeProvider } from "@/components/theme-provider"
+import { Toaster } from "@/components/ui/sonner"
 import "@/index.css"
 
 const raleway = Raleway({
@@ -41,6 +42,7 @@ export default function RootLayout({
       <body>
         <ThemeProvider>
           <div id="root">{children}</div>
+          <Toaster />
         </ThemeProvider>
         <Analytics />
       </body>

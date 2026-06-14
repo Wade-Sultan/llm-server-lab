@@ -3,9 +3,9 @@ import { create } from "zustand"
 export type ConversationTurn = "user" | "ai"
 
 /**
- * gathering    — not enough info yet; AI is asking follow-up questions
- * recommending — enough info collected; AI is selecting and presenting a build
- * complete     — recommendation has been delivered to the user
+ * gathering: not enough info yet; AI is asking follow-up questions
+ * recommending: enough info collected; AI is selecting and presenting a build
+ * complete: recommendation has been delivered to the user
  */
 export type ConversationPhase = "gathering" | "recommending" | "complete"
 
