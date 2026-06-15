@@ -3,7 +3,6 @@ from collections.abc import Generator
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 
-from app import crud
 from app.core.config import settings
 from app.models import User
 from app.schemas import UserCreate
@@ -55,6 +54,10 @@ def get_db() -> Generator[Session, None, None]:
 
 
 def init_db(session: Session) -> None:
+    # Lazy import to avoid circular dependency:
+    # db.py → crud → crud/users → core/security → core/config → Settings()
+    from app import crud
+
     user = session.execute(
         select(User).where(User.email == settings.FIRST_SUPERUSER)
     ).scalar_one_or_none()
@@ -65,3 +68,4 @@ def init_db(session: Session) -> None:
             is_superuser=True,
         )
         crud.create_user(session=session, user_create=user_in)
+
