@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic';
+
 import { db } from '@/lib/prisma';
 import { ReferenceBuildTable } from './client';
 
