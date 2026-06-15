@@ -41,10 +41,7 @@ def _get_client() -> openai.AsyncOpenAI:
 # ---------------------------------------------------------------------------
 
 _EXTRACT_SYSTEM = """\
-You are the intake analyst for Palladium, a PC-build recommendation service.
-
-Your ONLY job is to read the conversation and extract a structured build profile.
-Respond with a JSON object matching this schema EXACTLY (no markdown, no explanation):
+Extract a structured build profile from the conversation. Respond with ONLY a JSON object:
 
 {
   "primary_use": "<gaming | video_editing | local_llm | general>",
@@ -56,16 +53,14 @@ Respond with a JSON object matching this schema EXACTLY (no markdown, no explana
 }
 
 Rules:
- - primary_use must be exactly one of: gaming, video_editing, local_llm, general
- - gaming_resolution is only set when primary_use is "gaming"; otherwise null
+ - primary_use: gaming, video_editing, local_llm, or general
+ - gaming_resolution: only set when primary_use is "gaming"; otherwise null
  - budget_tier: entry (~$450-700), mid (~$800-1300), high (~$1300-1900), elite (~$2000+)
- - Infer budget_tier from context clues (resolution targets, game types, workload intensity)
-   even if the user doesn't state a dollar amount.
- - If the user mentions multiple use cases, pick the most demanding one as primary_use.
- - If you cannot determine a field, use sensible defaults:
-   primary_use="general", budget_tier="mid", gaming_resolution=null.
- - Output ONLY the JSON object. No markdown fences. No preamble.
- """
+ - Infer budget from context clues even if no dollar amount is stated.
+ - Multiple use cases → pick the most demanding one as primary_use.
+ - Defaults if unknown: primary_use="general", budget_tier="mid", gaming_resolution=null.
+ - Output ONLY valid JSON. No markdown, no preamble.
+"""
 
 
 async def extract_profile(messages: list[ChatMessage]) -> BuildProfile:
@@ -84,8 +79,9 @@ async def extract_profile(messages: list[ChatMessage]) -> BuildProfile:
 
     response = await client.chat.completions.create(
         model=ChatModelConfig.get_extract_model(),
-        max_tokens=512,
+        max_tokens=256,
         temperature=0.0,
+        response_format={"type": "json_object"},
         messages=api_messages,
     )
 
@@ -115,23 +111,19 @@ async def extract_profile(messages: list[ChatMessage]) -> BuildProfile:
 # ---------------------------------------------------------------------------
 
 _RECOMMEND_SYSTEM = """\
-You are Palladium's build advisor — friendly, knowledgeable, and concise.
+You are Palladium's build advisor — friendly, knowledgeable, concise.
 
-You have been given a pre-validated PC build that was selected by our \
-compatibility engine. Your job is to present it to the user in a clear, \
-enthusiastic, and helpful way.
-
-Guidelines:
- - Start with a short sentence acknowledging what the user wants.
+Present the pre-validated PC build to the user clearly and helpfully:
+ - Start with a short acknowledgment of what the user wants.
  - Present the build name and a one-line summary.
  - Walk through each component with 1-2 sentences explaining why it fits.
  - Mention the approximate total price at the end.
- - Use markdown formatting: **bold** for part names, bullet points for the list.
- - Keep the whole response under 400 words.
- - Do NOT invent specs or prices that aren't in the build data.
- - Do NOT suggest alternative parts — this is the recommended build.
- - Be warm and direct. No filler phrases like "Great question!" or "Absolutely!"
- """
+ - Use markdown: **bold** for part names, bullets for the list.
+ - Keep the response under 400 words.
+ - Do NOT invent specs or prices not in the build data.
+ - Do NOT suggest alternatives — this is the recommended build.
+ - Be warm and direct. No filler phrases.
+"""
 
 
 def _format_build_context(
@@ -188,7 +180,7 @@ async def stream_recommendation(
 
     stream = await client.chat.completions.create(
         model=ChatModelConfig.get_recommend_model(),
-        max_tokens=1024,
+        max_tokens=768,
         temperature=0.5,
         messages=api_messages,
         stream=True,
@@ -204,20 +196,17 @@ async def stream_recommendation(
 # ---------------------------------------------------------------------------
 
 _ELICIT_SYSTEM = """\
-You are Palladium's friendly intake assistant. Your job is to learn enough \
-about the user's needs to recommend a PC build.
+You are Palladium's friendly intake assistant. Learn the user's needs to recommend a PC build.
 
-You need to determine:
+Determine:
 1. Primary use case (gaming, video editing, AI/ML, or general productivity)
 2. For gaming: target resolution and game types
-3. A sense of budget expectations (even vague is fine)
+3. Budget expectations (even vague is fine)
 
-Ask ONE focused follow-up question at a time. Be conversational, not robotic.
-Keep responses under 80 words. Use markdown sparingly.
+Ask ONE focused follow-up question at a time. Be conversational. Keep responses under 80 words.
 
-If the user has already provided a configurator payload (JSON with useCases), \
-you have enough information — respond with exactly: READY_TO_RECOMMEND
- """
+If the user provided a configurator payload (JSON with useCases), respond with exactly: READY_TO_RECOMMEND
+"""
 
 
 async def stream_elicitation(
@@ -277,6 +266,27 @@ async def has_enough_info(messages: list[ChatMessage]) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Build resolution cache — profile → build mapping is deterministic
+# ---------------------------------------------------------------------------
+
+_resolve_cache: dict[str, tuple[str, Build]] = {}
+
+
+def _resolve_build_cached(
+    profile: BuildProfile,
+    db,
+) -> tuple[str, Build]:
+    """Resolve a build with in-memory caching to avoid repeated DB queries."""
+    cache_key = f"{profile.primary_use}:{profile.gaming_resolution}:{profile.budget_tier}"
+    if cache_key in _resolve_cache:
+        return _resolve_cache[cache_key]
+
+    build_key, build = resolve_build(profile, db)
+    _resolve_cache[cache_key] = (build_key, build)
+    return build_key, build
+
+
+# ---------------------------------------------------------------------------
 # Public API — orchestrate the full flow
 # ---------------------------------------------------------------------------
 
@@ -316,7 +326,7 @@ async def run_chat_turn(
 
     yield {"type": "progress", "step": "resolving", "message": "Selecting your parts…"}
     with SessionLocal() as db:
-        build_key, build = resolve_build(profile, db)
+        build_key, build = _resolve_build_cached(profile, db)
 
     yield {
         "type": "build",
