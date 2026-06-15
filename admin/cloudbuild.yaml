@@ -3,7 +3,7 @@ steps:
     args:
       - 'build'
       - '-t'
-      - 'us-central1-docker.pkg.dev/$PROJECT_ID/palladium/admin:${_COMMIT_SHA}'
+      - 'us-central1-docker.pkg.dev/$PROJECT_ID/palladium/admin:$BUILD_ID'
       - '-t'
       - 'us-central1-docker.pkg.dev/$PROJECT_ID/palladium/admin:latest'
       - '.'
@@ -25,10 +25,10 @@ steps:
       - 'palladium-admin'
       - '--zone=us-central1-a'
       - '--tunnel-through-iap'
-      - '--command=docker pull us-central1-docker.pkg.dev/$PROJECT_ID/palladium/admin:${_COMMIT_SHA} && sudo systemctl restart palladium-admin'
+      - '--command=docker pull us-central1-docker.pkg.dev/$PROJECT_ID/palladium/admin:$BUILD_ID && sudo systemctl restart palladium-admin'
 
 images:
-  - 'us-central1-docker.pkg.dev/$PROJECT_ID/palladium/admin:${_COMMIT_SHA}'
+  - 'us-central1-docker.pkg.dev/$PROJECT_ID/palladium/admin:$BUILD_ID'
   - 'us-central1-docker.pkg.dev/$PROJECT_ID/palladium/admin:latest'
 
 options:

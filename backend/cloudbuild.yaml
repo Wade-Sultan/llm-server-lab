@@ -3,7 +3,7 @@ steps:
     args:
       - 'build'
       - '-t'
-      - 'us-central1-docker.pkg.dev/$PROJECT_ID/palladium/backend:$COMMIT_SHA'
+      - 'us-central1-docker.pkg.dev/$PROJECT_ID/palladium/backend:$BUILD_ID'
       - '-t'
       - 'us-central1-docker.pkg.dev/$PROJECT_ID/palladium/backend:latest'
       - '.'
@@ -23,7 +23,7 @@ steps:
       - 'run'
       - 'deploy'
       - 'palladium-backend'
-      - '--image=us-central1-docker.pkg.dev/$PROJECT_ID/palladium/backend:$COMMIT_SHA'
+      - '--image=us-central1-docker.pkg.dev/$PROJECT_ID/palladium/backend:$BUILD_ID'
       - '--region=us-central1'
       - '--platform=managed'
       - '--port=8000'
@@ -42,7 +42,7 @@ steps:
       - '--session-affinity'
 
 images:
-  - 'us-central1-docker.pkg.dev/$PROJECT_ID/palladium/backend:$COMMIT_SHA'
+  - 'us-central1-docker.pkg.dev/$PROJECT_ID/palladium/backend:$BUILD_ID'
   - 'us-central1-docker.pkg.dev/$PROJECT_ID/palladium/backend:latest'
 
 options:
