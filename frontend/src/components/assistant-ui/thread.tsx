@@ -23,13 +23,13 @@ import {
   RefreshCwIcon,
   SquareIcon,
 } from "lucide-react"
-import Image from "next/image"
-import { type FC, useEffect, useState } from "react"
+import { type FC } from "react"
 import {
   ComposerAddAttachment,
   ComposerAttachments,
   UserMessageAttachments,
 } from "@/components/assistant-ui/attachment"
+import { LoadingIndicator } from "@/components/Common/LoadingIndicator"
 import { MarkdownText } from "@/components/assistant-ui/markdown-text"
 import { ToolFallback } from "@/components/assistant-ui/tool-fallback"
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button"
@@ -203,34 +203,6 @@ const MessageError: FC = () => {
   )
 }
 
-const PipelineStatusIndicator: FC<{ message: string }> = ({ message }) => {
-  const [dots, setDots] = useState(0)
-
-  useEffect(() => {
-    const id = setInterval(() => setDots((d) => (d + 1) % 4), 500)
-    return () => clearInterval(id)
-  }, [])
-
-  // Strip trailing ellipsis so animated dots are the sole source of punctuation
-  const text = message.replace(/[…\.]+$/, "")
-
-  return (
-    <div className="flex items-center gap-2.5 py-1">
-      <Image
-        src="/assets/images/palladium-logo.svg"
-        alt=""
-        width={18}
-        height={18}
-        className="animate-[spin_8s_linear_infinite] shrink-0 opacity-70"
-      />
-      <span className="text-sm text-muted-foreground">
-        {text}
-        <span className="inline-block w-[1.5ch]">{"...".slice(0, dots)}</span>
-      </span>
-    </div>
-  )
-}
-
 const AssistantMessage: FC = () => {
   const statusMessage = usePipelineStatusStore((s) => s.message)
   const isRunning = useAuiState((s) => s.thread.isRunning)
@@ -242,7 +214,7 @@ const AssistantMessage: FC = () => {
     >
       <div className="aui-assistant-message-content wrap-break-word px-2 text-foreground leading-relaxed">
         {isRunning && statusMessage && (
-          <PipelineStatusIndicator message={statusMessage} />
+          <LoadingIndicator message={statusMessage} />
         )}
         <MessagePrimitive.Parts>
           {({ part }) => {

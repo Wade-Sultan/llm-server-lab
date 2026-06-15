@@ -32,7 +32,7 @@ interface Release {
 
 const releases: Release[] = [
   {
-    date: "April 2026 and Beyond",
+    date: "June 2026 and Beyond",
     label: "Upcoming Features",
     changes: [
       { type: "new", text: "Live Amazon and Ebay links to buy parts" },

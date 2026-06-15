@@ -4,6 +4,7 @@ import { useEffect, useState } from "react"
 import Link from "next/link"
 import { ArrowRight, MessageSquare, Lock } from "lucide-react"
 import useAuth, { getAccessToken } from "@/hooks/useAuth"
+import { LoadingIndicator } from "@/components/Common/LoadingIndicator"
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"
 
@@ -81,9 +82,7 @@ export default function BuildHistoryPage() {
     <div className="flex flex-col gap-6 px-8 py-6">
       <h1 className="text-2xl font-bold tracking-tight">My Builds</h1>
 
-      {fetching && (
-        <p className="text-sm text-muted-foreground">Loading your builds...</p>
-      )}
+      {fetching && <LoadingIndicator message="Loading your builds" />}
 
       {error && (
         <p className="text-sm text-destructive">{error}</p>
