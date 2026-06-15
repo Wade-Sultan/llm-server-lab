@@ -97,6 +97,8 @@ class Settings(BaseSettings):
     FIRST_SUPERUSER: EmailStr
     FIRST_SUPERUSER_PASSWORD: str
 
+    OPENROUTER_API_KEY: str
+
     def _check_default_secret(self, var_name: str, value: str | None) -> None:
         if value == "changethis":
             message = (
@@ -119,3 +121,4 @@ class Settings(BaseSettings):
 
 
 settings = Settings()  # type: ignore
+

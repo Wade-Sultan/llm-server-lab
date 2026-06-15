@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import json
-import os
 import logging
 from typing import AsyncIterator
 
 import openai
 
+from app.core.config import settings
 from app.data.refbuilds import Build
 from app.schemas.chat import BuildProfile, ChatMessage
 from app.services.resolver import resolve_build
@@ -26,7 +26,7 @@ _client: openai.AsyncOpenAI | None = None
 def _get_client() -> openai.AsyncOpenAI:
     global _client
     if _client is None:
-        api_key = os.getenv("OPENROUTER_API_KEY")
+        api_key = settings.OPENROUTER_API_KEY
         if not api_key:
             raise EnvironmentError("OPENROUTER_API_KEY is not set.")
         _client = openai.AsyncOpenAI(
