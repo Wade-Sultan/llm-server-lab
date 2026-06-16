@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import json
+import asyncio
 import logging
 from typing import AsyncIterator
 
@@ -11,6 +11,7 @@ from app.data.refbuilds import Build
 from app.schemas.chat import BuildProfile, ChatMessage
 from app.services.resolver import resolve_build
 from app.services.chat_models import ChatModelConfig
+from app.services.recommender.components.extractprofile import load_program as _load_extract_program
 from app.core.db import SessionLocal
 
 
@@ -40,70 +41,42 @@ def _get_client() -> openai.AsyncOpenAI:
 # Stage 1 — Extract BuildProfile
 # ---------------------------------------------------------------------------
 
-_EXTRACT_SYSTEM = """\
-Extract a structured build profile from the conversation. Respond with ONLY a JSON object:
+_extract_program = None
 
-{
-  "primary_use": "<gaming | video_editing | local_llm | general>",
-  "gaming_resolution": "<1080p | 1440p | 4k | null>",
-  "budget_tier": "<entry | mid | high | elite>",
-  "games": ["<game title>", ...],
-  "workloads": ["<workload description>", ...],
-  "notes": "<any extra context>"
-}
 
-Rules:
- - primary_use: gaming, video_editing, local_llm, or general
- - gaming_resolution: only set when primary_use is "gaming"; otherwise null
- - budget_tier: entry (~$450-700), mid (~$800-1300), high (~$1300-1900), elite (~$2000+)
- - Infer budget from context clues even if no dollar amount is stated.
- - Multiple use cases → pick the most demanding one as primary_use.
- - Defaults if unknown: primary_use="general", budget_tier="mid", gaming_resolution=null.
- - Output ONLY valid JSON. No markdown, no preamble.
-"""
+def _get_extract_program():
+    global _extract_program
+    if _extract_program is None:
+        _extract_program = _load_extract_program()
+    return _extract_program
+
+
+def _format_conversation(messages: list[ChatMessage]) -> str:
+    lines = []
+    for msg in messages:
+        prefix = "User" if msg.role == "user" else "Assistant"
+        lines.append(f"{prefix}: {msg.content}")
+    return "\n".join(lines)
 
 
 async def extract_profile(messages: list[ChatMessage]) -> BuildProfile:
-    """
-    Call the model to extract a BuildProfile from the conversation so far.
-    Uses a small, fast model since this is a structured extraction task.
-    """
-    client = _get_client()
+    """Extract a BuildProfile from the conversation using the DSPy module."""
+    conversation = _format_conversation(messages)
+    program = _get_extract_program()
+    result = await asyncio.to_thread(program, conversation=conversation)
 
-    api_messages: list[dict] = [{"role": "system", "content": _EXTRACT_SYSTEM}]
-    for msg in messages:
-        api_messages.append({
-            "role": msg.role if msg.role in ("user", "assistant") else "user",
-            "content": msg.content,
-        })
+    games = [g.strip() for g in result.games.split(",") if g.strip()]
+    workloads = [w.strip() for w in result.workloads.split(",") if w.strip()]
+    gaming_resolution = None if result.gaming_resolution == "none" else result.gaming_resolution
 
-    response = await client.chat.completions.create(
-        model=ChatModelConfig.get_extract_model(),
-        max_tokens=256,
-        temperature=0.0,
-        response_format={"type": "json_object"},
-        messages=api_messages,
+    return BuildProfile(
+        primary_use=result.primary_use,
+        gaming_resolution=gaming_resolution,
+        budget_tier=result.budget_tier,
+        games=games,
+        workloads=workloads,
+        notes=result.notes,
     )
-
-    raw = response.choices[0].message.content.strip()
-
-    # Strip markdown fences if the model added them despite instructions
-    if raw.startswith("```"):
-        raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]
-    if raw.endswith("```"):
-        raw = raw[: raw.rfind("```")]
-    raw = raw.strip()
-
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError:
-        logger.warning("LLM returned invalid JSON for profile extraction: %s", raw)
-        data = {
-            "primary_use": "general",
-            "budget_tier": "mid",
-        }
-
-    return BuildProfile(**data)
 
 
 # ---------------------------------------------------------------------------
