@@ -9,7 +9,8 @@ export function createModelAdapter(conversationId: string): ChatModelAdapter {
   return {
     async *run({ messages, abortSignal }) {
       const { setMessage } = usePipelineStatusStore.getState()
-      const { setTurn, setPhase, aiHasSpoken } = useConversationStateStore.getState()
+      const { setTurn, setPhase, setBuildData, aiHasSpoken } =
+        useConversationStateStore.getState()
 
       setTurn("ai")
       // Only show "Booting up" on the very first AI turn
@@ -88,6 +89,7 @@ export function createModelAdapter(conversationId: string): ChatModelAdapter {
                 setMessage(parsed.message ?? null)
               } else if (parsed.type === "build") {
                 setPhase("complete")
+                setBuildData(parsed.data)
               } else if (parsed.type === "token" || parsed.type === "content") {
                 if (!tokenReceived) {
                   tokenReceived = true

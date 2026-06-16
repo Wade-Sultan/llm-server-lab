@@ -48,6 +48,7 @@ def _to_build(row: ReferenceBuild) -> Build:
                 brand=rbp.part.manufacturer or "",
                 model=rbp.part.name,
                 approx_price=rbp.approx_price,
+                part_id=rbp.part.id,
             )
             for rbp in sorted(row.parts, key=lambda p: p.sort_order)
         ],

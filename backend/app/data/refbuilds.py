@@ -1,11 +1,13 @@
+import uuid
 from typing import Any, TypedDict
 
 
-class Part(TypedDict):
+class Part(TypedDict, total=False):
     component: str
     brand: str
     model: str
     approx_price: int
+    part_id: uuid.UUID
 
 
 class Build(TypedDict):

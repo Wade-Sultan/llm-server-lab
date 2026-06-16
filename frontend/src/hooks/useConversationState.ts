@@ -9,26 +9,49 @@ export type ConversationTurn = "user" | "ai"
  */
 export type ConversationPhase = "gathering" | "recommending" | "complete"
 
+export interface RecommendedPart {
+  component: string
+  brand: string
+  model: string
+  approx_price: number
+  part_id: string
+}
+
+export interface BuildData {
+  key: string
+  label: string
+  description: string
+  total_approx: number
+  parts: RecommendedPart[]
+}
+
 interface ConversationStateStore {
   turn: ConversationTurn
   phase: ConversationPhase
   aiHasSpoken: boolean
+  buildData: BuildData | null
   setTurn: (turn: ConversationTurn) => void
   setPhase: (phase: ConversationPhase) => void
   setAiHasSpoken: (aiHasSpoken: boolean) => void
+  setBuildData: (data: BuildData) => void
   reset: () => void
 }
 
-const INITIAL: Pick<ConversationStateStore, "turn" | "phase" | "aiHasSpoken"> = {
+const INITIAL: Pick<
+  ConversationStateStore,
+  "turn" | "phase" | "aiHasSpoken" | "buildData"
+> = {
   turn: "user",
   phase: "gathering",
   aiHasSpoken: false,
+  buildData: null,
 }
 
 export const useConversationStateStore = create<ConversationStateStore>((set) => ({
   ...INITIAL,
   setTurn: (turn) => set({ turn }),
   setPhase: (phase) => set({ phase }),
-  setAiHasSpoken: (aiHasSpoken) => set({ aiHasSpoken }),
+  setAiHasSpoken: (aiHasSpoken: boolean) => set({ aiHasSpoken }),
+  setBuildData: (data: BuildData) => set({ buildData: data }),
   reset: () => set(INITIAL),
 }))
