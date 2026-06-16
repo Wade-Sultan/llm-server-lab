@@ -14,6 +14,21 @@ export function LoadingIndicator({ message }: { message: string }) {
   // Strip trailing ellipsis so animated dots are the sole source of punctuation
   const text = message.replace(/[…\.]+$/, "")
 
+  // If there's no message, just show the rotating logo
+  if (!message) {
+    return (
+      <div className="flex items-center py-1">
+        <Image
+          src="/assets/images/palladium-logo.svg"
+          alt=""
+          width={18}
+          height={18}
+          className="animate-[spin_8s_linear_infinite] shrink-0 opacity-70"
+        />
+      </div>
+    )
+  }
+
   return (
     <div className="flex items-center gap-2.5 py-1">
       <Image

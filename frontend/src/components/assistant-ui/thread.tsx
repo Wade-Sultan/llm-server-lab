@@ -216,6 +216,9 @@ const AssistantMessage: FC = () => {
         {isRunning && statusMessage && (
           <LoadingIndicator message={statusMessage} />
         )}
+        {isRunning && !statusMessage && (
+          <LoadingIndicator message="" />
+        )}
         <MessagePrimitive.Parts>
           {({ part }) => {
             if (part.type === "text") return <MarkdownText />

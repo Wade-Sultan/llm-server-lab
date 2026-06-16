@@ -9,10 +9,13 @@ export function createModelAdapter(conversationId: string): ChatModelAdapter {
   return {
     async *run({ messages, abortSignal }) {
       const { setMessage } = usePipelineStatusStore.getState()
-      const { setTurn, setPhase } = useConversationStateStore.getState()
+      const { setTurn, setPhase, aiHasSpoken } = useConversationStateStore.getState()
 
       setTurn("ai")
-      setMessage("Booting up")
+      // Only show "Booting up" on the very first AI turn
+      if (!aiHasSpoken) {
+        setMessage("Booting up")
+      }
 
       const token = await getAccessToken()
       const headers: Record<string, string> = { "Content-Type": "application/json" }
@@ -97,6 +100,11 @@ export function createModelAdapter(conversationId: string): ChatModelAdapter {
               // Non-JSON line, skip
             }
           }
+        }
+
+        // Mark that AI has spoken after the first complete response
+        if (!aiHasSpoken) {
+          useConversationStateStore.getState().setAiHasSpoken(true)
         }
       } finally {
         reader.releaseLock()
