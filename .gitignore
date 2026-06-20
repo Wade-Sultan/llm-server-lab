@@ -3,6 +3,7 @@
 .env.*
 *.env
 !.env.example
+.gcloud/
 !.env.template
 
 # Supabase CLI (local dev)

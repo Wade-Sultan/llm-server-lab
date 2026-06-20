@@ -1,0 +1,135 @@
+# Local development stack
+# - Frontend: run locally via `npm run dev` (port 5173)
+# - Backend: Docker container with hot reload (port 8000)
+# - Admin: Docker container (port 3001)
+# - Cloud SQL Proxy: connects to production GCP Cloud SQL database
+#
+# Usage:
+#   docker compose -f docker-compose.dev.yml up --build
+
+services:
+  # ──────────────────────────────────────────────
+  # Cloud SQL Proxy – tunnels to your production DB
+  # Uses port 5433 on host to avoid conflicts with local Postgres
+  # Inside Docker network, backend/admin connect via cloud-sql-proxy:5432
+  # ──────────────────────────────────────────────
+  cloud-sql-proxy:
+    image: gcr.io/cloud-sql-connectors/cloud-sql-proxy:latest
+    user: root
+    restart: unless-stopped
+    command: >
+      --address=0.0.0.0
+      --port=5432
+      ${CLOUD_SQL_INSTANCE}
+    environment:
+      - GOOGLE_APPLICATION_CREDENTIALS=/root/.config/gcloud/application_default_credentials.json
+    volumes:
+      # Mount your GCP application default credentials (copy lives in .gcloud/, which is gitignored)
+      - ./.gcloud/application_default_credentials.json:/root/.config/gcloud/application_default_credentials.json:ro
+    ports:
+      # Expose on localhost:5433 so you can connect with external tools (DBeaver, pgAdmin, etc.)
+      - "5433:5432"
+
+  # ──────────────────────────────────────────────
+  # Prestart – runs migrations & seed data once
+  # ──────────────────────────────────────────────
+  prestart:
+    build:
+      context: ./backend
+    depends_on:
+      cloud-sql-proxy:
+        condition: service_started
+    command: bash scripts/prestart.sh
+    environment:
+      - PROJECT_NAME=${PROJECT_NAME:-Palladium}
+      - ENVIRONMENT=local
+      - SECRET_KEY=${SECRET_KEY}
+      - FIRST_SUPERUSER=${FIRST_SUPERUSER:-admin@example.com}
+      - FIRST_SUPERUSER_PASSWORD=${FIRST_SUPERUSER_PASSWORD}
+      - FRONTEND_HOST=http://localhost:3000
+      - BACKEND_CORS_ORIGINS=http://localhost:3000,http://localhost:3001
+      # Connect via proxy (direct URL mode, no Google connector needed)
+      - POSTGRES_SERVER=cloud-sql-proxy
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_DB_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@cloud-sql-proxy:5432/${POSTGRES_DB}
+      # API keys (same as production)
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      # Supabase auth (if you use Supabase Auth in production)
+      - SUPABASE_JWT_SECRET=${SUPABASE_JWT_SECRET}
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+    volumes:
+      - ./backend:/app
+      - /app/.venv
+
+  # ──────────────────────────────────────────────
+  # Backend – FastAPI with hot reload via volumes
+  # ──────────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    depends_on:
+      cloud-sql-proxy:
+        condition: service_started
+      prestart:
+        condition: service_completed_successfully
+    ports:
+      - "8000:8000"
+    environment:
+      - PROJECT_NAME=${PROJECT_NAME:-Palladium}
+      - ENVIRONMENT=local
+      - SECRET_KEY=${SECRET_KEY}
+      - FIRST_SUPERUSER=${FIRST_SUPERUSER:-admin@example.com}
+      - FIRST_SUPERUSER_PASSWORD=${FIRST_SUPERUSER_PASSWORD}
+      - FRONTEND_HOST=http://localhost:3000
+      - BACKEND_CORS_ORIGINS=http://localhost:3000,http://localhost:3001
+      # Connect via proxy (direct URL mode)
+      - POSTGRES_SERVER=cloud-sql-proxy
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_DB_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@cloud-sql-proxy:5432/${POSTGRES_DB}
+      # API keys (same as production)
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      # Supabase auth
+      - SUPABASE_JWT_SECRET=${SUPABASE_JWT_SECRET}
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+    volumes:
+      - ./backend:/app
+      - /app/.venv
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ──────────────────────────────────────────────
+  # Admin – Next.js admin panel (port 3001)
+  # ──────────────────────────────────────────────
+  admin:
+    build:
+      context: ./admin
+    restart: unless-stopped
+    depends_on:
+      cloud-sql-proxy:
+        condition: service_started
+    ports:
+      - "3001:3000"
+    environment:
+      # Prisma connection string pointing through the proxy
+      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@cloud-sql-proxy:5432/${POSTGRES_DB}?schema=public
+      # Supabase auth (mirror production)
+      - SUPABASE_JWT_SECRET=${SUPABASE_JWT_SECRET}
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
