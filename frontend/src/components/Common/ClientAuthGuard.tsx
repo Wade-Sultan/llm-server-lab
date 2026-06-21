@@ -7,7 +7,7 @@ import useAuth from "@/hooks/useAuth"
 import { wakeUpBuilder } from "@/lib/wake-up-builder"
 
 // Routes that render their own auth-aware UI instead of redirecting guests
-const GUEST_ALLOWED_PATHS = ["/build/new", "/buildhistory"]
+const GUEST_ALLOWED_PATHS = ["/build/new", "/buildhistory", "/guides", "/changelog", "/findbuilder"]
 
 export default function ClientAuthGuard({ children }: { children: ReactNode }) {
   const { user, loading } = useAuth()
@@ -33,3 +33,4 @@ export default function ClientAuthGuard({ children }: { children: ReactNode }) {
   if (!user && !guestAllowed) return null
   return <>{children}</>
 }
+
