@@ -5,9 +5,11 @@ import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useEffect, useState } from "react"
 import { useForm } from "react-hook-form"
+import { FcGoogle } from "react-icons/fc"
 import { z } from "zod"
 
 import { AuthLayout } from "@/components/Common/AuthLayout"
+import { Button } from "@/components/ui/button"
 import {
   Form,
   FormControl,
@@ -41,9 +43,10 @@ const formSchema = z
 type FormData = z.infer<typeof formSchema>
 
 export default function SignupPage() {
-  const { signUp, user, loading } = useAuth()
+  const { signUp, signInWithGoogle, user, loading } = useAuth()
   const router = useRouter()
   const [submitting, setSubmitting] = useState(false)
+  const [googleSubmitting, setGoogleSubmitting] = useState(false)
 
   useEffect(() => {
     if (!loading && user) {
@@ -71,6 +74,16 @@ export default function SignupPage() {
       form.setError("root", { message: error.message })
     }
     setSubmitting(false)
+  }
+
+  const onGoogleSignIn = async () => {
+    if (googleSubmitting) return
+    setGoogleSubmitting(true)
+    const { error } = await signInWithGoogle()
+    if (error) {
+      form.setError("root", { message: error.message })
+    }
+    setGoogleSubmitting(false)
   }
 
   if (loading || user) return null
@@ -177,6 +190,17 @@ export default function SignupPage() {
               <span className="bg-background px-2 text-muted-foreground">or</span>
             </div>
           </div>
+
+          <Button
+            type="button"
+            variant="outline"
+            className="w-full"
+            disabled={googleSubmitting}
+            onClick={onGoogleSignIn}
+          >
+            <FcGoogle className="size-4" />
+            {googleSubmitting ? "Signing in..." : "Continue with Google"}
+          </Button>
 
           <Link
             href="/build/new"

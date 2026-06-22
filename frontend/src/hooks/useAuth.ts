@@ -1,11 +1,13 @@
 "use client"
 import {
   createUserWithEmailAndPassword,
+  GoogleAuthProvider,
   signOut as firebaseSignOut,
   updatePassword as firebaseUpdatePassword,
   onAuthStateChanged,
   sendPasswordResetEmail,
   signInWithEmailAndPassword,
+  signInWithPopup,
   type User,
   updateProfile,
 } from "firebase/auth"
@@ -18,6 +20,7 @@ interface UseAuthReturn {
   user: User | null
   loading: boolean
   signIn: (email: string, password: string) => Promise<{ error: Error | null }>
+  signInWithGoogle: () => Promise<{ error: Error | null }>
   signUp: (
     email: string,
     password: string,
@@ -78,6 +81,17 @@ export default function useAuth(): UseAuthReturn {
     [router],
   )
 
+  const signInWithGoogle = useCallback(async () => {
+    try {
+      await signInWithPopup(auth, new GoogleAuthProvider())
+      wakeUpBuilder()
+      router.push("/build/new")
+      return { error: null }
+    } catch (err) {
+      return { error: err as Error }
+    }
+  }, [router])
+
   const signUp = useCallback(
     async (email: string, password: string, fullName?: string) => {
       try {
@@ -133,6 +147,7 @@ export default function useAuth(): UseAuthReturn {
     user,
     loading,
     signIn,
+    signInWithGoogle,
     signUp,
     signOut,
     resetPassword,
