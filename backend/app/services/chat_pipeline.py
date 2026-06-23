@@ -178,10 +178,8 @@ Determine:
 
 Ask ONE focused follow-up question at a time. Be conversational. Keep responses under 80 words.
 
-Once you have all three of the above — whether the user gave them through natural conversation
-or as a configurator payload (JSON with useCases) — respond with exactly: READY_TO_RECOMMEND
-Do not say anything else in that case. Do not describe the build yourself; a separate step handles
-that once you signal readiness.
+Do not describe or recommend a build yourself; a separate step handles that once enough
+information has been gathered.
 """
 
 
@@ -190,7 +188,8 @@ async def stream_elicitation(
 ) -> AsyncIterator[str]:
     """
     Stream a conversational response that gathers more info from the user.
-    If the LLM determines there's enough info, it returns "READY_TO_RECOMMEND".
+    Readiness to recommend is decided deterministically by `is_profile_complete()`,
+    not by the model — this function only ever asks follow-up questions.
     """
     client = _get_client()
 
@@ -214,31 +213,22 @@ async def stream_elicitation(
             yield delta
 
 
-# Checks if there's enough info to give a solid recommendation
+# Checks if the extracted profile actually carries enough signal to recommend.
+# This is a hard, code-level decision over structured fields the model
+# populates — the model never decides readiness itself.
 
-async def has_enough_info(messages: list[ChatMessage]) -> bool:
+def is_profile_complete(profile: BuildProfile) -> bool:
     """
-    Quick check: does the conversation contain enough signal to extract a
-    meaningful BuildProfile? Looks for configurator payloads or sufficient
-    natural-language context.
+    A profile is complete once primary_use and budget_tier have both been
+    inferred, and — for gaming specifically — a resolution has been inferred too.
     """
-    combined = " ".join(m.content for m in messages if m.role == "user")
-
-    # Fast path: configurator payload is present
-    if '"useCases"' in combined or '"use_cases"' in combined:
-        return True
-
-    # Fast path: explicit use-case keywords + some detail
-    use_keywords = {"gaming", "video editing", "streaming", "ai", "machine learning",
-                    "productivity", "nas", "server", "creative", "3d rendering"}
-    detail_keywords = {"1080p", "1440p", "4k", "budget", "fps", "vram",
-                       "cheap", "expensive", "high-end", "mid-range", "entry"}
-
-    combined_lower = combined.lower()
-    has_use = any(kw in combined_lower for kw in use_keywords)
-    has_detail = any(kw in combined_lower for kw in detail_keywords)
-
-    return has_use and has_detail
+    if profile.primary_use == "unknown":
+        return False
+    if profile.budget_tier == "unknown":
+        return False
+    if profile.primary_use == "gaming" and profile.gaming_resolution is None:
+        return False
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -276,29 +266,22 @@ async def run_chat_turn(
       {"type": "build",    "key": "...", "data": {...}}
       {"type": "done"}
     """
-    # Check if we have enough info to recommend
-    ready = await has_enough_info(messages)
+    # Extract the structured profile up front — the model only ever populates
+    # fields here. Whether that's "enough" to recommend is then a hard,
+    # code-level decision (is_profile_complete), not something the model says.
+    # No progress event yet: the frontend treats any "progress" event as
+    # confirmation we're on the recommend path, so it can't fire until we know.
+    profile = await extract_profile(messages)
 
-    if not ready:
-        # Elicitation mode — gather more info
-        buffer = ""
+    if not is_profile_complete(profile):
+        # Elicitation mode — gather more info, then end the turn.
         async for chunk in stream_elicitation(messages):
-            # Check if the model signaled readiness mid-stream
-            buffer += chunk
-            if "READY_TO_RECOMMEND" in buffer:
-                ready = True
-                break
             yield {"type": "token", "text": chunk}
 
-        if not ready:
-            yield {"type": "done"}
-            return
+        yield {"type": "done"}
+        return
 
-    # --- We have enough info: extract → resolve → recommend ---
-
-    yield {"type": "progress", "step": "analyzing", "message": "Analyzing your requirements…"}
-
-    profile = await extract_profile(messages)
+    # --- Profile is complete: resolve → recommend ---
 
     yield {"type": "progress", "step": "resolving", "message": "Selecting your parts…"}
     async with AsyncSessionLocal() as db:

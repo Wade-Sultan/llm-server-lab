@@ -15,6 +15,8 @@ class ProfileExtraction(dspy.Signature):
     Pick the most demanding use case when multiple are mentioned.
     Infer budget tier from context clues even when no dollar figure is given.
     Output 'none' for gaming_resolution when primary_use is not gaming or resolution is unknown.
+    Output 'unknown' for primary_use or budget_tier ONLY when the conversation truly gives no
+    basis to infer them yet — do not guess just to avoid 'unknown'.
     """
 
     conversation: str = dspy.InputField(
@@ -22,14 +24,16 @@ class ProfileExtraction(dspy.Signature):
     )
 
     primary_use: str = dspy.OutputField(
-        desc="Exactly one of: gaming, video_editing, local_llm, general"
+        desc="Exactly one of: gaming, video_editing, local_llm, general, unknown — "
+             "'unknown' if the conversation gives no basis to infer a use case yet"
     )
     gaming_resolution: str = dspy.OutputField(
         desc="Exactly one of: 1080p, 1440p, 4k, none"
     )
     budget_tier: str = dspy.OutputField(
-        desc="Exactly one of: entry, mid, high, elite — "
-             "entry ≈$450–700, mid ≈$800–1300, high ≈$1300–1900, elite ≈$2000+"
+        desc="Exactly one of: entry, mid, high, elite, unknown — "
+             "entry ≈$1000–1500, mid ≈$1500–2300, high ≈$2300–3500, elite ≈$3500+ — "
+             "'unknown' if no budget signal at all has been given"
     )
     games: str = dspy.OutputField(
         desc="Comma-separated game titles the user mentioned, or empty string if none"
