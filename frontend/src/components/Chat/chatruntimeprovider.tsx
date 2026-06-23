@@ -1,13 +1,20 @@
 "use client"
 
-import { AssistantRuntimeProvider, useLocalRuntime } from "@assistant-ui/react"
-import { useEffect, useMemo, useRef, useState } from "react"
+import {
+  AssistantRuntimeProvider,
+  makeAssistantDataUI,
+  useLocalRuntime,
+} from "@assistant-ui/react"
 import type { ReactNode } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { toast } from "sonner"
 
-import { useConversationStateStore } from "@/hooks/useConversationState"
+import { BuildCard } from "@/components/assistant-ui/build-card"
 import { getAccessToken } from "@/hooks/useAuth"
+import { useConversationStateStore } from "@/hooks/useConversationState"
 import { createModelAdapter } from "./model-adapter"
+
+const BuildDataUI = makeAssistantDataUI({ name: "build", render: BuildCard })
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"
 
@@ -24,7 +31,10 @@ interface ChatRuntimeProviderProps {
 
 export function ChatRuntimeProvider({ children }: ChatRuntimeProviderProps) {
   const conversationIdRef = useRef<string>(crypto.randomUUID())
-  const adapter = useMemo(() => createModelAdapter(conversationIdRef.current), [])
+  const adapter = useMemo(
+    () => createModelAdapter(conversationIdRef.current),
+    [],
+  )
 
   const runtime = useLocalRuntime(adapter, {
     initialMessages: [],
@@ -41,8 +51,10 @@ export function ChatRuntimeProvider({ children }: ChatRuntimeProviderProps) {
       // Fetch listings for each recommended part
       const fetchListingsForParts = async () => {
         const token = await getAccessToken()
-        const headers: Record<string, string> = { "Content-Type": "application/json" }
-        if (token) headers["Authorization"] = `Bearer ${token}`
+        const headers: Record<string, string> = {
+          "Content-Type": "application/json",
+        }
+        if (token) headers.Authorization = `Bearer ${token}`
 
         const results: Record<string, unknown[]> = {}
 
@@ -76,6 +88,7 @@ export function ChatRuntimeProvider({ children }: ChatRuntimeProviderProps) {
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>
+      <BuildDataUI />
       {children}
     </AssistantRuntimeProvider>
   )

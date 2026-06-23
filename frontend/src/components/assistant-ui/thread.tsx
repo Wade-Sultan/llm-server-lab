@@ -224,6 +224,7 @@ const AssistantMessage: FC = () => {
             if (part.type === "text") return <MarkdownText />
             if (part.type === "tool-call")
               return part.toolUI ?? <ToolFallback {...part} />
+            if (part.type === "data") return part.dataRendererUI
             return null
           }}
         </MessagePrimitive.Parts>

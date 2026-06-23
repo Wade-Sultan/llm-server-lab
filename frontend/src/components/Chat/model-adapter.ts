@@ -1,5 +1,6 @@
-import type { ChatModelAdapter } from "@assistant-ui/react"
+import type { ChatModelAdapter, DataMessagePart } from "@assistant-ui/react"
 import { getAccessToken } from "@/hooks/useAuth"
+import type { BuildData } from "@/hooks/useConversationState"
 import { useConversationStateStore } from "@/hooks/useConversationState"
 import { usePipelineStatusStore } from "@/hooks/usePipelineStatus"
 
@@ -19,8 +20,10 @@ export function createModelAdapter(conversationId: string): ChatModelAdapter {
       }
 
       const token = await getAccessToken()
-      const headers: Record<string, string> = { "Content-Type": "application/json" }
-      if (token) headers["Authorization"] = `Bearer ${token}`
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+      }
+      if (token) headers.Authorization = `Bearer ${token}`
 
       let response: Response
       try {
@@ -65,6 +68,7 @@ export function createModelAdapter(conversationId: string): ChatModelAdapter {
       const decoder = new TextDecoder()
       let fullText = ""
       let tokenReceived = false
+      let buildPart: DataMessagePart<BuildData> | null = null
 
       try {
         while (true) {
@@ -90,13 +94,28 @@ export function createModelAdapter(conversationId: string): ChatModelAdapter {
               } else if (parsed.type === "build") {
                 setPhase("complete")
                 setBuildData(parsed.data)
+                buildPart = {
+                  type: "data" as const,
+                  name: "build",
+                  data: parsed.data,
+                }
+                yield {
+                  content: [
+                    { type: "text" as const, text: fullText },
+                    buildPart,
+                  ],
+                }
               } else if (parsed.type === "token" || parsed.type === "content") {
                 if (!tokenReceived) {
                   tokenReceived = true
                   setMessage(null)
                 }
                 fullText += parsed.text ?? parsed.content ?? ""
-                yield { content: [{ type: "text" as const, text: fullText }] }
+                yield {
+                  content: buildPart
+                    ? [{ type: "text" as const, text: fullText }, buildPart]
+                    : [{ type: "text" as const, text: fullText }],
+                }
               }
             } catch {
               // Non-JSON line, skip

@@ -7,8 +7,8 @@ class ChatModelConfig:
     # Gemma 3 4B for extraction — fast, supports json_object response_format, no Gemma 4 small on OpenRouter
     EXTRACT_MODEL: str = os.getenv("CHAT_EXTRACT_MODEL", "google/gemma-3-4b-it")
     # Keep the larger model for the recommendation (needs nuance and personality)
-    RECOMMEND_MODEL: str = os.getenv("CHAT_RECOMMEND_MODEL", "google/gemma-4-26b-a4b-it")
-    ELICIT_MODEL: str = os.getenv("CHAT_ELICIT_MODEL", "google/gemma-4-26b-a4b-it")
+    RECOMMEND_MODEL: str = os.getenv("CHAT_RECOMMEND_MODEL", "google/gemma-4-31b-it")
+    ELICIT_MODEL: str = os.getenv("CHAT_ELICIT_MODEL", "google/gemma-4-31b-it")
 
     @classmethod
     def get_extract_model(cls) -> str:
