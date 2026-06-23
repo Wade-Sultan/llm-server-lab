@@ -66,9 +66,9 @@ class PCBuild(Base):
     owner_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True, index=True)
 
     status = Column(
-        Enum(BuildStatus, name="build_status"),
+        Enum(BuildStatus, name="build_status", values_callable=lambda e: [m.value for m in e]),
         nullable=False,
-        server_default="DRAFT",
+        server_default="draft",
     )
 
     total_price_cents = Column(
@@ -153,7 +153,7 @@ class BuildPart(Base):
     )
 
     role = Column(
-        Enum(BuildComponentRole, name="build_component_role"),
+        Enum(BuildComponentRole, name="build_component_role", values_callable=lambda e: [m.value for m in e]),
         nullable=False,
     )
 
