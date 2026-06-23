@@ -1,4 +1,4 @@
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 from app.crud.reference_builds import get_all_active
 from app.data.refbuilds import Build
 from app.schemas.chat import BuildProfile
@@ -9,7 +9,7 @@ RESOLUTION_FLOOR = {
     "4k":    2160,
 }
 
-def resolve_build(profile: BuildProfile, db: Session) -> tuple[str, Build]:
+async def resolve_build(profile: BuildProfile, db: AsyncSession) -> tuple[str, Build]:
     """Map a BuildProfile to the best matching pre-defined build key."""
 
     use = profile.primary_use
@@ -18,7 +18,7 @@ def resolve_build(profile: BuildProfile, db: Session) -> tuple[str, Build]:
     floor = RESOLUTION_FLOOR.get(resolution, 1080)
 
     # Filter candidates by resolution floor
-    builds = get_all_active(db)
+    builds = await get_all_active(db)
     candidates = {
         key: build
         for key, build in builds.items()

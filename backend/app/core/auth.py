@@ -1,3 +1,4 @@
+import asyncio
 import os
 
 import firebase_admin
@@ -29,7 +30,7 @@ async def optional_firebase_token(
         return None
     token = credentials.credentials
     try:
-        return auth.verify_id_token(token)
+        return await asyncio.to_thread(auth.verify_id_token, token)
     except Exception:
         return None
 
@@ -44,7 +45,7 @@ async def verify_firebase_token(
     """
     token = credentials.credentials
     try:
-        decoded = auth.verify_id_token(token)
+        decoded = await asyncio.to_thread(auth.verify_id_token, token)
         return decoded
     except auth.InvalidIdTokenError:
         raise HTTPException(

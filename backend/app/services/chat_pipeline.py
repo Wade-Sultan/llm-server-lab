@@ -12,7 +12,7 @@ from app.schemas.chat import BuildProfile, ChatMessage
 from app.services.resolver import resolve_build
 from app.services.chat_models import ChatModelConfig
 from app.services.recommender.components.extractprofile import load_program as _load_extract_program
-from app.core.db import SessionLocal
+from app.core.db import AsyncSessionLocal
 
 
 logger = logging.getLogger(__name__)
@@ -178,7 +178,10 @@ Determine:
 
 Ask ONE focused follow-up question at a time. Be conversational. Keep responses under 80 words.
 
-If the user provided a configurator payload (JSON with useCases), respond with exactly: READY_TO_RECOMMEND
+Once you have all three of the above — whether the user gave them through natural conversation
+or as a configurator payload (JSON with useCases) — respond with exactly: READY_TO_RECOMMEND
+Do not say anything else in that case. Do not describe the build yourself; a separate step handles
+that once you signal readiness.
 """
 
 
@@ -245,7 +248,7 @@ async def has_enough_info(messages: list[ChatMessage]) -> bool:
 _resolve_cache: dict[str, tuple[str, Build]] = {}
 
 
-def _resolve_build_cached(
+async def _resolve_build_cached(
     profile: BuildProfile,
     db,
 ) -> tuple[str, Build]:
@@ -254,7 +257,7 @@ def _resolve_build_cached(
     if cache_key in _resolve_cache:
         return _resolve_cache[cache_key]
 
-    build_key, build = resolve_build(profile, db)
+    build_key, build = await resolve_build(profile, db)
     _resolve_cache[cache_key] = (build_key, build)
     return build_key, build
 
@@ -298,8 +301,8 @@ async def run_chat_turn(
     profile = await extract_profile(messages)
 
     yield {"type": "progress", "step": "resolving", "message": "Selecting your parts…"}
-    with SessionLocal() as db:
-        build_key, build = _resolve_build_cached(profile, db)
+    async with AsyncSessionLocal() as db:
+        build_key, build = await _resolve_build_cached(profile, db)
 
     yield {
         "type": "build",

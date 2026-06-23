@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 from collections import defaultdict
 
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.crud import components as crud
 from app.models.pcparts import CPU, GPU, Case, CPUCooler, Fan, Motherboard, PSU, RAM, Storage
@@ -151,107 +151,107 @@ def _to_json(parts: list, serializer) -> str:
 # Public query functions
 # ---------------------------------------------------------------------------
 
-def get_cpu_candidates(
-    session: Session,
+async def get_cpu_candidates(
+    session: AsyncSession,
     budget_ceiling_usd: int,
     preferences: UserPreferences,
 ) -> str:
-    parts = crud.get_cpu_candidates(session, budget_ceiling_usd, preferences)
+    parts = await crud.get_cpu_candidates(session, budget_ceiling_usd, preferences)
     return _to_json(parts, _serialize_cpu)
 
 
-def get_cooler_candidates(
-    session: Session,
+async def get_cooler_candidates(
+    session: AsyncSession,
     cpu_tdp_w: int,
     cpu_socket: str,
     budget_ceiling_usd: int,
     form_factor: str,
 ) -> str:
-    parts = crud.get_cooler_candidates(session, cpu_tdp_w, cpu_socket, budget_ceiling_usd)
+    parts = await crud.get_cooler_candidates(session, cpu_tdp_w, cpu_socket, budget_ceiling_usd)
     return _to_json(parts, _serialize_cooler)
 
 
-def get_motherboard_candidates(
-    session: Session,
+async def get_motherboard_candidates(
+    session: AsyncSession,
     cpu_socket: str,
     ddr_gen: str,
     budget_ceiling_usd: int,
     form_factor: str,
     wifi_required: bool,
 ) -> str:
-    parts = crud.get_motherboard_candidates(
+    parts = await crud.get_motherboard_candidates(
         session, cpu_socket, ddr_gen, budget_ceiling_usd, form_factor, wifi_required
     )
     return _to_json(parts, _serialize_motherboard)
 
 
-def get_ram_candidates(
-    session: Session,
+async def get_ram_candidates(
+    session: AsyncSession,
     ddr_gen: str,
     budget_ceiling_usd: int,
 ) -> str:
-    parts = crud.get_ram_candidates(session, ddr_gen, budget_ceiling_usd)
+    parts = await crud.get_ram_candidates(session, ddr_gen, budget_ceiling_usd)
     return _to_json(parts, _serialize_ram)
 
 
-def get_storage_candidates(
-    session: Session,
+async def get_storage_candidates(
+    session: AsyncSession,
     budget_ceiling_usd: int,
     mobo_m2_slots: int,
     mobo_sata_ports: int,
 ) -> str:
-    parts = crud.get_storage_candidates(session, budget_ceiling_usd, mobo_m2_slots, mobo_sata_ports)
+    parts = await crud.get_storage_candidates(session, budget_ceiling_usd, mobo_m2_slots, mobo_sata_ports)
     return _to_json(parts, _serialize_storage)
 
 
-def get_gpu_candidates(
-    session: Session,
+async def get_gpu_candidates(
+    session: AsyncSession,
     budget_ceiling_usd: int,
     case_max_gpu_length_mm: int | None,
     preferences: UserPreferences,
 ) -> str:
-    parts = crud.get_gpu_candidates(session, budget_ceiling_usd, case_max_gpu_length_mm, preferences)
+    parts = await crud.get_gpu_candidates(session, budget_ceiling_usd, case_max_gpu_length_mm, preferences)
     return _to_json(parts, _serialize_gpu)
 
 
-def get_psu_candidates(
-    session: Session,
+async def get_psu_candidates(
+    session: AsyncSession,
     min_wattage: int,
     budget_ceiling_usd: int,
     psu_form_factor: str,
 ) -> str:
-    parts = crud.get_psu_candidates(session, min_wattage, budget_ceiling_usd, psu_form_factor)
+    parts = await crud.get_psu_candidates(session, min_wattage, budget_ceiling_usd, psu_form_factor)
     return _to_json(parts, _serialize_psu)
 
 
-def get_case_candidates(
-    session: Session,
+async def get_case_candidates(
+    session: AsyncSession,
     budget_ceiling_usd: int,
     mobo_form_factor: str,
     psu_form_factor: str,
 ) -> str:
-    parts = crud.get_case_candidates(session, budget_ceiling_usd, mobo_form_factor, psu_form_factor)
+    parts = await crud.get_case_candidates(session, budget_ceiling_usd, mobo_form_factor, psu_form_factor)
     return _to_json(parts, _serialize_case)
 
 
-def get_fan_candidates(
-    session: Session,
+async def get_fan_candidates(
+    session: AsyncSession,
     budget_ceiling_usd: int,
     case_fan_slots: list[int],
 ) -> str:
-    parts = crud.get_fan_candidates(session, budget_ceiling_usd, case_fan_slots)
+    parts = await crud.get_fan_candidates(session, budget_ceiling_usd, case_fan_slots)
     return _to_json(parts, _serialize_fan)
 
 
-def get_ddr_candidates(session: Session, budget_ceiling_usd: int) -> str:
+async def get_ddr_candidates(session: AsyncSession, budget_ceiling_usd: int) -> str:
     """
     Summarize DDR4 vs DDR5 platform cost-efficiency within budget.
     Queries actual subclass models so ddr_generation comes from typed columns.
     CPU supports multiple DDR gens (ARRAY), so each gen it supports is counted.
     """
-    all_cpus = crud.get_all_cpus_active(session)
-    all_mobos = crud.get_all_motherboards_active(session)
-    all_ram = crud.get_all_ram_active(session)
+    all_cpus = await crud.get_all_cpus_active(session)
+    all_mobos = await crud.get_all_motherboards_active(session)
+    all_ram = await crud.get_all_ram_active(session)
 
     cpu_prices: dict[str, list[float]] = defaultdict(list)
     cpu_counts: dict[str, int] = defaultdict(int)

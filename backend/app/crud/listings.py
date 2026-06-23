@@ -11,7 +11,8 @@ import uuid
 from typing import Sequence
 
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session, contains_eager
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import contains_eager
 
 from app.models.listing import (
     AmazonListing,
@@ -29,9 +30,9 @@ from app.schemas.listing import (
 # Generic listing operations
 # ---------------------------------------------------------------------------
 
-def create_listing(
+async def create_listing(
     *,
-    session: Session,
+    session: AsyncSession,
     listing_in: ListingCreate,
 ) -> Listing:
     """
@@ -40,7 +41,7 @@ def create_listing(
     Validates that the referenced PCPart exists before inserting.
     """
     # Ensure the part exists
-    part = session.get(PCPart, listing_in.part_id)
+    part = await session.get(PCPart, listing_in.part_id)
     if part is None:
         raise ValueError(f"PCPart with id {listing_in.part_id} not found")
 
@@ -55,23 +56,23 @@ def create_listing(
         is_active=listing_in.is_active,
     )
     session.add(db_obj)
-    session.commit()
-    session.refresh(db_obj)
+    await session.commit()
+    await session.refresh(db_obj)
     return db_obj
 
 
-def get_listing(
+async def get_listing(
     *,
-    session: Session,
+    session: AsyncSession,
     listing_id: uuid.UUID,
 ) -> Listing | None:
     """Retrieve a listing by its primary key."""
-    return session.get(Listing, listing_id)
+    return await session.get(Listing, listing_id)
 
 
-def get_listings_by_part(
+async def get_listings_by_part(
     *,
-    session: Session,
+    session: AsyncSession,
     part_id: uuid.UUID,
     active_only: bool = True,
 ) -> list[Listing]:
@@ -83,12 +84,13 @@ def get_listings_by_part(
     stmt = select(Listing).where(Listing.part_id == part_id)
     if active_only:
         stmt = stmt.where(Listing.is_active == True)  # noqa: E712
-    return list(session.scalars(stmt).all())
+    result = await session.execute(stmt)
+    return list(result.scalars().all())
 
 
-def get_listing_with_part(
+async def get_listing_with_part(
     *,
-    session: Session,
+    session: AsyncSession,
     listing_id: uuid.UUID,
 ) -> Listing | None:
     """
@@ -103,12 +105,13 @@ def get_listing_with_part(
         .join(PCPart)
         .where(Listing.id == listing_id)
     )
-    return session.scalars(stmt).first()
+    result = await session.execute(stmt)
+    return result.scalars().first()
 
 
-def get_listings_with_parts(
+async def get_listings_with_parts(
     *,
-    session: Session,
+    session: AsyncSession,
     part_id: uuid.UUID | None = None,
     marketplace: str | None = None,
     active_only: bool = True,
@@ -132,12 +135,13 @@ def get_listings_with_parts(
     if active_only:
         stmt = stmt.where(Listing.is_active == True)  # noqa: E712
     stmt = stmt.offset(skip).limit(limit)
-    return list(session.scalars(stmt).all())
+    result = await session.execute(stmt)
+    return list(result.scalars().all())
 
 
-def update_listing(
+async def update_listing(
     *,
-    session: Session,
+    session: AsyncSession,
     db_listing: Listing,
     listing_in: ListingUpdate,
 ) -> Listing:
@@ -148,14 +152,14 @@ def update_listing(
         setattr(db_listing, field, value)
 
     session.add(db_listing)
-    session.commit()
-    session.refresh(db_listing)
+    await session.commit()
+    await session.refresh(db_listing)
     return db_listing
 
 
-def remove_listing(
+async def remove_listing(
     *,
-    session: Session,
+    session: AsyncSession,
     listing_id: uuid.UUID,
 ) -> bool:
     """
@@ -163,18 +167,18 @@ def remove_listing(
 
     Returns True if the listing was found and deleted, False otherwise.
     """
-    db_listing = session.get(Listing, listing_id)
+    db_listing = await session.get(Listing, listing_id)
     if db_listing is None:
         return False
 
-    session.delete(db_listing)
-    session.commit()
+    await session.delete(db_listing)
+    await session.commit()
     return True
 
 
-def count_listings_by_part(
+async def count_listings_by_part(
     *,
-    session: Session,
+    session: AsyncSession,
     part_id: uuid.UUID,
     active_only: bool = True,
 ) -> int:
@@ -182,26 +186,28 @@ def count_listings_by_part(
     stmt = select(func.count(Listing.id)).where(Listing.part_id == part_id)
     if active_only:
         stmt = stmt.where(Listing.is_active == True)  # noqa: E712
-    return session.scalar(stmt) or 0
+    result = await session.execute(stmt)
+    return result.scalar() or 0
 
 
 # ---------------------------------------------------------------------------
 # Amazon-specific operations
 # ---------------------------------------------------------------------------
 
-def get_amazon_listing(
+async def get_amazon_listing(
     *,
-    session: Session,
+    session: AsyncSession,
     asin: str,
 ) -> AmazonListing | None:
     """Retrieve an Amazon listing by its ASIN."""
     stmt = select(AmazonListing).where(AmazonListing.asin == asin)
-    return session.scalars(stmt).first()
+    result = await session.execute(stmt)
+    return result.scalars().first()
 
 
-def get_amazon_listings_by_part(
+async def get_amazon_listings_by_part(
     *,
-    session: Session,
+    session: AsyncSession,
     part_id: uuid.UUID,
     active_only: bool = True,
 ) -> list[AmazonListing]:
@@ -213,26 +219,28 @@ def get_amazon_listings_by_part(
     )
     if active_only:
         stmt = stmt.where(Listing.is_active == True)  # noqa: E712
-    return list(session.scalars(stmt).all())
+    result = await session.execute(stmt)
+    return list(result.scalars().all())
 
 
 # ---------------------------------------------------------------------------
 # eBay-specific operations
 # ---------------------------------------------------------------------------
 
-def get_ebay_listing(
+async def get_ebay_listing(
     *,
-    session: Session,
+    session: AsyncSession,
     ebay_item_id: str,
 ) -> EbayListing | None:
     """Retrieve an eBay listing by its item ID."""
     stmt = select(EbayListing).where(EbayListing.ebay_item_id == ebay_item_id)
-    return session.scalars(stmt).first()
+    result = await session.execute(stmt)
+    return result.scalars().first()
 
 
-def get_ebay_listings_by_part(
+async def get_ebay_listings_by_part(
     *,
-    session: Session,
+    session: AsyncSession,
     part_id: uuid.UUID,
     active_only: bool = True,
 ) -> list[EbayListing]:
@@ -244,4 +252,5 @@ def get_ebay_listings_by_part(
     )
     if active_only:
         stmt = stmt.where(Listing.is_active == True)  # noqa: E712
-    return list(session.scalars(stmt).all())
+    result = await session.execute(stmt)
+    return list(result.scalars().all())

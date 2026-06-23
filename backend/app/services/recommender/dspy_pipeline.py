@@ -31,7 +31,7 @@ from typing import Any, Callable
 
 import dspy
 from dspy.streaming.messages import StatusMessage
-from sqlmodel import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.recommender.status_provider import BuildStatusProvider
 
@@ -200,9 +200,9 @@ def _emit(state: DSPyBuildState, step: str, message: str) -> None:
 # Pipeline steps
 # ---------------------------------------------------------------------------
 
-async def _step_ddr(state: DSPyBuildState, session: Session, budget: dict, program: DecideDDR) -> None:
+async def _step_ddr(state: DSPyBuildState, session: AsyncSession, budget: dict, program: DecideDDR) -> None:
     _emit(state, "ddr", "Deciding memory generation…")
-    candidates = get_ddr_candidates(session, budget["cpu"])
+    candidates = await get_ddr_candidates(session, budget["cpu"])
     result = await _call_streamified(
         program,
         status_fn=lambda msg: _emit(state, "ddr", msg),
@@ -214,9 +214,9 @@ async def _step_ddr(state: DSPyBuildState, session: Session, budget: dict, progr
     state.thresholds["ddr"] = result.reconsideration_threshold
 
 
-async def _step_cpu(state: DSPyBuildState, session: Session, budget: dict, program: DecideCPU) -> None:
+async def _step_cpu(state: DSPyBuildState, session: AsyncSession, budget: dict, program: DecideCPU) -> None:
     _emit(state, "cpu", "Choosing your CPU…")
-    candidates = get_cpu_candidates(session, budget["cpu"], state.request.preferences)
+    candidates = await get_cpu_candidates(session, budget["cpu"], state.request.preferences)
     result = await _call_streamified(
         program,
         status_fn=lambda msg: _emit(state, "cpu", msg),
@@ -227,16 +227,16 @@ async def _step_cpu(state: DSPyBuildState, session: Session, budget: dict, progr
     )
     state.cpu_name = result.cpu_name
     state.thresholds["cpu"] = result.reconsideration_threshold
-    cpu = crud_components.get_cpu_by_name(session, result.cpu_name)
+    cpu = await crud_components.get_cpu_by_name(session, result.cpu_name)
     if cpu:
         state.cpu_socket = cpu.socket
         state.cpu_tdp_w = cpu.tdp_watts
         state.cpu_ddr_gen = (cpu.ddr_generation or ["ddr5"])[-1]
 
 
-async def _step_cooler(state: DSPyBuildState, session: Session, budget: dict, program: DecideCPUCooler) -> None:
+async def _step_cooler(state: DSPyBuildState, session: AsyncSession, budget: dict, program: DecideCPUCooler) -> None:
     _emit(state, "cooler", "Picking a cooler…")
-    candidates = get_cooler_candidates(
+    candidates = await get_cooler_candidates(
         session, state.cpu_tdp_w, state.cpu_socket, budget["cooler"],
         state.request.preferences.form_factor,
     )
@@ -253,9 +253,9 @@ async def _step_cooler(state: DSPyBuildState, session: Session, budget: dict, pr
     state.thresholds["cooler"] = result.reconsideration_threshold
 
 
-async def _step_motherboard(state: DSPyBuildState, session: Session, budget: dict, program: DecideMotherboard) -> None:
+async def _step_motherboard(state: DSPyBuildState, session: AsyncSession, budget: dict, program: DecideMotherboard) -> None:
     _emit(state, "motherboard", "Selecting a motherboard…")
-    candidates = get_motherboard_candidates(
+    candidates = await get_motherboard_candidates(
         session,
         cpu_socket=state.cpu_socket,
         ddr_gen=state.cpu_ddr_gen,
@@ -274,16 +274,16 @@ async def _step_motherboard(state: DSPyBuildState, session: Session, budget: dic
     )
     state.mobo_name = result.motherboard_name
     state.thresholds["motherboard"] = result.reconsideration_threshold
-    mobo = crud_components.get_motherboard_by_name(session, result.motherboard_name)
+    mobo = await crud_components.get_motherboard_by_name(session, result.motherboard_name)
     if mobo:
         state.mobo_form_factor = mobo.form_factor
         state.mobo_m2_slots = mobo.m2_slots or 0
         state.mobo_sata_ports = mobo.sata_ports or 0
 
 
-async def _step_ram(state: DSPyBuildState, session: Session, budget: dict, program: DecideRAM) -> None:
+async def _step_ram(state: DSPyBuildState, session: AsyncSession, budget: dict, program: DecideRAM) -> None:
     _emit(state, "ram", "Choosing RAM…")
-    candidates = get_ram_candidates(session, state.cpu_ddr_gen, budget["ram"])
+    candidates = await get_ram_candidates(session, state.cpu_ddr_gen, budget["ram"])
     result = await _call_streamified(
         program,
         status_fn=lambda msg: _emit(state, "ram", msg),
@@ -296,9 +296,9 @@ async def _step_ram(state: DSPyBuildState, session: Session, budget: dict, progr
     state.thresholds["ram"] = result.reconsideration_threshold
 
 
-async def _step_storage(state: DSPyBuildState, session: Session, budget: dict, program: DecideStorage) -> None:
+async def _step_storage(state: DSPyBuildState, session: AsyncSession, budget: dict, program: DecideStorage) -> None:
     _emit(state, "storage", "Selecting storage…")
-    candidates = get_storage_candidates(
+    candidates = await get_storage_candidates(
         session, budget["storage"], state.mobo_m2_slots, state.mobo_sata_ports,
     )
     result = await _call_streamified(
@@ -312,9 +312,9 @@ async def _step_storage(state: DSPyBuildState, session: Session, budget: dict, p
     state.thresholds["storage"] = result.reconsideration_threshold
 
 
-async def _step_gpu(state: DSPyBuildState, session: Session, budget: dict, program: DecideGPU) -> None:
+async def _step_gpu(state: DSPyBuildState, session: AsyncSession, budget: dict, program: DecideGPU) -> None:
     _emit(state, "gpu", "Finding your GPU…")
-    candidates = get_gpu_candidates(
+    candidates = await get_gpu_candidates(
         session, budget["gpu"], state.case_max_gpu_length_mm, state.request.preferences,
     )
     result = await _call_streamified(
@@ -329,19 +329,19 @@ async def _step_gpu(state: DSPyBuildState, session: Session, budget: dict, progr
     if state.gpu_required:
         state.gpu_name = result.gpu_name
         state.thresholds["gpu"] = result.reconsideration_threshold
-        gpu = crud_components.get_gpu_by_name(session, result.gpu_name)
+        gpu = await crud_components.get_gpu_by_name(session, result.gpu_name)
         if gpu:
             state.gpu_tdp_w = gpu.tdp_watts
 
 
-async def _step_psu(state: DSPyBuildState, session: Session, budget: dict, program: DecidePSU) -> None:
+async def _step_psu(state: DSPyBuildState, session: AsyncSession, budget: dict, program: DecidePSU) -> None:
     _emit(state, "psu", "Calculating power supply…")
     # Add 20% headroom over combined TDP
     system_tdp = state.cpu_tdp_w + state.gpu_tdp_w
     min_wattage = int(system_tdp * 1.20)
     # Determine PSU form factor from case
     psu_form_factor = state.psu_form_factor  # updated after case step if ITX
-    candidates = get_psu_candidates(session, min_wattage, budget["psu"], psu_form_factor)
+    candidates = await get_psu_candidates(session, min_wattage, budget["psu"], psu_form_factor)
     result = await _call_streamified(
         program,
         status_fn=lambda msg: _emit(state, "psu", msg),
@@ -352,9 +352,9 @@ async def _step_psu(state: DSPyBuildState, session: Session, budget: dict, progr
     state.psu_name = result.psu_name
 
 
-async def _step_case(state: DSPyBuildState, session: Session, budget: dict, program: DecideCase) -> None:
+async def _step_case(state: DSPyBuildState, session: AsyncSession, budget: dict, program: DecideCase) -> None:
     _emit(state, "case", "Picking case options for you…")
-    candidates = get_case_candidates(
+    candidates = await get_case_candidates(
         session, budget["case"], state.mobo_form_factor, state.psu_form_factor,
     )
     result = await _call_streamified(
@@ -373,9 +373,9 @@ async def _step_case(state: DSPyBuildState, session: Session, budget: dict, prog
     # Pipeline pauses here — case_name is set externally after user picks
 
 
-async def _step_fans(state: DSPyBuildState, session: Session, budget: dict, program: DecideFans) -> None:
+async def _step_fans(state: DSPyBuildState, session: AsyncSession, budget: dict, program: DecideFans) -> None:
     _emit(state, "fans", "Checking airflow…")
-    candidates = get_fan_candidates(session, budget["fans"], state.case_fan_slots)
+    candidates = await get_fan_candidates(session, budget["fans"], state.case_fan_slots)
     result = await _call_streamified(
         program,
         status_fn=lambda msg: _emit(state, "fans", msg),
@@ -395,7 +395,7 @@ async def _step_fans(state: DSPyBuildState, session: Session, budget: dict, prog
 
 async def run_pipeline(
     request: BuildRequest,
-    session: Session,
+    session: AsyncSession,
     progress_callback: Callable[[str, str], None] | None = None,
 ) -> DSPyBuildState:
     """
@@ -432,7 +432,7 @@ async def run_pipeline(
 
 async def run_pipeline_post_case(
     state: DSPyBuildState,
-    session: Session,
+    session: AsyncSession,
     case_name: str,
 ) -> DSPyBuildState:
     """
@@ -440,7 +440,7 @@ async def run_pipeline_post_case(
     Runs the fans step and finalizes the build.
     """
     state.case_name = case_name
-    case = crud_components.get_case_by_name(session, case_name)
+    case = await crud_components.get_case_by_name(session, case_name)
     if case:
         state.case_included_fans = case.included_fan_count or 0
         state.case_max_gpu_length_mm = case.max_gpu_length_mm

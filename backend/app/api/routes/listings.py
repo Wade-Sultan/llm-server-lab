@@ -32,7 +32,7 @@ router = APIRouter(prefix="/listings", tags=["listings"])
 # ---------------------------------------------------------------------------
 
 @router.get("/", response_model=ListingsPublic)
-def read_listings(
+async def read_listings(
     session: SessionDep,
     part_id: uuid.UUID | None = None,
     marketplace: str | None = None,
@@ -42,7 +42,7 @@ def read_listings(
     """
     Retrieve listings with optional filtering by part_id and/or marketplace.
     """
-    listings = listings_crud.get_listings_with_parts(
+    listings = await listings_crud.get_listings_with_parts(
         session=session,
         part_id=part_id,
         marketplace=marketplace,
@@ -57,41 +57,42 @@ def read_listings(
         count_stmt = count_stmt.where(Listing.part_id == part_id)
     if marketplace is not None:
         count_stmt = count_stmt.where(Listing.marketplace == marketplace)
-    count = session.scalar(count_stmt) or 0
+    count_result = await session.execute(count_stmt)
+    count = count_result.scalar() or 0
 
     return ListingsPublic(data=listings, count=count)
 
 
 @router.get("/{listing_id}", response_model=ListingPublic)
-def read_listing(
+async def read_listing(
     listing_id: uuid.UUID,
     session: SessionDep,
 ) -> Any:
     """
     Retrieve a single listing by ID.
     """
-    db_listing = listings_crud.get_listing(session=session, listing_id=listing_id)
+    db_listing = await listings_crud.get_listing(session=session, listing_id=listing_id)
     if db_listing is None:
         raise HTTPException(status_code=404, detail="Listing not found")
     return db_listing
 
 
 @router.get("/by-part/{part_id}", response_model=ListingsPublic)
-def read_listings_by_part(
+async def read_listings_by_part(
     part_id: uuid.UUID,
     session: SessionDep,
 ) -> Any:
     """
     Retrieve all active listings for a specific PCPart.
-    
+
     A single PCPart can have multiple listings across different marketplaces.
     """
     # Verify the part exists
-    part = session.get(PCPart, part_id)
+    part = await session.get(PCPart, part_id)
     if part is None:
         raise HTTPException(status_code=404, detail="PCPart not found")
 
-    listings = listings_crud.get_listings_by_part(
+    listings = await listings_crud.get_listings_by_part(
         session=session,
         part_id=part_id,
         active_only=True,
@@ -108,7 +109,7 @@ def read_listings_by_part(
     dependencies=[Depends(get_current_active_superuser)],
     response_model=ListingPublic,
 )
-def create_listing(
+async def create_listing(
     *,
     session: SessionDep,
     listing_in: ListingCreate,
@@ -117,7 +118,7 @@ def create_listing(
     Create a new listing for a PCPart. Requires superuser privileges.
     """
     try:
-        db_listing = listings_crud.create_listing(
+        db_listing = await listings_crud.create_listing(
             session=session,
             listing_in=listing_in,
         )
@@ -135,7 +136,7 @@ def create_listing(
     dependencies=[Depends(get_current_active_superuser)],
     response_model=ListingPublic,
 )
-def update_listing(
+async def update_listing(
     *,
     session: SessionDep,
     listing_id: uuid.UUID,
@@ -144,11 +145,11 @@ def update_listing(
     """
     Update a listing. Requires superuser privileges.
     """
-    db_listing = listings_crud.get_listing(session=session, listing_id=listing_id)
+    db_listing = await listings_crud.get_listing(session=session, listing_id=listing_id)
     if db_listing is None:
         raise HTTPException(status_code=404, detail="Listing not found")
 
-    db_listing = listings_crud.update_listing(
+    db_listing = await listings_crud.update_listing(
         session=session,
         db_listing=db_listing,
         listing_in=listing_in,
@@ -164,14 +165,14 @@ def update_listing(
     "/{listing_id}",
     dependencies=[Depends(get_current_active_superuser)],
 )
-def delete_listing(
+async def delete_listing(
     listing_id: uuid.UUID,
     session: SessionDep,
 ) -> dict[str, str]:
     """
     Delete a listing by ID. Requires superuser privileges.
     """
-    deleted = listings_crud.remove_listing(session=session, listing_id=listing_id)
+    deleted = await listings_crud.remove_listing(session=session, listing_id=listing_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Listing not found")
     return {"message": "Listing deleted successfully"}
