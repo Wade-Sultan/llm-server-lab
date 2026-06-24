@@ -2,6 +2,8 @@
 
 import { revalidatePath } from 'next/cache';
 import { db } from '@/lib/prisma';
+import { usdToCents } from '@/lib/utils';
+import { upsertAmazonAsin } from '@/lib/listings';
 
 export interface RamFormData {
   name: string;
@@ -9,6 +11,8 @@ export interface RamFormData {
   modelNumber: string;
   yearReleased: number | null;
   isActive: boolean;
+  streetPriceUsd: number | null;
+  asin: string;
   ddrGeneration: string;
   speedMhz: number | null;
   modules: number | null;
@@ -24,6 +28,7 @@ export interface RamFormData {
 const partData = (d: RamFormData) => ({
   name: d.name, manufacturer: d.manufacturer || null,
   modelNumber: d.modelNumber || null, yearReleased: d.yearReleased, isActive: d.isActive,
+  streetPriceCents: usdToCents(d.streetPriceUsd),
 });
 
 const specificData = (d: RamFormData) => ({
@@ -33,7 +38,8 @@ const specificData = (d: RamFormData) => ({
 });
 
 export async function createRam(data: RamFormData) {
-  await db.pcPart.create({ data: { ...partData(data), partType: 'ram', ram: { create: specificData(data) } } });
+  const created = await db.pcPart.create({ data: { ...partData(data), partType: 'ram', ram: { create: specificData(data) } } });
+  await upsertAmazonAsin(created.id, data.asin);
   revalidatePath('/ram');
 }
 
@@ -42,6 +48,7 @@ export async function updateRam(id: string, data: RamFormData) {
     db.pcPart.update({ where: { id }, data: partData(data) }),
     db.ram.update({ where: { id }, data: specificData(data) }),
   ]);
+  await upsertAmazonAsin(id, data.asin);
   revalidatePath('/ram');
 }
 

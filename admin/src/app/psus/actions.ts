@@ -2,6 +2,8 @@
 
 import { revalidatePath } from 'next/cache';
 import { db } from '@/lib/prisma';
+import { usdToCents } from '@/lib/utils';
+import { upsertAmazonAsin } from '@/lib/listings';
 
 export interface PsuFormData {
   name: string;
@@ -9,6 +11,8 @@ export interface PsuFormData {
   modelNumber: string;
   yearReleased: number | null;
   isActive: boolean;
+  streetPriceUsd: number | null;
+  asin: string;
   wattage: number | null;
   formFactor: string;
   efficiencyRating: string;
@@ -25,6 +29,7 @@ export interface PsuFormData {
 const partData = (d: PsuFormData) => ({
   name: d.name, manufacturer: d.manufacturer || null,
   modelNumber: d.modelNumber || null, yearReleased: d.yearReleased, isActive: d.isActive,
+  streetPriceCents: usdToCents(d.streetPriceUsd),
 });
 
 const specificData = (d: PsuFormData) => ({
@@ -36,7 +41,8 @@ const specificData = (d: PsuFormData) => ({
 });
 
 export async function createPsu(data: PsuFormData) {
-  await db.pcPart.create({ data: { ...partData(data), partType: 'psu', psu: { create: specificData(data) } } });
+  const created = await db.pcPart.create({ data: { ...partData(data), partType: 'psu', psu: { create: specificData(data) } } });
+  await upsertAmazonAsin(created.id, data.asin);
   revalidatePath('/psus');
 }
 
@@ -45,6 +51,7 @@ export async function updatePsu(id: string, data: PsuFormData) {
     db.pcPart.update({ where: { id }, data: partData(data) }),
     db.psu.update({ where: { id }, data: specificData(data) }),
   ]);
+  await upsertAmazonAsin(id, data.asin);
   revalidatePath('/psus');
 }
 

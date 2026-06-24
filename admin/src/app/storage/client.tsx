@@ -6,7 +6,7 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import type { ColumnDef } from '@tanstack/react-table';
-import type { Storage, PcPart } from '@prisma/client';
+import type { Storage, PcPart, Listing, AmazonListing } from '@prisma/client';
 import { Pencil, Trash2 } from 'lucide-react';
 import { DataTable } from '@/components/data-table';
 import { Button } from '@/components/ui/button';
@@ -16,13 +16,16 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
+import { centsToUsd, formatUsd, asinSchema, getAmazonAsin } from '@/lib/utils';
 import { createStorage, updateStorage, deleteStorage, type StorageFormData } from './actions';
 
-type StorageWithPart = Storage & { pcPart: PcPart };
+type StorageWithPart = Storage & { pcPart: PcPart & { listings: (Listing & { amazonListing: AmazonListing | null })[] } };
 
 const schema = z.object({
   name: z.string().min(1), manufacturer: z.string(), modelNumber: z.string(),
   yearReleased: z.coerce.number().int().nullable(), isActive: z.boolean(),
+  streetPriceUsd: z.coerce.number().nullable(),
+  asin: asinSchema,
   storageType: z.string(), formFactor: z.string(), interface: z.string(),
   capacityGb: z.coerce.number().int().nullable(), readSpeedMbps: z.coerce.number().int().nullable(),
   writeSpeedMbps: z.coerce.number().int().nullable(), hasDramCache: z.boolean(),
@@ -35,13 +38,17 @@ function StorageForm({ item, onSuccess }: { item: StorageWithPart | null; onSucc
     defaultValues: item ? {
       name: item.pcPart.name, manufacturer: item.pcPart.manufacturer ?? '',
       modelNumber: item.pcPart.modelNumber ?? '', yearReleased: item.pcPart.yearReleased,
-      isActive: item.pcPart.isActive, storageType: item.storageType ?? '',
+      isActive: item.pcPart.isActive, streetPriceUsd: centsToUsd(item.pcPart.streetPriceCents),
+      asin: getAmazonAsin(item.pcPart.listings),
+      storageType: item.storageType ?? '',
       formFactor: item.formFactor ?? '', interface: item.interface ?? '',
       capacityGb: item.capacityGb, readSpeedMbps: item.readSpeedMbps,
       writeSpeedMbps: item.writeSpeedMbps, hasDramCache: item.hasDramCache,
       enduranceTbw: item.enduranceTbw, rpm: item.rpm,
     } : {
       name: '', manufacturer: '', modelNumber: '', yearReleased: null, isActive: true,
+      streetPriceUsd: null,
+      asin: '',
       storageType: '', formFactor: '', interface: '', capacityGb: null,
       readSpeedMbps: null, writeSpeedMbps: null, hasDramCache: false,
       enduranceTbw: null, rpm: null,
@@ -90,6 +97,24 @@ function StorageForm({ item, onSuccess }: { item: StorageWithPart | null; onSucc
               )}
             />
           ))}
+          <FormField control={form.control} name="streetPriceUsd"
+            render={({ field }) => (
+              <FormItem><FormLabel>Street Price (USD)</FormLabel>
+                <FormControl>
+                  <Input type="number" step="0.01" value={(field.value as number | null) ?? ''} onChange={numChange(field.onChange)} />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+          <FormField control={form.control} name="asin"
+            render={({ field }) => (
+              <FormItem><FormLabel>Amazon ASIN</FormLabel>
+                <FormControl><Input {...field} placeholder="B0XXXXXXXX" maxLength={10} /></FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
         </div>
         <div className="flex gap-6">
           {([ ['hasDramCache','DRAM Cache'], ['isActive','Active'] ] as [keyof StorageFormData, string][]).map(([name, label]) => (
@@ -132,6 +157,9 @@ export function StorageTable({ data }: { data: StorageWithPart[] }) {
     { accessorKey: 'storageType', header: 'Type', enableSorting: true },
     { accessorKey: 'capacityGb', header: 'Capacity (GB)', enableSorting: true },
     { accessorKey: 'interface', header: 'Interface', enableSorting: true },
+    { id: 'streetPrice', accessorFn: (r) => r.pcPart.streetPriceCents, header: 'Street Price',
+      cell: ({ getValue }) => formatUsd(getValue<number | null>()), enableSorting: true },
+    { id: 'asin', accessorFn: (r) => getAmazonAsin(r.pcPart.listings), header: 'ASIN', enableSorting: true },
     { id: 'isActive', accessorFn: (r) => r.pcPart.isActive, header: 'Active',
       cell: ({ getValue }) => <Badge variant={getValue<boolean>() ? 'default' : 'secondary'}>{getValue<boolean>() ? 'Active' : 'Inactive'}</Badge> },
     { id: 'actions', header: '', cell: ({ row }) => (

@@ -2,7 +2,8 @@
 
 import { revalidatePath } from 'next/cache';
 import { db } from '@/lib/prisma';
-import { splitCommaList } from '@/lib/utils';
+import { splitCommaList, usdToCents } from '@/lib/utils';
+import { upsertAmazonAsin } from '@/lib/listings';
 
 export interface GpuFormData {
   name: string;
@@ -10,6 +11,8 @@ export interface GpuFormData {
   modelNumber: string;
   yearReleased: number | null;
   isActive: boolean;
+  streetPriceUsd: number | null;
+  asin: string;
   brand: string;
   chipset: string;
   vramGb: number | null;
@@ -35,13 +38,14 @@ export interface GpuFormData {
 }
 
 export async function createGpu(data: GpuFormData) {
-  await db.pcPart.create({
+  const created = await db.pcPart.create({
     data: {
       name: data.name,
       manufacturer: data.manufacturer || null,
       modelNumber: data.modelNumber || null,
       yearReleased: data.yearReleased,
       isActive: data.isActive,
+      streetPriceCents: usdToCents(data.streetPriceUsd),
       partType: 'gpu',
       gpu: {
         create: {
@@ -73,6 +77,7 @@ export async function createGpu(data: GpuFormData) {
       },
     },
   });
+  await upsertAmazonAsin(created.id, data.asin);
   revalidatePath('/gpus');
 }
 
@@ -86,6 +91,7 @@ export async function updateGpu(id: string, data: GpuFormData) {
         modelNumber: data.modelNumber || null,
         yearReleased: data.yearReleased,
         isActive: data.isActive,
+        streetPriceCents: usdToCents(data.streetPriceUsd),
       },
     }),
     db.gpu.update({
@@ -118,6 +124,7 @@ export async function updateGpu(id: string, data: GpuFormData) {
       },
     }),
   ]);
+  await upsertAmazonAsin(id, data.asin);
   revalidatePath('/gpus');
 }
 

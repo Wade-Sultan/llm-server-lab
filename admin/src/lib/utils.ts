@@ -1,5 +1,6 @@
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
+import { z } from 'zod';
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -22,4 +23,26 @@ export function splitCommaList(value: string): string[] {
 
 export function joinCommaList(arr: string[]): string {
   return arr.join(', ');
+}
+
+export function centsToUsd(cents: number | null): number | null {
+  return cents == null ? null : cents / 100;
+}
+
+export function usdToCents(usd: number | null): number | null {
+  return usd == null ? null : Math.round(usd * 100);
+}
+
+export function formatUsd(cents: number | null): string {
+  return cents == null
+    ? '—'
+    : (cents / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
+}
+
+export const asinSchema = z
+  .string()
+  .refine((v) => v === '' || /^[A-Z0-9]{10}$/i.test(v), { message: 'ASIN must be 10 characters (letters/numbers)' });
+
+export function getAmazonAsin(listings: { listingType: string; amazonListing: { asin: string } | null }[]): string {
+  return listings.find((l) => l.listingType === 'amazon')?.amazonListing?.asin ?? '';
 }

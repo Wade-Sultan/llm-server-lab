@@ -2,6 +2,8 @@
 
 import { revalidatePath } from 'next/cache';
 import { db } from '@/lib/prisma';
+import { usdToCents } from '@/lib/utils';
+import { upsertAmazonAsin } from '@/lib/listings';
 
 export interface MotherboardFormData {
   name: string;
@@ -9,6 +11,8 @@ export interface MotherboardFormData {
   modelNumber: string;
   yearReleased: number | null;
   isActive: boolean;
+  streetPriceUsd: number | null;
+  asin: string;
   socket: string;
   formFactor: string;
   ddrGeneration: string;
@@ -33,6 +37,7 @@ const partData = (d: MotherboardFormData) => ({
   modelNumber: d.modelNumber || null,
   yearReleased: d.yearReleased,
   isActive: d.isActive,
+  streetPriceCents: usdToCents(d.streetPriceUsd),
 });
 
 const specificData = (d: MotherboardFormData) => ({
@@ -55,9 +60,10 @@ const specificData = (d: MotherboardFormData) => ({
 });
 
 export async function createMotherboard(data: MotherboardFormData) {
-  await db.pcPart.create({
+  const created = await db.pcPart.create({
     data: { ...partData(data), partType: 'motherboard', motherboard: { create: specificData(data) } },
   });
+  await upsertAmazonAsin(created.id, data.asin);
   revalidatePath('/motherboards');
 }
 
@@ -66,6 +72,7 @@ export async function updateMotherboard(id: string, data: MotherboardFormData) {
     db.pcPart.update({ where: { id }, data: partData(data) }),
     db.motherboard.update({ where: { id }, data: specificData(data) }),
   ]);
+  await upsertAmazonAsin(id, data.asin);
   revalidatePath('/motherboards');
 }
 

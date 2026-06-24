@@ -6,7 +6,7 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import type { ColumnDef } from '@tanstack/react-table';
-import type { CpuCooler, PcPart } from '@prisma/client';
+import type { CpuCooler, PcPart, Listing, AmazonListing } from '@prisma/client';
 import { Pencil, Trash2 } from 'lucide-react';
 import { DataTable } from '@/components/data-table';
 import { Button } from '@/components/ui/button';
@@ -16,14 +16,16 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
-import { joinCommaList } from '@/lib/utils';
+import { joinCommaList, centsToUsd, formatUsd, asinSchema, getAmazonAsin } from '@/lib/utils';
 import { createCpuCooler, updateCpuCooler, deleteCpuCooler, type CpuCoolerFormData } from './actions';
 
-type CoolerWithPart = CpuCooler & { pcPart: PcPart };
+type CoolerWithPart = CpuCooler & { pcPart: PcPart & { listings: (Listing & { amazonListing: AmazonListing | null })[] } };
 
 const schema = z.object({
   name: z.string().min(1), manufacturer: z.string(), modelNumber: z.string(),
   yearReleased: z.coerce.number().int().nullable(), isActive: z.boolean(),
+  streetPriceUsd: z.coerce.number().nullable(),
+  asin: asinSchema,
   supportedSocketsInput: z.string(), coolerType: z.string(),
   maxTdpWatts: z.coerce.number().int().nullable(), heightMm: z.coerce.number().int().nullable(),
   radiatorSizeMm: z.coerce.number().int().nullable(), fanCount: z.coerce.number().int().nullable(),
@@ -37,12 +39,16 @@ function CoolerForm({ item, onSuccess }: { item: CoolerWithPart | null; onSucces
     defaultValues: item ? {
       name: item.pcPart.name, manufacturer: item.pcPart.manufacturer ?? '',
       modelNumber: item.pcPart.modelNumber ?? '', yearReleased: item.pcPart.yearReleased,
-      isActive: item.pcPart.isActive, supportedSocketsInput: joinCommaList(item.supportedSockets),
+      isActive: item.pcPart.isActive, streetPriceUsd: centsToUsd(item.pcPart.streetPriceCents),
+      asin: getAmazonAsin(item.pcPart.listings),
+      supportedSocketsInput: joinCommaList(item.supportedSockets),
       coolerType: item.coolerType ?? '', maxTdpWatts: item.maxTdpWatts, heightMm: item.heightMm,
       radiatorSizeMm: item.radiatorSizeMm, fanCount: item.fanCount, fanSizeMm: item.fanSizeMm,
       noiseDba: item.noiseDba, hasRgb: item.hasRgb,
     } : {
       name: '', manufacturer: '', modelNumber: '', yearReleased: null, isActive: true,
+      streetPriceUsd: null,
+      asin: '',
       supportedSocketsInput: '', coolerType: '', maxTdpWatts: null, heightMm: null,
       radiatorSizeMm: null, fanCount: null, fanSizeMm: null, noiseDba: null, hasRgb: false,
     },
@@ -89,6 +95,24 @@ function CoolerForm({ item, onSuccess }: { item: CoolerWithPart | null; onSucces
               )}
             />
           ))}
+          <FormField control={form.control} name="streetPriceUsd"
+            render={({ field }) => (
+              <FormItem><FormLabel>Street Price (USD)</FormLabel>
+                <FormControl>
+                  <Input type="number" step="0.01" value={(field.value as number | null) ?? ''} onChange={numChange(field.onChange)} />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+          <FormField control={form.control} name="asin"
+            render={({ field }) => (
+              <FormItem><FormLabel>Amazon ASIN</FormLabel>
+                <FormControl><Input {...field} placeholder="B0XXXXXXXX" maxLength={10} /></FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
         </div>
         <FormField control={form.control} name="supportedSocketsInput"
           render={({ field }) => (
@@ -140,6 +164,9 @@ export function CpuCoolerTable({ data }: { data: CoolerWithPart[] }) {
     { accessorKey: 'coolerType', header: 'Type', enableSorting: true },
     { accessorKey: 'maxTdpWatts', header: 'Max TDP (W)', enableSorting: true },
     { accessorKey: 'heightMm', header: 'Height (mm)', enableSorting: true },
+    { id: 'streetPrice', accessorFn: (r) => r.pcPart.streetPriceCents, header: 'Street Price',
+      cell: ({ getValue }) => formatUsd(getValue<number | null>()), enableSorting: true },
+    { id: 'asin', accessorFn: (r) => getAmazonAsin(r.pcPart.listings), header: 'ASIN', enableSorting: true },
     { id: 'isActive', accessorFn: (r) => r.pcPart.isActive, header: 'Active',
       cell: ({ getValue }) => <Badge variant={getValue<boolean>() ? 'default' : 'secondary'}>{getValue<boolean>() ? 'Active' : 'Inactive'}</Badge> },
     { id: 'actions', header: '', cell: ({ row }) => (

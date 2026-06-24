@@ -16,6 +16,7 @@ model PcPart {
   yearReleased Int?     @map("year_released")
   partType     String   @map("part_type")
   isActive     Boolean  @default(true) @map("is_active")
+  streetPriceCents Int? @map("street_price_cents")
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")
 
@@ -28,8 +29,41 @@ model PcPart {
   pcCase      PcCase?
   cpuCooler   CpuCooler?
   fan         Fan?
+  listings    Listing[]
 
   @@map("pc_parts")
+}
+
+model Listing {
+  id                 String    @id @default(uuid()) @db.Uuid
+  partId             String    @map("part_id") @db.Uuid
+  part               PcPart    @relation(fields: [partId], references: [id], onDelete: Cascade)
+  listingType        String    @map("listing_type")
+  marketplace        String
+  url                String?
+  priceAmount        Int?      @map("price_amount")
+  currency           String?   @default("USD")
+  imageUrl           String?   @map("image_url")
+  isActive           Boolean   @default(true) @map("is_active")
+  fetchedAt          DateTime? @map("fetched_at")
+  priceLastUpdatedAt DateTime? @map("price_last_updated_at")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
+
+  amazonListing AmazonListing?
+
+  @@map("listings")
+}
+
+model AmazonListing {
+  id           String  @id @db.Uuid
+  listing      Listing @relation(fields: [id], references: [id], onDelete: Cascade)
+  asin         String
+  isPrime      Boolean? @map("is_prime")
+  sellerName   String?  @map("seller_name")
+  affiliateTag String?  @map("affiliate_tag")
+
+  @@map("amazon_listings")
 }
 
 model Cpu {

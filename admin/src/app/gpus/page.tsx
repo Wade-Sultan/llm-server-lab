@@ -5,7 +5,7 @@ import { GpuTable } from './client';
 
 export default async function GpusPage() {
   const data = await db.gpu.findMany({
-    include: { pcPart: true },
+    include: { pcPart: { include: { listings: { include: { amazonListing: true } } } } },
     orderBy: { pcPart: { name: 'asc' } },
   });
   return <GpuTable data={data} />;

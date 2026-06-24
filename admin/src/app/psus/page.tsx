@@ -5,7 +5,7 @@ import { PsuTable } from './client';
 
 export default async function PsusPage() {
   const data = await db.psu.findMany({
-    include: { pcPart: true },
+    include: { pcPart: { include: { listings: { include: { amazonListing: true } } } } },
     orderBy: { pcPart: { name: 'asc' } },
   });
   return <PsuTable data={data} />;

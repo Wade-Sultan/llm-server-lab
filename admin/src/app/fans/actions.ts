@@ -2,6 +2,8 @@
 
 import { revalidatePath } from 'next/cache';
 import { db } from '@/lib/prisma';
+import { usdToCents } from '@/lib/utils';
+import { upsertAmazonAsin } from '@/lib/listings';
 
 export interface FanFormData {
   name: string;
@@ -9,6 +11,8 @@ export interface FanFormData {
   modelNumber: string;
   yearReleased: number | null;
   isActive: boolean;
+  streetPriceUsd: number | null;
+  asin: string;
   sizeMm: number | null;
   maxRpm: number | null;
   airflowCfm: number | null;
@@ -23,6 +27,7 @@ export interface FanFormData {
 const partData = (d: FanFormData) => ({
   name: d.name, manufacturer: d.manufacturer || null,
   modelNumber: d.modelNumber || null, yearReleased: d.yearReleased, isActive: d.isActive,
+  streetPriceCents: usdToCents(d.streetPriceUsd),
 });
 
 const specificData = (d: FanFormData) => ({
@@ -32,7 +37,8 @@ const specificData = (d: FanFormData) => ({
 });
 
 export async function createFan(data: FanFormData) {
-  await db.pcPart.create({ data: { ...partData(data), partType: 'fan', fan: { create: specificData(data) } } });
+  const created = await db.pcPart.create({ data: { ...partData(data), partType: 'fan', fan: { create: specificData(data) } } });
+  await upsertAmazonAsin(created.id, data.asin);
   revalidatePath('/fans');
 }
 
@@ -41,6 +47,7 @@ export async function updateFan(id: string, data: FanFormData) {
     db.pcPart.update({ where: { id }, data: partData(data) }),
     db.fan.update({ where: { id }, data: specificData(data) }),
   ]);
+  await upsertAmazonAsin(id, data.asin);
   revalidatePath('/fans');
 }
 

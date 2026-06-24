@@ -6,7 +6,7 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import type { ColumnDef } from '@tanstack/react-table';
-import type { Cpu, PcPart } from '@prisma/client';
+import type { Cpu, PcPart, Listing, AmazonListing } from '@prisma/client';
 import { Pencil, Trash2 } from 'lucide-react';
 import { DataTable } from '@/components/data-table';
 import { Button } from '@/components/ui/button';
@@ -38,10 +38,10 @@ import {
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Checkbox } from '@/components/ui/checkbox';
-import { joinCommaList } from '@/lib/utils';
+import { joinCommaList, centsToUsd, formatUsd, asinSchema, getAmazonAsin } from '@/lib/utils';
 import { createCpu, updateCpu, deleteCpu, type CpuFormData } from './actions';
 
-type CpuWithPart = Cpu & { pcPart: PcPart };
+type CpuWithPart = Cpu & { pcPart: PcPart & { listings: (Listing & { amazonListing: AmazonListing | null })[] } };
 
 const schema = z.object({
   name: z.string().min(1, 'Name is required'),
@@ -49,6 +49,8 @@ const schema = z.object({
   modelNumber: z.string(),
   yearReleased: z.coerce.number().int().nullable(),
   isActive: z.boolean(),
+  streetPriceUsd: z.coerce.number().nullable(),
+  asin: asinSchema,
   brand: z.string(),
   socket: z.string(),
   tdpWatts: z.coerce.number().int().nullable(),
@@ -82,6 +84,8 @@ function CpuForm({
           modelNumber: item.pcPart.modelNumber ?? '',
           yearReleased: item.pcPart.yearReleased,
           isActive: item.pcPart.isActive,
+          streetPriceUsd: centsToUsd(item.pcPart.streetPriceCents),
+          asin: getAmazonAsin(item.pcPart.listings),
           brand: item.brand ?? '',
           socket: item.socket ?? '',
           tdpWatts: item.tdpWatts,
@@ -106,6 +110,8 @@ function CpuForm({
           modelNumber: '',
           yearReleased: null,
           isActive: true,
+          streetPriceUsd: null,
+          asin: '',
           brand: '',
           socket: '',
           tdpWatts: null,
@@ -185,6 +191,32 @@ function CpuForm({
                 <FormLabel>Year Released</FormLabel>
                 <FormControl>
                   <Input type="number" {...field} value={field.value ?? ''} onChange={e => field.onChange(e.target.value === '' ? null : Number(e.target.value))} />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+          <FormField
+            control={form.control}
+            name="streetPriceUsd"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Street Price (USD)</FormLabel>
+                <FormControl>
+                  <Input type="number" step="0.01" {...field} value={field.value ?? ''} onChange={e => field.onChange(e.target.value === '' ? null : Number(e.target.value))} />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+          <FormField
+            control={form.control}
+            name="asin"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Amazon ASIN</FormLabel>
+                <FormControl>
+                  <Input {...field} placeholder="B0XXXXXXXX" maxLength={10} />
                 </FormControl>
                 <FormMessage />
               </FormItem>
@@ -434,6 +466,19 @@ export function CpuTable({ data }: { data: CpuWithPart[] }) {
     { accessorKey: 'socket', header: 'Socket', enableSorting: true },
     { accessorKey: 'cores', header: 'Cores', enableSorting: true },
     { accessorKey: 'tdpWatts', header: 'TDP (W)', enableSorting: true },
+    {
+      id: 'streetPrice',
+      accessorFn: (row) => row.pcPart.streetPriceCents,
+      header: 'Street Price',
+      cell: ({ getValue }) => formatUsd(getValue<number | null>()),
+      enableSorting: true,
+    },
+    {
+      id: 'asin',
+      accessorFn: (row) => getAmazonAsin(row.pcPart.listings),
+      header: 'ASIN',
+      enableSorting: true,
+    },
     {
       id: 'isActive',
       accessorFn: (row) => row.pcPart.isActive,

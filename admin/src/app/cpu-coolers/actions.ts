@@ -2,7 +2,8 @@
 
 import { revalidatePath } from 'next/cache';
 import { db } from '@/lib/prisma';
-import { splitCommaList } from '@/lib/utils';
+import { splitCommaList, usdToCents } from '@/lib/utils';
+import { upsertAmazonAsin } from '@/lib/listings';
 
 export interface CpuCoolerFormData {
   name: string;
@@ -10,6 +11,8 @@ export interface CpuCoolerFormData {
   modelNumber: string;
   yearReleased: number | null;
   isActive: boolean;
+  streetPriceUsd: number | null;
+  asin: string;
   supportedSocketsInput: string;
   coolerType: string;
   maxTdpWatts: number | null;
@@ -24,6 +27,7 @@ export interface CpuCoolerFormData {
 const partData = (d: CpuCoolerFormData) => ({
   name: d.name, manufacturer: d.manufacturer || null,
   modelNumber: d.modelNumber || null, yearReleased: d.yearReleased, isActive: d.isActive,
+  streetPriceCents: usdToCents(d.streetPriceUsd),
 });
 
 const specificData = (d: CpuCoolerFormData) => ({
@@ -34,7 +38,8 @@ const specificData = (d: CpuCoolerFormData) => ({
 });
 
 export async function createCpuCooler(data: CpuCoolerFormData) {
-  await db.pcPart.create({ data: { ...partData(data), partType: 'cpucooler', cpuCooler: { create: specificData(data) } } });
+  const created = await db.pcPart.create({ data: { ...partData(data), partType: 'cpucooler', cpuCooler: { create: specificData(data) } } });
+  await upsertAmazonAsin(created.id, data.asin);
   revalidatePath('/cpu-coolers');
 }
 
@@ -43,6 +48,7 @@ export async function updateCpuCooler(id: string, data: CpuCoolerFormData) {
     db.pcPart.update({ where: { id }, data: partData(data) }),
     db.cpuCooler.update({ where: { id }, data: specificData(data) }),
   ]);
+  await upsertAmazonAsin(id, data.asin);
   revalidatePath('/cpu-coolers');
 }
 

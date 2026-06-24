@@ -5,7 +5,7 @@ import { StorageTable } from './client';
 
 export default async function StoragePage() {
   const data = await db.storage.findMany({
-    include: { pcPart: true },
+    include: { pcPart: { include: { listings: { include: { amazonListing: true } } } } },
     orderBy: { pcPart: { name: 'asc' } },
   });
   return <StorageTable data={data} />;

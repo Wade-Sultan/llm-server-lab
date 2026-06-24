@@ -6,7 +6,7 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import type { ColumnDef } from '@tanstack/react-table';
-import type { PcCase, PcPart } from '@prisma/client';
+import type { PcCase, PcPart, Listing, AmazonListing } from '@prisma/client';
 import { Pencil, Trash2 } from 'lucide-react';
 import { DataTable } from '@/components/data-table';
 import { Button } from '@/components/ui/button';
@@ -16,14 +16,16 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
-import { joinCommaList } from '@/lib/utils';
+import { joinCommaList, centsToUsd, formatUsd, asinSchema, getAmazonAsin } from '@/lib/utils';
 import { createCase, updateCase, deleteCase, type CaseFormData } from './actions';
 
-type CaseWithPart = PcCase & { pcPart: PcPart };
+type CaseWithPart = PcCase & { pcPart: PcPart & { listings: (Listing & { amazonListing: AmazonListing | null })[] } };
 
 const schema = z.object({
   name: z.string().min(1), manufacturer: z.string(), modelNumber: z.string(),
   yearReleased: z.coerce.number().int().nullable(), isActive: z.boolean(),
+  streetPriceUsd: z.coerce.number().nullable(),
+  asin: asinSchema,
   supportedMoboFormFactorsInput: z.string(), maxGpuLengthMm: z.coerce.number().int().nullable(),
   maxCoolerHeightMm: z.coerce.number().int().nullable(), maxRadiatorFrontMm: z.coerce.number().int().nullable(),
   maxRadiatorTopMm: z.coerce.number().int().nullable(), maxPsuLengthMm: z.coerce.number().int().nullable(),
@@ -43,6 +45,8 @@ function CaseForm({ item, onSuccess }: { item: CaseWithPart | null; onSuccess: (
       name: item.pcPart.name, manufacturer: item.pcPart.manufacturer ?? '',
       modelNumber: item.pcPart.modelNumber ?? '', yearReleased: item.pcPart.yearReleased,
       isActive: item.pcPart.isActive,
+      streetPriceUsd: centsToUsd(item.pcPart.streetPriceCents),
+      asin: getAmazonAsin(item.pcPart.listings),
       supportedMoboFormFactorsInput: joinCommaList(item.supportedMoboFormFactors),
       maxGpuLengthMm: item.maxGpuLengthMm, maxCoolerHeightMm: item.maxCoolerHeightMm,
       maxRadiatorFrontMm: item.maxRadiatorFrontMm, maxRadiatorTopMm: item.maxRadiatorTopMm,
@@ -54,6 +58,8 @@ function CaseForm({ item, onSuccess }: { item: CaseWithPart | null; onSuccess: (
       heightMm: item.heightMm, usbFrontTypeA: item.usbFrontTypeA, usbFrontTypeC: item.usbFrontTypeC,
     } : {
       name: '', manufacturer: '', modelNumber: '', yearReleased: null, isActive: true,
+      streetPriceUsd: null,
+      asin: '',
       supportedMoboFormFactorsInput: '', maxGpuLengthMm: null, maxCoolerHeightMm: null,
       maxRadiatorFrontMm: null, maxRadiatorTopMm: null, maxPsuLengthMm: null,
       includedFanCount: null, chamberCount: null, frontPanelMesh: false, color: '', size: '',
@@ -111,6 +117,24 @@ function CaseForm({ item, onSuccess }: { item: CaseWithPart | null; onSuccess: (
               )}
             />
           ))}
+          <FormField control={form.control} name="streetPriceUsd"
+            render={({ field }) => (
+              <FormItem><FormLabel>Street Price (USD)</FormLabel>
+                <FormControl>
+                  <Input type="number" step="0.01" value={(field.value as number | null) ?? ''} onChange={numChange(field.onChange)} />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+          <FormField control={form.control} name="asin"
+            render={({ field }) => (
+              <FormItem><FormLabel>Amazon ASIN</FormLabel>
+                <FormControl><Input {...field} placeholder="B0XXXXXXXX" maxLength={10} /></FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
         </div>
         <FormField control={form.control} name="supportedMoboFormFactorsInput"
           render={({ field }) => (
@@ -162,6 +186,9 @@ export function CaseTable({ data }: { data: CaseWithPart[] }) {
     { accessorKey: 'size', header: 'Size', enableSorting: true },
     { accessorKey: 'maxGpuLengthMm', header: 'Max GPU (mm)', enableSorting: true },
     { accessorKey: 'maxCoolerHeightMm', header: 'Max Cooler (mm)', enableSorting: true },
+    { id: 'streetPrice', accessorFn: (r) => r.pcPart.streetPriceCents, header: 'Street Price',
+      cell: ({ getValue }) => formatUsd(getValue<number | null>()), enableSorting: true },
+    { id: 'asin', accessorFn: (r) => getAmazonAsin(r.pcPart.listings), header: 'ASIN', enableSorting: true },
     { id: 'isActive', accessorFn: (r) => r.pcPart.isActive, header: 'Active',
       cell: ({ getValue }) => <Badge variant={getValue<boolean>() ? 'default' : 'secondary'}>{getValue<boolean>() ? 'Active' : 'Inactive'}</Badge> },
     { id: 'actions', header: '', cell: ({ row }) => (

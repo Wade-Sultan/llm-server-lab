@@ -6,7 +6,7 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import type { ColumnDef } from '@tanstack/react-table';
-import type { Gpu, PcPart } from '@prisma/client';
+import type { Gpu, PcPart, Listing, AmazonListing } from '@prisma/client';
 import { Pencil, Trash2 } from 'lucide-react';
 import { DataTable } from '@/components/data-table';
 import { Button } from '@/components/ui/button';
@@ -20,10 +20,10 @@ import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Checkbox } from '@/components/ui/checkbox';
-import { joinCommaList } from '@/lib/utils';
+import { joinCommaList, centsToUsd, formatUsd, asinSchema, getAmazonAsin } from '@/lib/utils';
 import { createGpu, updateGpu, deleteGpu, type GpuFormData } from './actions';
 
-type GpuWithPart = Gpu & { pcPart: PcPart };
+type GpuWithPart = Gpu & { pcPart: PcPart & { listings: (Listing & { amazonListing: AmazonListing | null })[] } };
 
 const schema = z.object({
   name: z.string().min(1, 'Name is required'),
@@ -31,6 +31,8 @@ const schema = z.object({
   modelNumber: z.string(),
   yearReleased: z.coerce.number().int().nullable(),
   isActive: z.boolean(),
+  streetPriceUsd: z.coerce.number().nullable(),
+  asin: asinSchema,
   brand: z.string(),
   chipset: z.string(),
   vramGb: z.coerce.number().int().nullable(),
@@ -64,6 +66,8 @@ function GpuForm({ item, onSuccess }: { item: GpuWithPart | null; onSuccess: () 
       modelNumber: item.pcPart.modelNumber ?? '',
       yearReleased: item.pcPart.yearReleased,
       isActive: item.pcPart.isActive,
+      streetPriceUsd: centsToUsd(item.pcPart.streetPriceCents),
+      asin: getAmazonAsin(item.pcPart.listings),
       brand: item.brand ?? '',
       chipset: item.chipset ?? '',
       vramGb: item.vramGb,
@@ -88,6 +92,8 @@ function GpuForm({ item, onSuccess }: { item: GpuWithPart | null; onSuccess: () 
       benchmarkScoresInput: item.benchmarkScores ? JSON.stringify(item.benchmarkScores, null, 2) : '',
     } : {
       name: '', manufacturer: '', modelNumber: '', yearReleased: null, isActive: true,
+      streetPriceUsd: null,
+      asin: '',
       brand: '', chipset: '', vramGb: null, tdpWatts: null, lengthMm: null,
       pciePowerPins: '', recommendedPsuWatts: null, vramType: '', widthSlots: null,
       pcieGeneration: null, baseClockMhz: null, boostClockMhz: null, hasRayTracing: false,
@@ -157,6 +163,26 @@ function GpuForm({ item, onSuccess }: { item: GpuWithPart | null; onSuccess: () 
               )}
             />
           ))}
+          <FormField control={form.control} name="streetPriceUsd"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Street Price (USD)</FormLabel>
+                <FormControl>
+                  <Input {...numField(field as { value: number | null; onChange: (v: number | null) => void })} step="0.01" />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+          <FormField control={form.control} name="asin"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Amazon ASIN</FormLabel>
+                <FormControl><Input {...field} placeholder="B0XXXXXXXX" maxLength={10} /></FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
         </div>
         <FormField control={form.control} name="supportedFeaturesInput"
           render={({ field }) => (
@@ -219,6 +245,13 @@ export function GpuTable({ data }: { data: GpuWithPart[] }) {
     { accessorKey: 'chipset', header: 'Chipset', enableSorting: true },
     { accessorKey: 'vramGb', header: 'VRAM (GB)', enableSorting: true },
     { accessorKey: 'tdpWatts', header: 'TDP (W)', enableSorting: true },
+    {
+      id: 'streetPrice', accessorFn: (r) => r.pcPart.streetPriceCents, header: 'Street Price',
+      cell: ({ getValue }) => formatUsd(getValue<number | null>()), enableSorting: true,
+    },
+    {
+      id: 'asin', accessorFn: (r) => getAmazonAsin(r.pcPart.listings), header: 'ASIN', enableSorting: true,
+    },
     {
       id: 'isActive', accessorFn: (r) => r.pcPart.isActive, header: 'Active',
       cell: ({ getValue }) => (

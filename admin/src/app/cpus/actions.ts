@@ -2,7 +2,8 @@
 
 import { revalidatePath } from 'next/cache';
 import { db } from '@/lib/prisma';
-import { splitCommaList } from '@/lib/utils';
+import { splitCommaList, usdToCents } from '@/lib/utils';
+import { upsertAmazonAsin } from '@/lib/listings';
 
 export interface CpuFormData {
   name: string;
@@ -10,6 +11,8 @@ export interface CpuFormData {
   modelNumber: string;
   yearReleased: number | null;
   isActive: boolean;
+  streetPriceUsd: number | null;
+  asin: string;
   brand: string;
   socket: string;
   tdpWatts: number | null;
@@ -28,13 +31,14 @@ export interface CpuFormData {
 }
 
 export async function createCpu(data: CpuFormData) {
-  await db.pcPart.create({
+  const created = await db.pcPart.create({
     data: {
       name: data.name,
       manufacturer: data.manufacturer || null,
       modelNumber: data.modelNumber || null,
       yearReleased: data.yearReleased,
       isActive: data.isActive,
+      streetPriceCents: usdToCents(data.streetPriceUsd),
       partType: 'cpu',
       cpu: {
         create: {
@@ -59,6 +63,7 @@ export async function createCpu(data: CpuFormData) {
       },
     },
   });
+  await upsertAmazonAsin(created.id, data.asin);
   revalidatePath('/cpus');
 }
 
@@ -72,6 +77,7 @@ export async function updateCpu(id: string, data: CpuFormData) {
         modelNumber: data.modelNumber || null,
         yearReleased: data.yearReleased,
         isActive: data.isActive,
+        streetPriceCents: usdToCents(data.streetPriceUsd),
       },
     }),
     db.cpu.update({
@@ -97,6 +103,7 @@ export async function updateCpu(id: string, data: CpuFormData) {
       },
     }),
   ]);
+  await upsertAmazonAsin(id, data.asin);
   revalidatePath('/cpus');
 }
 

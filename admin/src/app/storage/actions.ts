@@ -2,6 +2,8 @@
 
 import { revalidatePath } from 'next/cache';
 import { db } from '@/lib/prisma';
+import { usdToCents } from '@/lib/utils';
+import { upsertAmazonAsin } from '@/lib/listings';
 
 export interface StorageFormData {
   name: string;
@@ -9,6 +11,8 @@ export interface StorageFormData {
   modelNumber: string;
   yearReleased: number | null;
   isActive: boolean;
+  streetPriceUsd: number | null;
+  asin: string;
   storageType: string;
   formFactor: string;
   interface: string;
@@ -23,6 +27,7 @@ export interface StorageFormData {
 const partData = (d: StorageFormData) => ({
   name: d.name, manufacturer: d.manufacturer || null,
   modelNumber: d.modelNumber || null, yearReleased: d.yearReleased, isActive: d.isActive,
+  streetPriceCents: usdToCents(d.streetPriceUsd),
 });
 
 const specificData = (d: StorageFormData) => ({
@@ -33,7 +38,8 @@ const specificData = (d: StorageFormData) => ({
 });
 
 export async function createStorage(data: StorageFormData) {
-  await db.pcPart.create({ data: { ...partData(data), partType: 'storage', storage: { create: specificData(data) } } });
+  const created = await db.pcPart.create({ data: { ...partData(data), partType: 'storage', storage: { create: specificData(data) } } });
+  await upsertAmazonAsin(created.id, data.asin);
   revalidatePath('/storage');
 }
 
@@ -42,6 +48,7 @@ export async function updateStorage(id: string, data: StorageFormData) {
     db.pcPart.update({ where: { id }, data: partData(data) }),
     db.storage.update({ where: { id }, data: specificData(data) }),
   ]);
+  await upsertAmazonAsin(id, data.asin);
   revalidatePath('/storage');
 }
 
