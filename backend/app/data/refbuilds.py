@@ -1,4 +1,3 @@
-import uuid
 from typing import Any, TypedDict
 
 
@@ -7,7 +6,7 @@ class Part(TypedDict, total=False):
     brand: str
     model: str
     approx_price: int
-    part_id: uuid.UUID
+    part_id: str  # stringified UUID — JSON-serializable, matches the frontend's contract
 
 
 class Build(TypedDict):

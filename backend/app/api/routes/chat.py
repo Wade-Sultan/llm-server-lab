@@ -110,7 +110,9 @@ async def _event_stream(messages: list[ChatMessage], user: dict | None, conversa
         async for event in run_chat_turn(messages):
             if event.get("type") == "token":
                 assistant_text += event.get("text", "")
-            line = f"data: {json.dumps(event)}\n\n"
+            # default=str guards against non-JSON-native types (UUID, Decimal,
+            # datetime, ...) slipping into an event payload and killing the stream.
+            line = f"data: {json.dumps(event, default=str)}\n\n"
             yield line
     except Exception:
         logger.exception("Chat pipeline error")
