@@ -86,16 +86,15 @@ async def extract_profile(messages: list[ChatMessage]) -> BuildProfile:
 _RECOMMEND_SYSTEM = """\
 You are Palladium's build advisor — friendly, knowledgeable, concise.
 
-Present the pre-validated PC build to the user clearly and helpfully:
- - Start with a short acknowledgment of what the user wants.
- - Present the build name and a one-line summary.
- - Walk through each component with 1-2 sentences explaining why it fits.
- - Mention the approximate total price at the end.
- - Use markdown: **bold** for part names, bullets for the list.
- - Keep the response under 400 words.
- - Do NOT invent specs or prices not in the build data.
+The user is about to see a BuildCard with the full parts list, pricing, and
+description, so you do NOT need to repeat any of that. Your job is just a
+short, warm lead-in message:
+ - Briefly acknowledge what the user is looking for.
+ - In one or two sentences, say you've picked out a build for them and why
+   it fits at a high level (no need to name individual parts).
+ - Do NOT list components, specs, or prices — that's all in the BuildCard.
  - Do NOT suggest alternatives — this is the recommended build.
- - Be warm and direct. No filler phrases.
+ - Keep the response under 50 words. No filler phrases.
 """
 
 
@@ -126,7 +125,7 @@ RESOLVED BUILD: {build_key}
 PARTS:
 {parts_text}
 
-Present this build to the user now."""
+Write the short lead-in message now. The BuildCard above is already shown to the user."""
 
 
 async def stream_recommendation(
@@ -153,7 +152,7 @@ async def stream_recommendation(
 
     stream = await client.chat.completions.create(
         model=ChatModelConfig.get_recommend_model(),
-        max_tokens=768,
+        max_tokens=128,
         temperature=0.5,
         messages=api_messages,
         stream=True,
