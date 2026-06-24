@@ -25,7 +25,8 @@ steps:
       - 'palladium-admin'
       - '--zone=us-central1-a'
       - '--tunnel-through-iap'
-      - '--command=docker pull us-central1-docker.pkg.dev/$PROJECT_ID/palladium/admin:$BUILD_ID && sudo systemctl restart palladium-admin'
+      - '--command=sudo gcloud auth configure-docker us-central1-docker.pkg.dev --quiet && sudo docker pull us-central1-docker.pkg.dev/$PROJECT_ID/palladium/admin:$BUILD_ID && sudo systemctl restart palladium-admin'
+
 
 images:
   - 'us-central1-docker.pkg.dev/$PROJECT_ID/palladium/admin:$BUILD_ID'
