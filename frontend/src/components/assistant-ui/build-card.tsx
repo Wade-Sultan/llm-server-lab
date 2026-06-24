@@ -43,9 +43,6 @@ export const BuildCard: DataMessagePartComponent<BuildData> = (props) => {
               </p>
             </div>
             <div className="flex shrink-0 items-center gap-2">
-              <span className="text-sm font-medium">
-                {formatPrice(part.approx_price)}
-              </span>
               <Button
                 type="button"
                 variant="outline"
@@ -62,3 +59,4 @@ export const BuildCard: DataMessagePartComponent<BuildData> = (props) => {
     </Card>
   )
 }
+
