@@ -3,7 +3,6 @@
 import { revalidatePath } from 'next/cache';
 import { db } from '@/lib/prisma';
 import { splitCommaList, usdToCents } from '@/lib/utils';
-import { upsertAmazonAsin } from '@/lib/listings';
 
 export interface GpuFormData {
   name: string;
@@ -12,7 +11,6 @@ export interface GpuFormData {
   yearReleased: number | null;
   isActive: boolean;
   streetPriceUsd: number | null;
-  asin: string;
   brand: string;
   chipset: string;
   vramGb: number | null;
@@ -77,7 +75,6 @@ export async function createGpu(data: GpuFormData) {
       },
     },
   });
-  await upsertAmazonAsin(created.id, data.asin);
   revalidatePath('/gpus');
 }
 
@@ -124,7 +121,6 @@ export async function updateGpu(id: string, data: GpuFormData) {
       },
     }),
   ]);
-  await upsertAmazonAsin(id, data.asin);
   revalidatePath('/gpus');
 }
 

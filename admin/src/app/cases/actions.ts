@@ -3,7 +3,6 @@
 import { revalidatePath } from 'next/cache';
 import { db } from '@/lib/prisma';
 import { splitCommaList, usdToCents } from '@/lib/utils';
-import { upsertAmazonAsin } from '@/lib/listings';
 
 export interface CaseFormData {
   name: string;
@@ -12,7 +11,6 @@ export interface CaseFormData {
   yearReleased: number | null;
   isActive: boolean;
   streetPriceUsd: number | null;
-  asin: string;
   supportedMoboFormFactorsInput: string;
   maxGpuLengthMm: number | null;
   maxCoolerHeightMm: number | null;
@@ -56,7 +54,6 @@ const specificData = (d: CaseFormData) => ({
 
 export async function createCase(data: CaseFormData) {
   const created = await db.pcPart.create({ data: { ...partData(data), partType: 'case', pcCase: { create: specificData(data) } } });
-  await upsertAmazonAsin(created.id, data.asin);
   revalidatePath('/cases');
 }
 
@@ -65,7 +62,6 @@ export async function updateCase(id: string, data: CaseFormData) {
     db.pcPart.update({ where: { id }, data: partData(data) }),
     db.pcCase.update({ where: { id }, data: specificData(data) }),
   ]);
-  await upsertAmazonAsin(id, data.asin);
   revalidatePath('/cases');
 }
 

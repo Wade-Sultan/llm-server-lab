@@ -3,7 +3,6 @@
 import { revalidatePath } from 'next/cache';
 import { db } from '@/lib/prisma';
 import { usdToCents } from '@/lib/utils';
-import { upsertAmazonAsin } from '@/lib/listings';
 
 export interface RamFormData {
   name: string;
@@ -12,7 +11,6 @@ export interface RamFormData {
   yearReleased: number | null;
   isActive: boolean;
   streetPriceUsd: number | null;
-  asin: string;
   ddrGeneration: string;
   speedMhz: number | null;
   modules: number | null;
@@ -39,7 +37,6 @@ const specificData = (d: RamFormData) => ({
 
 export async function createRam(data: RamFormData) {
   const created = await db.pcPart.create({ data: { ...partData(data), partType: 'ram', ram: { create: specificData(data) } } });
-  await upsertAmazonAsin(created.id, data.asin);
   revalidatePath('/ram');
 }
 
@@ -48,7 +45,6 @@ export async function updateRam(id: string, data: RamFormData) {
     db.pcPart.update({ where: { id }, data: partData(data) }),
     db.ram.update({ where: { id }, data: specificData(data) }),
   ]);
-  await upsertAmazonAsin(id, data.asin);
   revalidatePath('/ram');
 }
 

@@ -16,7 +16,8 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
-import { centsToUsd, formatUsd, asinSchema, getAmazonAsin } from '@/lib/utils';
+import { ListingsDialog } from '@/components/listings-dialog';
+import { centsToUsd, formatUsd } from '@/lib/utils';
 import { createPsu, updatePsu, deletePsu, type PsuFormData } from './actions';
 
 type PsuWithPart = Psu & { pcPart: PcPart & { listings: (Listing & { amazonListing: AmazonListing | null })[] } };
@@ -25,7 +26,6 @@ const schema = z.object({
   name: z.string().min(1), manufacturer: z.string(), modelNumber: z.string(),
   yearReleased: z.coerce.number().int().nullable(), isActive: z.boolean(),
   streetPriceUsd: z.coerce.number().nullable(),
-  asin: asinSchema,
   wattage: z.coerce.number().int().nullable(), formFactor: z.string(),
   efficiencyRating: z.string(), pcie8pinConnectors: z.coerce.number().int().nullable(),
   pcie12pinConnectors: z.coerce.number().int().nullable(), pcie16pinConnectors: z.coerce.number().int().nullable(),
@@ -41,7 +41,6 @@ function PsuForm({ item, onSuccess }: { item: PsuWithPart | null; onSuccess: () 
       name: item.pcPart.name, manufacturer: item.pcPart.manufacturer ?? '',
       modelNumber: item.pcPart.modelNumber ?? '', yearReleased: item.pcPart.yearReleased,
       isActive: item.pcPart.isActive, streetPriceUsd: centsToUsd(item.pcPart.streetPriceCents),
-      asin: getAmazonAsin(item.pcPart.listings),
       wattage: item.wattage, formFactor: item.formFactor ?? '',
       efficiencyRating: item.efficiencyRating ?? '', pcie8pinConnectors: item.pcie8pinConnectors,
       pcie12pinConnectors: item.pcie12pinConnectors, pcie16pinConnectors: item.pcie16pinConnectors,
@@ -50,7 +49,6 @@ function PsuForm({ item, onSuccess }: { item: PsuWithPart | null; onSuccess: () 
     } : {
       name: '', manufacturer: '', modelNumber: '', yearReleased: null, isActive: true,
       streetPriceUsd: null,
-      asin: '',
       wattage: null, formFactor: '', efficiencyRating: '', pcie8pinConnectors: null,
       pcie12pinConnectors: null, pcie16pinConnectors: null, depthMm: null,
       modular: '', epsConnectors: null, fanSizeMm: null, isFanless: false,
@@ -110,14 +108,6 @@ function PsuForm({ item, onSuccess }: { item: PsuWithPart | null; onSuccess: () 
               </FormItem>
             )}
           />
-          <FormField control={form.control} name="asin"
-            render={({ field }) => (
-              <FormItem><FormLabel>Amazon ASIN</FormLabel>
-                <FormControl><Input {...field} placeholder="B0XXXXXXXX" maxLength={10} /></FormControl>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
         </div>
         <div className="flex gap-6">
           {([ ['isFanless','Fanless'], ['isActive','Active'] ] as [keyof PsuFormData, string][]).map(([name, label]) => (
@@ -162,7 +152,16 @@ export function PsuTable({ data }: { data: PsuWithPart[] }) {
     { accessorKey: 'modular', header: 'Modular', enableSorting: true },
     { id: 'streetPrice', accessorFn: (r) => r.pcPart.streetPriceCents, header: 'Street Price',
       cell: ({ getValue }) => formatUsd(getValue<number | null>()), enableSorting: true },
-    { id: 'asin', accessorFn: (r) => getAmazonAsin(r.pcPart.listings), header: 'ASIN', enableSorting: true },
+    {
+      id: 'listings', header: 'Listings',
+      cell: ({ row }) => (
+        <ListingsDialog
+          partId={row.original.pcPart.id}
+          partName={row.original.pcPart.name}
+          listings={row.original.pcPart.listings}
+        />
+      ),
+    },
     { id: 'isActive', accessorFn: (r) => r.pcPart.isActive, header: 'Active',
       cell: ({ getValue }) => <Badge variant={getValue<boolean>() ? 'default' : 'secondary'}>{getValue<boolean>() ? 'Active' : 'Inactive'}</Badge> },
     { id: 'actions', header: '', cell: ({ row }) => (

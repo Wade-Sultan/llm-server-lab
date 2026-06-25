@@ -3,7 +3,6 @@
 import { revalidatePath } from 'next/cache';
 import { db } from '@/lib/prisma';
 import { splitCommaList, usdToCents } from '@/lib/utils';
-import { upsertAmazonAsin } from '@/lib/listings';
 
 export interface CpuCoolerFormData {
   name: string;
@@ -12,7 +11,6 @@ export interface CpuCoolerFormData {
   yearReleased: number | null;
   isActive: boolean;
   streetPriceUsd: number | null;
-  asin: string;
   supportedSocketsInput: string;
   coolerType: string;
   maxTdpWatts: number | null;
@@ -39,7 +37,6 @@ const specificData = (d: CpuCoolerFormData) => ({
 
 export async function createCpuCooler(data: CpuCoolerFormData) {
   const created = await db.pcPart.create({ data: { ...partData(data), partType: 'cpucooler', cpuCooler: { create: specificData(data) } } });
-  await upsertAmazonAsin(created.id, data.asin);
   revalidatePath('/cpu-coolers');
 }
 
@@ -48,7 +45,6 @@ export async function updateCpuCooler(id: string, data: CpuCoolerFormData) {
     db.pcPart.update({ where: { id }, data: partData(data) }),
     db.cpuCooler.update({ where: { id }, data: specificData(data) }),
   ]);
-  await upsertAmazonAsin(id, data.asin);
   revalidatePath('/cpu-coolers');
 }
 

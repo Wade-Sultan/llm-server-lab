@@ -1,26 +1,42 @@
+'use server';
+
+import { revalidatePath } from 'next/cache';
 import { db } from '@/lib/prisma';
 
-export async function upsertAmazonAsin(partId: string, asin: string) {
-  const trimmed = asin.trim().toUpperCase();
-  const existing = await db.listing.findFirst({
-    where: { partId, listingType: 'amazon' },
-  });
+export interface AmazonListingFormData {
+  asin: string;
+  brand: string;
+}
 
-  if (!trimmed) {
-    if (existing) await db.listing.delete({ where: { id: existing.id } });
-    return;
-  }
-
-  if (existing) {
-    await db.amazonListing.update({ where: { id: existing.id }, data: { asin: trimmed } });
-  } else {
-    await db.listing.create({
-      data: {
-        partId,
-        listingType: 'amazon',
-        marketplace: 'amazon',
-        amazonListing: { create: { asin: trimmed } },
+export async function createAmazonListing(partId: string, data: AmazonListingFormData) {
+  await db.listing.create({
+    data: {
+      partId,
+      listingType: 'amazon',
+      marketplace: 'amazon',
+      amazonListing: {
+        create: {
+          asin: data.asin.trim().toUpperCase(),
+          brand: data.brand.trim() || null,
+        },
       },
-    });
-  }
+    },
+  });
+  revalidatePath('/', 'layout');
+}
+
+export async function updateAmazonListing(listingId: string, data: AmazonListingFormData) {
+  await db.amazonListing.update({
+    where: { id: listingId },
+    data: {
+      asin: data.asin.trim().toUpperCase(),
+      brand: data.brand.trim() || null,
+    },
+  });
+  revalidatePath('/', 'layout');
+}
+
+export async function deleteListing(listingId: string) {
+  await db.listing.delete({ where: { id: listingId } });
+  revalidatePath('/', 'layout');
 }

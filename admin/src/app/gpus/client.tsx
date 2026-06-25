@@ -20,7 +20,8 @@ import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Checkbox } from '@/components/ui/checkbox';
-import { joinCommaList, centsToUsd, formatUsd, asinSchema, getAmazonAsin } from '@/lib/utils';
+import { ListingsDialog } from '@/components/listings-dialog';
+import { joinCommaList, centsToUsd, formatUsd } from '@/lib/utils';
 import { createGpu, updateGpu, deleteGpu, type GpuFormData } from './actions';
 
 type GpuWithPart = Gpu & { pcPart: PcPart & { listings: (Listing & { amazonListing: AmazonListing | null })[] } };
@@ -32,7 +33,6 @@ const schema = z.object({
   yearReleased: z.coerce.number().int().nullable(),
   isActive: z.boolean(),
   streetPriceUsd: z.coerce.number().nullable(),
-  asin: asinSchema,
   brand: z.string(),
   chipset: z.string(),
   vramGb: z.coerce.number().int().nullable(),
@@ -67,7 +67,6 @@ function GpuForm({ item, onSuccess }: { item: GpuWithPart | null; onSuccess: () 
       yearReleased: item.pcPart.yearReleased,
       isActive: item.pcPart.isActive,
       streetPriceUsd: centsToUsd(item.pcPart.streetPriceCents),
-      asin: getAmazonAsin(item.pcPart.listings),
       brand: item.brand ?? '',
       chipset: item.chipset ?? '',
       vramGb: item.vramGb,
@@ -93,7 +92,6 @@ function GpuForm({ item, onSuccess }: { item: GpuWithPart | null; onSuccess: () 
     } : {
       name: '', manufacturer: '', modelNumber: '', yearReleased: null, isActive: true,
       streetPriceUsd: null,
-      asin: '',
       brand: '', chipset: '', vramGb: null, tdpWatts: null, lengthMm: null,
       pciePowerPins: '', recommendedPsuWatts: null, vramType: '', widthSlots: null,
       pcieGeneration: null, baseClockMhz: null, boostClockMhz: null, hasRayTracing: false,
@@ -174,15 +172,6 @@ function GpuForm({ item, onSuccess }: { item: GpuWithPart | null; onSuccess: () 
               </FormItem>
             )}
           />
-          <FormField control={form.control} name="asin"
-            render={({ field }) => (
-              <FormItem>
-                <FormLabel>Amazon ASIN</FormLabel>
-                <FormControl><Input {...field} placeholder="B0XXXXXXXX" maxLength={10} /></FormControl>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
         </div>
         <FormField control={form.control} name="supportedFeaturesInput"
           render={({ field }) => (
@@ -250,7 +239,14 @@ export function GpuTable({ data }: { data: GpuWithPart[] }) {
       cell: ({ getValue }) => formatUsd(getValue<number | null>()), enableSorting: true,
     },
     {
-      id: 'asin', accessorFn: (r) => getAmazonAsin(r.pcPart.listings), header: 'ASIN', enableSorting: true,
+      id: 'listings', header: 'Listings',
+      cell: ({ row }) => (
+        <ListingsDialog
+          partId={row.original.pcPart.id}
+          partName={row.original.pcPart.name}
+          listings={row.original.pcPart.listings}
+        />
+      ),
     },
     {
       id: 'isActive', accessorFn: (r) => r.pcPart.isActive, header: 'Active',

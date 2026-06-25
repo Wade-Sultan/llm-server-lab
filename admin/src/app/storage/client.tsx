@@ -16,7 +16,8 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
-import { centsToUsd, formatUsd, asinSchema, getAmazonAsin } from '@/lib/utils';
+import { ListingsDialog } from '@/components/listings-dialog';
+import { centsToUsd, formatUsd } from '@/lib/utils';
 import { createStorage, updateStorage, deleteStorage, type StorageFormData } from './actions';
 
 type StorageWithPart = Storage & { pcPart: PcPart & { listings: (Listing & { amazonListing: AmazonListing | null })[] } };
@@ -25,7 +26,6 @@ const schema = z.object({
   name: z.string().min(1), manufacturer: z.string(), modelNumber: z.string(),
   yearReleased: z.coerce.number().int().nullable(), isActive: z.boolean(),
   streetPriceUsd: z.coerce.number().nullable(),
-  asin: asinSchema,
   storageType: z.string(), formFactor: z.string(), interface: z.string(),
   capacityGb: z.coerce.number().int().nullable(), readSpeedMbps: z.coerce.number().int().nullable(),
   writeSpeedMbps: z.coerce.number().int().nullable(), hasDramCache: z.boolean(),
@@ -39,7 +39,6 @@ function StorageForm({ item, onSuccess }: { item: StorageWithPart | null; onSucc
       name: item.pcPart.name, manufacturer: item.pcPart.manufacturer ?? '',
       modelNumber: item.pcPart.modelNumber ?? '', yearReleased: item.pcPart.yearReleased,
       isActive: item.pcPart.isActive, streetPriceUsd: centsToUsd(item.pcPart.streetPriceCents),
-      asin: getAmazonAsin(item.pcPart.listings),
       storageType: item.storageType ?? '',
       formFactor: item.formFactor ?? '', interface: item.interface ?? '',
       capacityGb: item.capacityGb, readSpeedMbps: item.readSpeedMbps,
@@ -48,7 +47,6 @@ function StorageForm({ item, onSuccess }: { item: StorageWithPart | null; onSucc
     } : {
       name: '', manufacturer: '', modelNumber: '', yearReleased: null, isActive: true,
       streetPriceUsd: null,
-      asin: '',
       storageType: '', formFactor: '', interface: '', capacityGb: null,
       readSpeedMbps: null, writeSpeedMbps: null, hasDramCache: false,
       enduranceTbw: null, rpm: null,
@@ -107,14 +105,6 @@ function StorageForm({ item, onSuccess }: { item: StorageWithPart | null; onSucc
               </FormItem>
             )}
           />
-          <FormField control={form.control} name="asin"
-            render={({ field }) => (
-              <FormItem><FormLabel>Amazon ASIN</FormLabel>
-                <FormControl><Input {...field} placeholder="B0XXXXXXXX" maxLength={10} /></FormControl>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
         </div>
         <div className="flex gap-6">
           {([ ['hasDramCache','DRAM Cache'], ['isActive','Active'] ] as [keyof StorageFormData, string][]).map(([name, label]) => (
@@ -159,7 +149,16 @@ export function StorageTable({ data }: { data: StorageWithPart[] }) {
     { accessorKey: 'interface', header: 'Interface', enableSorting: true },
     { id: 'streetPrice', accessorFn: (r) => r.pcPart.streetPriceCents, header: 'Street Price',
       cell: ({ getValue }) => formatUsd(getValue<number | null>()), enableSorting: true },
-    { id: 'asin', accessorFn: (r) => getAmazonAsin(r.pcPart.listings), header: 'ASIN', enableSorting: true },
+    {
+      id: 'listings', header: 'Listings',
+      cell: ({ row }) => (
+        <ListingsDialog
+          partId={row.original.pcPart.id}
+          partName={row.original.pcPart.name}
+          listings={row.original.pcPart.listings}
+        />
+      ),
+    },
     { id: 'isActive', accessorFn: (r) => r.pcPart.isActive, header: 'Active',
       cell: ({ getValue }) => <Badge variant={getValue<boolean>() ? 'default' : 'secondary'}>{getValue<boolean>() ? 'Active' : 'Inactive'}</Badge> },
     { id: 'actions', header: '', cell: ({ row }) => (

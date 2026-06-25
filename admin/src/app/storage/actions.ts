@@ -3,7 +3,6 @@
 import { revalidatePath } from 'next/cache';
 import { db } from '@/lib/prisma';
 import { usdToCents } from '@/lib/utils';
-import { upsertAmazonAsin } from '@/lib/listings';
 
 export interface StorageFormData {
   name: string;
@@ -12,7 +11,6 @@ export interface StorageFormData {
   yearReleased: number | null;
   isActive: boolean;
   streetPriceUsd: number | null;
-  asin: string;
   storageType: string;
   formFactor: string;
   interface: string;
@@ -39,7 +37,6 @@ const specificData = (d: StorageFormData) => ({
 
 export async function createStorage(data: StorageFormData) {
   const created = await db.pcPart.create({ data: { ...partData(data), partType: 'storage', storage: { create: specificData(data) } } });
-  await upsertAmazonAsin(created.id, data.asin);
   revalidatePath('/storage');
 }
 
@@ -48,7 +45,6 @@ export async function updateStorage(id: string, data: StorageFormData) {
     db.pcPart.update({ where: { id }, data: partData(data) }),
     db.storage.update({ where: { id }, data: specificData(data) }),
   ]);
-  await upsertAmazonAsin(id, data.asin);
   revalidatePath('/storage');
 }
 

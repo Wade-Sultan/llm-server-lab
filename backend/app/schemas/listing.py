@@ -73,6 +73,7 @@ class ListingsPublic(BaseModel):
 
 class AmazonListingBase(ListingBase):
     asin: str = Field(..., max_length=32)
+    brand: Optional[str] = Field(None, max_length=100, description="Vendor brand, e.g. ASUS, MSI")
     is_prime: Optional[bool] = None
     seller_name: Optional[str] = None
     affiliate_tag: Optional[str] = None
@@ -87,6 +88,7 @@ class AmazonListingPublic(ListingPublic):
     """Schema for returning Amazon listing data."""
 
     asin: str
+    brand: Optional[str] = None
     is_prime: Optional[bool] = None
     seller_name: Optional[str] = None
     affiliate_tag: Optional[str] = None

@@ -59,6 +59,7 @@ model AmazonListing {
   id           String  @id @db.Uuid
   listing      Listing @relation(fields: [id], references: [id], onDelete: Cascade)
   asin         String
+  brand        String?  @map("brand")
   isPrime      Boolean? @map("is_prime")
   sellerName   String?  @map("seller_name")
   affiliateTag String?  @map("affiliate_tag")

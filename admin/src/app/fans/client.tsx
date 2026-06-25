@@ -16,7 +16,8 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
-import { centsToUsd, formatUsd, asinSchema, getAmazonAsin } from '@/lib/utils';
+import { ListingsDialog } from '@/components/listings-dialog';
+import { centsToUsd, formatUsd } from '@/lib/utils';
 import { createFan, updateFan, deleteFan, type FanFormData } from './actions';
 
 type FanWithPart = Fan & { pcPart: PcPart & { listings: (Listing & { amazonListing: AmazonListing | null })[] } };
@@ -25,7 +26,6 @@ const schema = z.object({
   name: z.string().min(1), manufacturer: z.string(), modelNumber: z.string(),
   yearReleased: z.coerce.number().int().nullable(), isActive: z.boolean(),
   streetPriceUsd: z.coerce.number().nullable(),
-  asin: asinSchema,
   sizeMm: z.coerce.number().int().nullable(), maxRpm: z.coerce.number().int().nullable(),
   airflowCfm: z.coerce.number().nullable(), noiseDba: z.coerce.number().nullable(),
   isPwm: z.boolean(), hasRgb: z.boolean(), bearingType: z.string(),
@@ -39,7 +39,6 @@ function FanForm({ item, onSuccess }: { item: FanWithPart | null; onSuccess: () 
       name: item.pcPart.name, manufacturer: item.pcPart.manufacturer ?? '',
       modelNumber: item.pcPart.modelNumber ?? '', yearReleased: item.pcPart.yearReleased,
       isActive: item.pcPart.isActive, streetPriceUsd: centsToUsd(item.pcPart.streetPriceCents),
-      asin: getAmazonAsin(item.pcPart.listings),
       sizeMm: item.sizeMm, maxRpm: item.maxRpm,
       airflowCfm: item.airflowCfm, noiseDba: item.noiseDba, isPwm: item.isPwm,
       hasRgb: item.hasRgb, bearingType: item.bearingType ?? '', isStaticPressure: item.isStaticPressure,
@@ -47,7 +46,6 @@ function FanForm({ item, onSuccess }: { item: FanWithPart | null; onSuccess: () 
     } : {
       name: '', manufacturer: '', modelNumber: '', yearReleased: null, isActive: true,
       streetPriceUsd: null,
-      asin: '',
       sizeMm: null, maxRpm: null, airflowCfm: null, noiseDba: null,
       isPwm: false, hasRgb: false, bearingType: '', isStaticPressure: false, packCount: null,
     },
@@ -103,14 +101,6 @@ function FanForm({ item, onSuccess }: { item: FanWithPart | null; onSuccess: () 
               </FormItem>
             )}
           />
-          <FormField control={form.control} name="asin"
-            render={({ field }) => (
-              <FormItem><FormLabel>Amazon ASIN</FormLabel>
-                <FormControl><Input {...field} placeholder="B0XXXXXXXX" maxLength={10} /></FormControl>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
         </div>
         <div className="flex gap-6">
           {([ ['isPwm','PWM'], ['hasRgb','RGB'], ['isStaticPressure','Static Pressure'], ['isActive','Active'] ] as [keyof FanFormData, string][]).map(([name, label]) => (
@@ -155,7 +145,16 @@ export function FanTable({ data }: { data: FanWithPart[] }) {
     { accessorKey: 'noiseDba', header: 'Noise (dBA)', enableSorting: true },
     { id: 'streetPrice', accessorFn: (r) => r.pcPart.streetPriceCents, header: 'Street Price',
       cell: ({ getValue }) => formatUsd(getValue<number | null>()), enableSorting: true },
-    { id: 'asin', accessorFn: (r) => getAmazonAsin(r.pcPart.listings), header: 'ASIN', enableSorting: true },
+    {
+      id: 'listings', header: 'Listings',
+      cell: ({ row }) => (
+        <ListingsDialog
+          partId={row.original.pcPart.id}
+          partName={row.original.pcPart.name}
+          listings={row.original.pcPart.listings}
+        />
+      ),
+    },
     { id: 'isActive', accessorFn: (r) => r.pcPart.isActive, header: 'Active',
       cell: ({ getValue }) => <Badge variant={getValue<boolean>() ? 'default' : 'secondary'}>{getValue<boolean>() ? 'Active' : 'Inactive'}</Badge> },
     { id: 'actions', header: '', cell: ({ row }) => (

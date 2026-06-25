@@ -16,7 +16,8 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
-import { centsToUsd, formatUsd, asinSchema, getAmazonAsin } from '@/lib/utils';
+import { ListingsDialog } from '@/components/listings-dialog';
+import { centsToUsd, formatUsd } from '@/lib/utils';
 import { createMotherboard, updateMotherboard, deleteMotherboard, type MotherboardFormData } from './actions';
 
 type MoboWithPart = Motherboard & { pcPart: PcPart & { listings: (Listing & { amazonListing: AmazonListing | null })[] } };
@@ -25,7 +26,6 @@ const schema = z.object({
   name: z.string().min(1), manufacturer: z.string(), modelNumber: z.string(),
   yearReleased: z.coerce.number().int().nullable(), isActive: z.boolean(),
   streetPriceUsd: z.coerce.number().nullable(),
-  asin: asinSchema,
   socket: z.string(), formFactor: z.string(), ddrGeneration: z.string(),
   memorySlots: z.coerce.number().int().nullable(), hasWifi: z.boolean(),
   m2Slots: z.coerce.number().int().nullable(), m2PcieGen: z.coerce.number().int().nullable(),
@@ -43,7 +43,6 @@ function MotherboardForm({ item, onSuccess }: { item: MoboWithPart | null; onSuc
       name: item.pcPart.name, manufacturer: item.pcPart.manufacturer ?? '', modelNumber: item.pcPart.modelNumber ?? '',
       yearReleased: item.pcPart.yearReleased, isActive: item.pcPart.isActive,
       streetPriceUsd: centsToUsd(item.pcPart.streetPriceCents),
-      asin: getAmazonAsin(item.pcPart.listings),
       socket: item.socket ?? '', formFactor: item.formFactor ?? '', ddrGeneration: item.ddrGeneration ?? '',
       memorySlots: item.memorySlots, hasWifi: item.hasWifi, m2Slots: item.m2Slots, m2PcieGen: item.m2PcieGen,
       chipset: item.chipset ?? '', maxMemoryGb: item.maxMemoryGb, sataPorts: item.sataPorts,
@@ -52,7 +51,6 @@ function MotherboardForm({ item, onSuccess }: { item: MoboWithPart | null; onSuc
     } : {
       name: '', manufacturer: '', modelNumber: '', yearReleased: null, isActive: true,
       streetPriceUsd: null,
-      asin: '',
       socket: '', formFactor: '', ddrGeneration: '', memorySlots: null, hasWifi: false,
       m2Slots: null, m2PcieGen: null, chipset: '', maxMemoryGb: null, sataPorts: null,
       pcieX16Slots: null, pcieGeneration: null, hasBluetooth: false, usbTypeACount: null,
@@ -115,14 +113,6 @@ function MotherboardForm({ item, onSuccess }: { item: MoboWithPart | null; onSuc
               </FormItem>
             )}
           />
-          <FormField control={form.control} name="asin"
-            render={({ field }) => (
-              <FormItem><FormLabel>Amazon ASIN</FormLabel>
-                <FormControl><Input {...field} placeholder="B0XXXXXXXX" maxLength={10} /></FormControl>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
         </div>
         <div className="flex gap-6">
           {([ ['hasWifi', 'Wi-Fi'], ['hasBluetooth', 'Bluetooth'], ['isActive', 'Active'] ] as [keyof MotherboardFormData, string][]).map(([name, label]) => (
@@ -169,7 +159,16 @@ export function MotherboardTable({ data }: { data: MoboWithPart[] }) {
     { accessorKey: 'chipset', header: 'Chipset', enableSorting: true },
     { id: 'streetPrice', accessorFn: (r) => r.pcPart.streetPriceCents, header: 'Street Price',
       cell: ({ getValue }) => formatUsd(getValue<number | null>()), enableSorting: true },
-    { id: 'asin', accessorFn: (r) => getAmazonAsin(r.pcPart.listings), header: 'ASIN', enableSorting: true },
+    {
+      id: 'listings', header: 'Listings',
+      cell: ({ row }) => (
+        <ListingsDialog
+          partId={row.original.pcPart.id}
+          partName={row.original.pcPart.name}
+          listings={row.original.pcPart.listings}
+        />
+      ),
+    },
     { id: 'isActive', accessorFn: (r) => r.pcPart.isActive, header: 'Active',
       cell: ({ getValue }) => <Badge variant={getValue<boolean>() ? 'default' : 'secondary'}>{getValue<boolean>() ? 'Active' : 'Inactive'}</Badge> },
     { id: 'actions', header: '', cell: ({ row }) => (

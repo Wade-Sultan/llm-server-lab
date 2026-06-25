@@ -16,7 +16,8 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
-import { joinCommaList, centsToUsd, formatUsd, asinSchema, getAmazonAsin } from '@/lib/utils';
+import { ListingsDialog } from '@/components/listings-dialog';
+import { joinCommaList, centsToUsd, formatUsd } from '@/lib/utils';
 import { createCase, updateCase, deleteCase, type CaseFormData } from './actions';
 
 type CaseWithPart = PcCase & { pcPart: PcPart & { listings: (Listing & { amazonListing: AmazonListing | null })[] } };
@@ -25,7 +26,6 @@ const schema = z.object({
   name: z.string().min(1), manufacturer: z.string(), modelNumber: z.string(),
   yearReleased: z.coerce.number().int().nullable(), isActive: z.boolean(),
   streetPriceUsd: z.coerce.number().nullable(),
-  asin: asinSchema,
   supportedMoboFormFactorsInput: z.string(), maxGpuLengthMm: z.coerce.number().int().nullable(),
   maxCoolerHeightMm: z.coerce.number().int().nullable(), maxRadiatorFrontMm: z.coerce.number().int().nullable(),
   maxRadiatorTopMm: z.coerce.number().int().nullable(), maxPsuLengthMm: z.coerce.number().int().nullable(),
@@ -46,7 +46,6 @@ function CaseForm({ item, onSuccess }: { item: CaseWithPart | null; onSuccess: (
       modelNumber: item.pcPart.modelNumber ?? '', yearReleased: item.pcPart.yearReleased,
       isActive: item.pcPart.isActive,
       streetPriceUsd: centsToUsd(item.pcPart.streetPriceCents),
-      asin: getAmazonAsin(item.pcPart.listings),
       supportedMoboFormFactorsInput: joinCommaList(item.supportedMoboFormFactors),
       maxGpuLengthMm: item.maxGpuLengthMm, maxCoolerHeightMm: item.maxCoolerHeightMm,
       maxRadiatorFrontMm: item.maxRadiatorFrontMm, maxRadiatorTopMm: item.maxRadiatorTopMm,
@@ -59,7 +58,6 @@ function CaseForm({ item, onSuccess }: { item: CaseWithPart | null; onSuccess: (
     } : {
       name: '', manufacturer: '', modelNumber: '', yearReleased: null, isActive: true,
       streetPriceUsd: null,
-      asin: '',
       supportedMoboFormFactorsInput: '', maxGpuLengthMm: null, maxCoolerHeightMm: null,
       maxRadiatorFrontMm: null, maxRadiatorTopMm: null, maxPsuLengthMm: null,
       includedFanCount: null, chamberCount: null, frontPanelMesh: false, color: '', size: '',
@@ -127,14 +125,6 @@ function CaseForm({ item, onSuccess }: { item: CaseWithPart | null; onSuccess: (
               </FormItem>
             )}
           />
-          <FormField control={form.control} name="asin"
-            render={({ field }) => (
-              <FormItem><FormLabel>Amazon ASIN</FormLabel>
-                <FormControl><Input {...field} placeholder="B0XXXXXXXX" maxLength={10} /></FormControl>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
         </div>
         <FormField control={form.control} name="supportedMoboFormFactorsInput"
           render={({ field }) => (
@@ -188,7 +178,16 @@ export function CaseTable({ data }: { data: CaseWithPart[] }) {
     { accessorKey: 'maxCoolerHeightMm', header: 'Max Cooler (mm)', enableSorting: true },
     { id: 'streetPrice', accessorFn: (r) => r.pcPart.streetPriceCents, header: 'Street Price',
       cell: ({ getValue }) => formatUsd(getValue<number | null>()), enableSorting: true },
-    { id: 'asin', accessorFn: (r) => getAmazonAsin(r.pcPart.listings), header: 'ASIN', enableSorting: true },
+    {
+      id: 'listings', header: 'Listings',
+      cell: ({ row }) => (
+        <ListingsDialog
+          partId={row.original.pcPart.id}
+          partName={row.original.pcPart.name}
+          listings={row.original.pcPart.listings}
+        />
+      ),
+    },
     { id: 'isActive', accessorFn: (r) => r.pcPart.isActive, header: 'Active',
       cell: ({ getValue }) => <Badge variant={getValue<boolean>() ? 'default' : 'secondary'}>{getValue<boolean>() ? 'Active' : 'Inactive'}</Badge> },
     { id: 'actions', header: '', cell: ({ row }) => (

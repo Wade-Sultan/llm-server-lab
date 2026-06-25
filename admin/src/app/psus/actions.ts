@@ -3,7 +3,6 @@
 import { revalidatePath } from 'next/cache';
 import { db } from '@/lib/prisma';
 import { usdToCents } from '@/lib/utils';
-import { upsertAmazonAsin } from '@/lib/listings';
 
 export interface PsuFormData {
   name: string;
@@ -12,7 +11,6 @@ export interface PsuFormData {
   yearReleased: number | null;
   isActive: boolean;
   streetPriceUsd: number | null;
-  asin: string;
   wattage: number | null;
   formFactor: string;
   efficiencyRating: string;
@@ -42,7 +40,6 @@ const specificData = (d: PsuFormData) => ({
 
 export async function createPsu(data: PsuFormData) {
   const created = await db.pcPart.create({ data: { ...partData(data), partType: 'psu', psu: { create: specificData(data) } } });
-  await upsertAmazonAsin(created.id, data.asin);
   revalidatePath('/psus');
 }
 
@@ -51,7 +48,6 @@ export async function updatePsu(id: string, data: PsuFormData) {
     db.pcPart.update({ where: { id }, data: partData(data) }),
     db.psu.update({ where: { id }, data: specificData(data) }),
   ]);
-  await upsertAmazonAsin(id, data.asin);
   revalidatePath('/psus');
 }
 

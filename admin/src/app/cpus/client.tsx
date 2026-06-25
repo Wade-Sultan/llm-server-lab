@@ -38,7 +38,8 @@ import {
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Checkbox } from '@/components/ui/checkbox';
-import { joinCommaList, centsToUsd, formatUsd, asinSchema, getAmazonAsin } from '@/lib/utils';
+import { ListingsDialog } from '@/components/listings-dialog';
+import { joinCommaList, centsToUsd, formatUsd } from '@/lib/utils';
 import { createCpu, updateCpu, deleteCpu, type CpuFormData } from './actions';
 
 type CpuWithPart = Cpu & { pcPart: PcPart & { listings: (Listing & { amazonListing: AmazonListing | null })[] } };
@@ -50,7 +51,6 @@ const schema = z.object({
   yearReleased: z.coerce.number().int().nullable(),
   isActive: z.boolean(),
   streetPriceUsd: z.coerce.number().nullable(),
-  asin: asinSchema,
   brand: z.string(),
   socket: z.string(),
   tdpWatts: z.coerce.number().int().nullable(),
@@ -85,7 +85,6 @@ function CpuForm({
           yearReleased: item.pcPart.yearReleased,
           isActive: item.pcPart.isActive,
           streetPriceUsd: centsToUsd(item.pcPart.streetPriceCents),
-          asin: getAmazonAsin(item.pcPart.listings),
           brand: item.brand ?? '',
           socket: item.socket ?? '',
           tdpWatts: item.tdpWatts,
@@ -111,7 +110,6 @@ function CpuForm({
           yearReleased: null,
           isActive: true,
           streetPriceUsd: null,
-          asin: '',
           brand: '',
           socket: '',
           tdpWatts: null,
@@ -204,19 +202,6 @@ function CpuForm({
                 <FormLabel>Street Price (USD)</FormLabel>
                 <FormControl>
                   <Input type="number" step="0.01" {...field} value={field.value ?? ''} onChange={e => field.onChange(e.target.value === '' ? null : Number(e.target.value))} />
-                </FormControl>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
-          <FormField
-            control={form.control}
-            name="asin"
-            render={({ field }) => (
-              <FormItem>
-                <FormLabel>Amazon ASIN</FormLabel>
-                <FormControl>
-                  <Input {...field} placeholder="B0XXXXXXXX" maxLength={10} />
                 </FormControl>
                 <FormMessage />
               </FormItem>
@@ -474,10 +459,14 @@ export function CpuTable({ data }: { data: CpuWithPart[] }) {
       enableSorting: true,
     },
     {
-      id: 'asin',
-      accessorFn: (row) => getAmazonAsin(row.pcPart.listings),
-      header: 'ASIN',
-      enableSorting: true,
+      id: 'listings', header: 'Listings',
+      cell: ({ row }) => (
+        <ListingsDialog
+          partId={row.original.pcPart.id}
+          partName={row.original.pcPart.name}
+          listings={row.original.pcPart.listings}
+        />
+      ),
     },
     {
       id: 'isActive',

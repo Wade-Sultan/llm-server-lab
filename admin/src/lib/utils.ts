@@ -41,8 +41,5 @@ export function formatUsd(cents: number | null): string {
 
 export const asinSchema = z
   .string()
-  .refine((v) => v === '' || /^[A-Z0-9]{10}$/i.test(v), { message: 'ASIN must be 10 characters (letters/numbers)' });
-
-export function getAmazonAsin(listings: { listingType: string; amazonListing: { asin: string } | null }[]): string {
-  return listings.find((l) => l.listingType === 'amazon')?.amazonListing?.asin ?? '';
-}
+  .min(1, 'ASIN is required')
+  .refine((v) => /^[A-Z0-9]{10}$/i.test(v), { message: 'ASIN must be 10 characters (letters/numbers)' });

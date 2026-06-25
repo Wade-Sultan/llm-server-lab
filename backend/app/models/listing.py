@@ -48,6 +48,8 @@ class AmazonListing(Listing):
     id = Column(UUID(as_uuid=True), ForeignKey("listings.id", ondelete="CASCADE"),
                 primary_key=True)
     asin = Column(String(32), nullable=False, index=True)
+    brand = Column(String(100), nullable=True,
+                   comment="Vendor brand for this listing, e.g. ASUS, MSI (for GPU chipset variants)")
     is_prime = Column(Boolean, nullable=True)
     seller_name = Column(String(255), nullable=True)
     affiliate_tag = Column(String(100), nullable=True,

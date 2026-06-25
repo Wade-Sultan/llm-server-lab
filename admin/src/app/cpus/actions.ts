@@ -3,7 +3,6 @@
 import { revalidatePath } from 'next/cache';
 import { db } from '@/lib/prisma';
 import { splitCommaList, usdToCents } from '@/lib/utils';
-import { upsertAmazonAsin } from '@/lib/listings';
 
 export interface CpuFormData {
   name: string;
@@ -12,7 +11,6 @@ export interface CpuFormData {
   yearReleased: number | null;
   isActive: boolean;
   streetPriceUsd: number | null;
-  asin: string;
   brand: string;
   socket: string;
   tdpWatts: number | null;
@@ -63,7 +61,6 @@ export async function createCpu(data: CpuFormData) {
       },
     },
   });
-  await upsertAmazonAsin(created.id, data.asin);
   revalidatePath('/cpus');
 }
 
@@ -103,7 +100,6 @@ export async function updateCpu(id: string, data: CpuFormData) {
       },
     }),
   ]);
-  await upsertAmazonAsin(id, data.asin);
   revalidatePath('/cpus');
 }
 
