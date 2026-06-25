@@ -32,6 +32,8 @@ images:
   - 'us-central1-docker.pkg.dev/$PROJECT_ID/palladium/admin:$BUILD_ID'
   - 'us-central1-docker.pkg.dev/$PROJECT_ID/palladium/admin:latest'
 
+serviceAccount: 'projects/$PROJECT_ID/serviceAccounts/palladium-admin@$PROJECT_ID.iam.gserviceaccount.com'
+
 options:
   logging: CLOUD_LOGGING_ONLY
 
