@@ -3,13 +3,15 @@
 import { useState } from "react"
 import { Input } from "@/components/ui/input"
 
+import "lite-youtube-embed/src/lite-yt-embed.js"
+import "lite-youtube-embed/src/lite-yt-embed.css"
+
 interface VideoData {
   videoId: string
   title: string
 }
 
 const videos: VideoData[] = [
-  { videoId: "dQw4w9WgXcQ", title: "Rick Astley" },
   { videoId: "s1fxZ-VWs2U", title: "PC Building Guide 2024" },
   { videoId: "gNMQFT2HAiY", title: "How to install Windows 11" },
   { videoId: "Ogd1HT9v4Rs", title: "Intel vs AMD CPU" },
@@ -24,14 +26,10 @@ function VideoCard({ videoId, title }: VideoCardProps) {
   return (
     <div className="flex flex-col gap-2">
       <div className="flex justify-center">
-        <iframe
-          width="100%"
-          style={{ aspectRatio: "16/9" }}
-          src={`https://www.youtube.com/embed/${videoId}`}
+        {/* @ts-expect-error lite-youtube is a custom element */}
+        <lite-youtube
+          videoid={videoId}
           title={title}
-          frameBorder="0"
-          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-          allowFullScreen
           className="rounded-lg shadow-lg"
         />
       </div>
