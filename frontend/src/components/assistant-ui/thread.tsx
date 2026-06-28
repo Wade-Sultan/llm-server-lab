@@ -63,7 +63,7 @@ export const Thread: FC = () => {
           <ThreadScrollToBottom />
           <Composer />
           <p className="text-center text-xs text-muted-foreground">
-            Palladium is powered by AI (Gemma 4) and can make mistakes.
+            Palladium is powered by AI (Gemma 4) and can make mistakes. Compatability is checked using a database without AI.
           </p>
         </ThreadPrimitive.ViewportFooter>
       </ThreadPrimitive.Viewport>
