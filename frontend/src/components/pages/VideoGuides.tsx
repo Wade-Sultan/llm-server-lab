@@ -31,6 +31,7 @@ function VideoCard({ videoId, title }: VideoCardProps) {
           videoid={videoId}
           title={title}
           className="rounded-lg shadow-lg"
+          style={{ width: "100%" }}
         />
       </div>
       <p className="text-center text-sm font-medium text-muted-foreground truncate px-2">

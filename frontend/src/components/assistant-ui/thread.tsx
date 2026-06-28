@@ -62,6 +62,9 @@ export const Thread: FC = () => {
         <ThreadPrimitive.ViewportFooter className="aui-thread-viewport-footer sticky bottom-0 mx-auto mt-auto flex w-full max-w-(--thread-max-width) flex-col gap-4 overflow-visible rounded-t-(--composer-radius) bg-background pb-4 md:pb-6">
           <ThreadScrollToBottom />
           <Composer />
+          <p className="text-center text-xs text-muted-foreground">
+            Palladium is powered by AI (Gemma 4) and can make mistakes.
+          </p>
         </ThreadPrimitive.ViewportFooter>
       </ThreadPrimitive.Viewport>
     </ThreadPrimitive.Root>
