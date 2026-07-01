@@ -9,27 +9,29 @@ datasource db {
 }
 
 model PcPart {
-  id           String   @id @default(uuid()) @db.Uuid
-  name         String
-  manufacturer String?
-  modelNumber  String?  @map("model_number")
-  yearReleased Int?     @map("year_released")
-  partType     String   @map("part_type")
-  isActive     Boolean  @default(true) @map("is_active")
-  streetPriceCents Int? @map("street_price_cents")
-  createdAt    DateTime @default(now()) @map("created_at")
-  updatedAt    DateTime @updatedAt @map("updated_at")
+  id               String   @id @default(uuid()) @db.Uuid
+  name             String
+  manufacturer     String?
+  modelNumber      String?  @map("model_number")
+  yearReleased     Int?     @map("year_released")
+  partType         String   @map("part_type")
+  isActive         Boolean  @default(true) @map("is_active")
+  streetPriceCents Int?     @map("street_price_cents")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
 
-  cpu         Cpu?
-  gpu         Gpu?
-  motherboard Motherboard?
-  ram         Ram?
-  storage     Storage?
-  psu         Psu?
-  pcCase      PcCase?
-  cpuCooler   CpuCooler?
-  fan         Fan?
-  listings    Listing[]
+  cpu             Cpu?
+  gpu             Gpu?
+  motherboard     Motherboard?
+  ram             Ram?
+  storage         Storage?
+  psu             Psu?
+  pcCase          PcCase?
+  cpuCooler       CpuCooler?
+  fan             Fan?
+  listings        Listing[]
+  referenceBuilds ReferenceBuildPart[]
+  buildParts      BuildPart[]
 
   @@map("pc_parts")
 }
@@ -59,10 +61,10 @@ model AmazonListing {
   id           String  @id @db.Uuid
   listing      Listing @relation(fields: [id], references: [id], onDelete: Cascade)
   asin         String
-  brand        String?  @map("brand")
+  brand        String? @map("brand")
   isPrime      Boolean? @map("is_prime")
-  sellerName   String?  @map("seller_name")
-  affiliateTag String?  @map("affiliate_tag")
+  sellerName   String? @map("seller_name")
+  affiliateTag String? @map("affiliate_tag")
 
   @@map("amazon_listings")
 }
@@ -252,6 +254,44 @@ model Fan {
   @@map("fans")
 }
 
+// pc_builds and pc_build_parts are managed by the backend (Alembic).
+// The role and status fields use native Postgres enums; Prisma treats them as String.
+model PCBuild {
+  id                   String   @id @default(uuid()) @db.Uuid
+  name                 String   @default("Untitled Build")
+  description          String?
+  ownerId              String?  @map("owner_id") @db.Uuid
+  status               String   @default("draft")
+  totalPriceCents      Int?     @map("total_price_cents")
+  useCases             String[] @map("use_cases")
+  preferences          Json?
+  questionnaireAnswers Json?    @map("questionnaire_answers")
+  createdAt            DateTime @default(now()) @map("created_at")
+  updatedAt            DateTime @updatedAt @map("updated_at")
+
+  parts          BuildPart[]
+  referenceBuild ReferenceBuild?
+
+  @@map("pc_builds")
+}
+
+model BuildPart {
+  id                String   @id @default(uuid()) @db.Uuid
+  buildId           String   @map("build_id") @db.Uuid
+  partId            String?  @map("part_id") @db.Uuid
+  role              String
+  requiredComponent Boolean  @default(false) @map("required_component")
+  priceAtBuild      Int?     @map("price_at_build")
+  selectionReason   String?  @map("selection_reason")
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  build PCBuild @relation(fields: [buildId], references: [id], onDelete: Cascade)
+  part  PcPart? @relation(fields: [partId], references: [id])
+
+  @@unique([buildId, role], map: "uq_pc_build_parts_build_role")
+  @@map("pc_build_parts")
+}
+
 model ReferenceBuild {
   id          String   @id @default(uuid()) @db.Uuid
   buildKey    String   @unique @map("build_key")
@@ -259,10 +299,29 @@ model ReferenceBuild {
   description String?
   totalApprox Int?     @map("total_approx")
   isActive    Boolean  @default(true) @map("is_active")
+  pcBuildId   String?  @unique @map("pc_build_id") @db.Uuid
   createdAt   DateTime @default(now()) @map("created_at")
   updatedAt   DateTime @updatedAt @map("updated_at")
 
+  pcBuild PCBuild?             @relation(fields: [pcBuildId], references: [id])
+  parts   ReferenceBuildPart[]
+
   @@map("reference_builds")
+}
+
+model ReferenceBuildPart {
+  id                   String    @id @default(uuid()) @db.Uuid
+  buildId              String    @map("build_id") @db.Uuid
+  partId               String    @map("part_id") @db.Uuid
+  component            String
+  sortOrder            Int       @default(0) @map("sort_order")
+  approxPrice          Int       @map("approx_price")
+  approxPriceUpdatedAt DateTime? @map("approx_price_updated_at")
+
+  build ReferenceBuild @relation(fields: [buildId], references: [id], onDelete: Cascade)
+  part  PcPart         @relation(fields: [partId], references: [id])
+
+  @@map("reference_build_parts")
 }
 
 model User {
