@@ -2,12 +2,14 @@
 
 import { revalidatePath } from 'next/cache';
 import { db } from '@/lib/prisma';
+import type { BuildComponentRole } from '@prisma/client';
 
 export interface ReferenceBuildFormData {
   buildKey: string;
   label: string;
   description: string;
   isActive: boolean;
+  maxResolution: number | null;
   cpuId: string | null;
   motherboardId: string | null;
   ramId: string | null;
@@ -19,9 +21,9 @@ export interface ReferenceBuildFormData {
   fanIds: string[];
 }
 
-type PartEntry = { partId: string; component: string };
+type PartEntry = { partId: string; component: BuildComponentRole };
 
-const REQUIRED: Record<string, boolean> = {
+const REQUIRED: Record<BuildComponentRole, boolean> = {
   cpu: true, cpucooler: true, motherboard: true,
   ram: true, storage: true, psu: true, case: true,
   gpu: false, fan: false,
@@ -84,6 +86,7 @@ export async function createReferenceBuild(data: ReferenceBuildFormData) {
       label: data.label,
       description: data.description || null,
       isActive: data.isActive,
+      maxResolution: data.maxResolution,
       totalApprox,
       pcBuildId: pcBuild.id,
       parts: {
@@ -145,6 +148,7 @@ export async function updateReferenceBuild(id: string, data: ReferenceBuildFormD
         label: data.label,
         description: data.description || null,
         isActive: data.isActive,
+        maxResolution: data.maxResolution,
         totalApprox,
         parts: {
           deleteMany: {},

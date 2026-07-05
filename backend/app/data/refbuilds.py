@@ -13,6 +13,7 @@ class Build(TypedDict):
     label: str
     description: str
     total_approx: int
+    max_resolution: int | None  # 1080 / 1440 / 2160 — vertical pixel floor this build satisfies
     parts: list[dict[str, Any]]  # Part fields + component-type spec fields for seeding
 
 
@@ -40,6 +41,7 @@ BUILDS: dict[str, Build] = {
         "label": "Entry level 1080p",
         "description": "Solid 1080p performance for popular titles without breaking the bank.",
         "total_approx": 1100,
+        "max_resolution": 1080,
         "parts": [
             {
                 "component": "CPU", "brand": "AMD", "model": "Ryzen 5 5500", "approx_price": 85,
@@ -87,6 +89,7 @@ BUILDS: dict[str, Build] = {
         "label": "Competitive 1080p",
         "description": "240+ FPS at 1080p from most popular FPS titles.",
         "total_approx": 2700,
+        "max_resolution": 1080,
         "parts": [
             {
                 "component": "CPU", "brand": "AMD", "model": "Ryzen 9 9950X3D", "approx_price": 550,
@@ -134,6 +137,7 @@ BUILDS: dict[str, Build] = {
         "label": "Mid level 1440p",
         "description": "Solid 1440p performance for popular titles at high settings.",
         "total_approx": 2000,
+        "max_resolution": 1440,
         "parts": [
             {
                 "component": "CPU", "brand": "AMD", "model": "Ryzen 5 7600X", "approx_price": 180,
@@ -181,6 +185,7 @@ BUILDS: dict[str, Build] = {
         "label": "Upper mid level 1440p",
         "description": "Solid 1440p performance for FPS titles (144+ FPS) and access to latest AAA titles.",
         "total_approx": 2700,
+        "max_resolution": 1440,
         "parts": [
             {
                 "component": "CPU", "brand": "AMD", "model": "Ryzen 7 9700X", "approx_price": 300,
@@ -228,6 +233,7 @@ BUILDS: dict[str, Build] = {
         "label": "Creator 1440p",
         "description": "Able to breeze through virtually any title at 1440p while streaming and edit the videos later.",
         "total_approx": 4800,
+        "max_resolution": 1440,
         "parts": [
             {
                 "component": "CPU", "brand": "Intel", "model": "Ultra 9 285K", "approx_price": 550,
@@ -275,6 +281,7 @@ BUILDS: dict[str, Build] = {
         "label": "Competitive 1440p",
         "description": "240+ FPS at 1440p from most popular FPS titles.",
         "total_approx": 3600,
+        "max_resolution": 1440,
         "parts": [
             {
                 "component": "CPU", "brand": "AMD", "model": "Ryzen 9 9950X3D", "approx_price": 550,
@@ -322,6 +329,7 @@ BUILDS: dict[str, Build] = {
         "label": "Local LLM 1440p",
         "description": "1440p machine designed to inference and lightly fine-tune ML models and play competitive FPS games at 240 FPS, or AAA titles at 60+ FPS on high graphics.",
         "total_approx": 3700,
+        "max_resolution": 1440,
         "parts": [
             {
                 "component": "CPU", "brand": "AMD", "model": "Ryzen 7 9700X", "approx_price": 300,
@@ -369,6 +377,7 @@ BUILDS: dict[str, Build] = {
         "label": "Cinematic 4k",
         "description": "4k build able to play the latest AAA titles at 60+ FPS.",
         "total_approx": 3900,
+        "max_resolution": 2160,
         "parts": [
             {
                 "component": "CPU", "brand": "AMD", "model": "Ryzen 7 9800X3D", "approx_price": 450,
@@ -416,6 +425,7 @@ BUILDS: dict[str, Build] = {
         "label": "Creator 4k",
         "description": "4k build for playing the latest AAA titles and streaming/editing in 4k.",
         "total_approx": 5000,
+        "max_resolution": 2160,
         "parts": [
             {
                 "component": "CPU", "brand": "Intel", "model": "Ultra 9 285K", "approx_price": 550,
@@ -463,6 +473,7 @@ BUILDS: dict[str, Build] = {
         "label": "Local LLM 4k",
         "description": "Local LLM machine for models of around 35B parameters and an elite 4K gaming computer.",
         "total_approx": 7000,
+        "max_resolution": 2160,
         "parts": [
             {
                 "component": "CPU", "brand": "AMD", "model": "Ryzen 7 9700X", "approx_price": 300,
@@ -510,6 +521,7 @@ BUILDS: dict[str, Build] = {
         "label": "Local LLM Pro 4k",
         "description": "Local LLM machine for models of around 70B parameters.",
         "total_approx": 12000,
+        "max_resolution": 2160,
         "parts": [
             {
                 "component": "CPU", "brand": "AMD", "model": "Ryzen 7 9700X", "approx_price": 300,

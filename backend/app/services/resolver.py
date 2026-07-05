@@ -22,7 +22,7 @@ async def resolve_build(profile: BuildProfile, db: AsyncSession) -> tuple[str, B
     candidates = {
         key: build
         for key, build in builds.items()
-        if key[:4].isdigit() and int(key[:4]) >= floor
+        if build.get("max_resolution") is not None and build["max_resolution"] >= floor
     }
 
     # Local LLM / AI workloads
@@ -67,5 +67,5 @@ def _pick(candidates: dict, key: str) -> tuple[str, Build]:
     if key in candidates:
         return key, candidates[key]
     # Fallback: highest resolution build available
-    fallback_key = max(candidates.keys())
+    fallback_key = max(candidates, key=lambda k: candidates[k]["max_resolution"])
     return fallback_key, candidates[fallback_key]

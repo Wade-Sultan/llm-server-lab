@@ -24,11 +24,14 @@ type PartOption = { id: string; name: string; partType: string; streetPriceCents
 type BuildPart = { partId: string; part: PartOption };
 type BuildWithParts = ReferenceBuild & { parts: BuildPart[] };
 
+const RESOLUTIONS = [1080, 1440, 2160] as const;
+
 const schema = z.object({
   buildKey: z.string().min(1, 'Build key is required'),
   label: z.string().min(1, 'Label is required'),
   description: z.string(),
   isActive: z.boolean(),
+  maxResolution: z.number().nullable(),
   cpuId: z.string().nullable(),
   motherboardId: z.string().nullable(),
   ramId: z.string().nullable(),
@@ -48,7 +51,7 @@ function fmtPrice(cents: number | null) {
 function buildDefaults(item: BuildWithParts | null): ReferenceBuildFormData {
   if (!item) {
     return {
-      buildKey: '', label: '', description: '', isActive: true,
+      buildKey: '', label: '', description: '', isActive: true, maxResolution: null,
       cpuId: null, motherboardId: null, ramId: null, psuId: null,
       caseId: null, cpuCoolerId: null, gpuIds: [], storageIds: [], fanIds: [],
     };
@@ -60,6 +63,7 @@ function buildDefaults(item: BuildWithParts | null): ReferenceBuildFormData {
     label: item.label,
     description: item.description ?? '',
     isActive: item.isActive,
+    maxResolution: item.maxResolution ?? null,
     cpuId: single('cpu'),
     motherboardId: single('motherboard'),
     ramId: single('ram'),
@@ -197,6 +201,31 @@ function BuildForm({
           render={({ field }) => (
             <FormItem><FormLabel>Description</FormLabel>
               <FormControl><Textarea rows={3} {...field} /></FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+
+        <FormField control={form.control} name="maxResolution"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>Max Resolution</FormLabel>
+              <Select
+                value={field.value == null ? '__none' : String(field.value)}
+                onValueChange={v => field.onChange(v === '__none' ? null : Number(v))}
+              >
+                <FormControl>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select max resolution…" />
+                  </SelectTrigger>
+                </FormControl>
+                <SelectContent>
+                  <SelectItem value="__none">— None —</SelectItem>
+                  {RESOLUTIONS.map(r => (
+                    <SelectItem key={r} value={String(r)}>{r}p</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
               <FormMessage />
             </FormItem>
           )}

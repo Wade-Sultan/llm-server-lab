@@ -48,6 +48,7 @@ def _to_build(row: ReferenceBuild) -> Build:
         label=row.label,
         description=row.description,
         total_approx=row.total_approx,
+        max_resolution=row.max_resolution,
         parts=[
             Part(
                 component=rbp.component,
