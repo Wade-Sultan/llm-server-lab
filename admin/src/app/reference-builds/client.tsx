@@ -7,7 +7,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import type { ColumnDef } from '@tanstack/react-table';
 import type { ReferenceBuild } from '@prisma/client';
-import { Pencil, Trash2 } from 'lucide-react';
+import { Pencil, Trash2, Plus, X } from 'lucide-react';
 import { DataTable } from '@/components/data-table';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -118,8 +118,10 @@ function MultiPartSelect({
   selected: string[];
   onChange: (v: string[]) => void;
 }) {
-  const toggle = (id: string, checked: boolean) =>
-    onChange(checked ? [...selected, id] : selected.filter(s => s !== id));
+  const setAt = (i: number, id: string) =>
+    onChange(selected.map((s, idx) => (idx === i ? id : s)));
+  const addSlot = () => onChange([...selected, options[0]?.id ?? '']);
+  const removeSlot = (i: number) => onChange(selected.filter((_, idx) => idx !== i));
 
   return (
     <div className="space-y-1">
@@ -127,16 +129,32 @@ function MultiPartSelect({
       {options.length === 0 ? (
         <p className="text-xs text-muted-foreground">No eligible parts</p>
       ) : (
-        <div className="border rounded-md divide-y max-h-40 overflow-y-auto">
-          {options.map(p => (
-            <label key={p.id} className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-accent text-sm">
-              <Checkbox
-                checked={selected.includes(p.id)}
-                onCheckedChange={checked => toggle(p.id, !!checked)}
-              />
-              <span>{p.name}{fmtPrice(p.streetPriceCents)}</span>
-            </label>
+        <div className="space-y-2">
+          {selected.length === 0 && (
+            <p className="text-xs text-muted-foreground">None selected</p>
+          )}
+          {selected.map((id, i) => (
+            <div key={i} className="flex items-center gap-2">
+              <Select value={id} onValueChange={v => setAt(i, v)}>
+                <SelectTrigger className="flex-1">
+                  <SelectValue placeholder={`Select ${label} ${i + 1}…`} />
+                </SelectTrigger>
+                <SelectContent>
+                  {options.map(p => (
+                    <SelectItem key={p.id} value={p.id}>
+                      {p.name}{fmtPrice(p.streetPriceCents)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Button type="button" variant="ghost" size="icon" onClick={() => removeSlot(i)}>
+                <X className="h-3.5 w-3.5" />
+              </Button>
+            </div>
           ))}
+          <Button type="button" variant="outline" size="sm" onClick={addSlot}>
+            <Plus className="h-3.5 w-3.5" /> Add {label} {selected.length + 1}
+          </Button>
         </div>
       )}
     </div>
@@ -298,7 +316,7 @@ function BuildForm({
             <FormField control={form.control} name="gpuIds"
               render={({ field }) => (
                 <FormItem>
-                  <MultiPartSelect label="GPU (multi)" options={byType('gpu')} selected={field.value} onChange={field.onChange} />
+                  <MultiPartSelect label="GPU" options={byType('gpu')} selected={field.value} onChange={field.onChange} />
                   <FormMessage />
                 </FormItem>
               )}
@@ -306,7 +324,7 @@ function BuildForm({
             <FormField control={form.control} name="storageIds"
               render={({ field }) => (
                 <FormItem>
-                  <MultiPartSelect label="Storage (multi)" options={byType('storage')} selected={field.value} onChange={field.onChange} />
+                  <MultiPartSelect label="Storage" options={byType('storage')} selected={field.value} onChange={field.onChange} />
                   <FormMessage />
                 </FormItem>
               )}
@@ -314,7 +332,7 @@ function BuildForm({
             <FormField control={form.control} name="fanIds"
               render={({ field }) => (
                 <FormItem>
-                  <MultiPartSelect label="Fans (multi)" options={byType('fan')} selected={field.value} onChange={field.onChange} />
+                  <MultiPartSelect label="Fan" options={byType('fan')} selected={field.value} onChange={field.onChange} />
                   <FormMessage />
                 </FormItem>
               )}

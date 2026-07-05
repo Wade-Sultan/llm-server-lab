@@ -15,6 +15,7 @@ export interface RecommendedPart {
   model: string
   approx_price: number
   part_id: string
+  amazon_url?: string | null
 }
 
 export interface BuildData {

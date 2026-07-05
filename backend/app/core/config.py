@@ -99,6 +99,11 @@ class Settings(BaseSettings):
 
     OPENROUTER_API_KEY: str
 
+    # Amazon Associates tracking ID, e.g. "yoursite-20". Appended to product
+    # links as the "tag" query param so purchases are attributed to us.
+    # Links work without it — it's just unpaid until this is set.
+    AMAZON_AFFILIATE_TAG: str | None = None
+
     def _check_default_secret(self, var_name: str, value: str | None) -> None:
         if value == "changethis":
             message = (

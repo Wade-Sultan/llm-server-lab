@@ -7,6 +7,7 @@ class Part(TypedDict, total=False):
     model: str
     approx_price: int
     part_id: str  # stringified UUID — JSON-serializable, matches the frontend's contract
+    amazon_url: str | None
 
 
 class Build(TypedDict):

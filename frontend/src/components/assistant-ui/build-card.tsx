@@ -47,10 +47,25 @@ export const BuildCard: DataMessagePartComponent<BuildData> = (props) => {
                 type="button"
                 variant="outline"
                 size="sm"
+                disabled={!part.amazon_url}
                 aria-label={`Buy ${part.brand} ${part.model} on Amazon`}
+                asChild={!!part.amazon_url}
               >
-                <ShoppingCartIcon className="size-4" />
-                Amazon
+                {part.amazon_url ? (
+                  <a
+                    href={part.amazon_url}
+                    target="_blank"
+                    rel="noopener noreferrer sponsored"
+                  >
+                    <ShoppingCartIcon className="size-4" />
+                    Amazon
+                  </a>
+                ) : (
+                  <>
+                    <ShoppingCartIcon className="size-4" />
+                    Amazon
+                  </>
+                )}
               </Button>
             </div>
           </div>
