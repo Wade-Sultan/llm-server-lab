@@ -1,12 +1,21 @@
 "use client"
 
+import type { ThreadMessageLike } from "@assistant-ui/react"
 import {
   AssistantRuntimeProvider,
   makeAssistantDataUI,
   useLocalRuntime,
 } from "@assistant-ui/react"
+import { useParams, useRouter } from "next/navigation"
 import type { ReactNode } from "react"
-import { useEffect, useMemo, useRef, useState } from "react"
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react"
 import { toast } from "sonner"
 
 import { BuildCard } from "@/components/assistant-ui/build-card"
@@ -25,24 +34,160 @@ const INITIAL_SUGGESTIONS = [
   { prompt: "Build me a budget-friendly PC for general use and light gaming" },
 ]
 
+export interface ConversationMeta {
+  title: string | null
+  created_at: string
+}
+
+const ConversationMetaContext = createContext<ConversationMeta | null>(null)
+
+export function useConversationMeta() {
+  return useContext(ConversationMetaContext)
+}
+
 interface ChatRuntimeProviderProps {
   children: ReactNode
 }
 
 export function ChatRuntimeProvider({ children }: ChatRuntimeProviderProps) {
-  const conversationIdRef = useRef<string>(crypto.randomUUID())
+  const params = useParams<{ id?: string }>()
+  const conversationId = typeof params?.id === "string" ? params.id : undefined
+
+  if (conversationId) {
+    return (
+      <ConversationLoader key={conversationId} conversationId={conversationId}>
+        {children}
+      </ConversationLoader>
+    )
+  }
+
+  return <ChatRuntimeMount key="new">{children}</ChatRuntimeMount>
+}
+
+type LoaderState =
+  | { status: "loading" }
+  | { status: "error"; message: string }
+  | {
+      status: "ready"
+      meta: ConversationMeta
+      initialMessages: ThreadMessageLike[]
+    }
+
+function ConversationLoader({
+  conversationId,
+  children,
+}: {
+  conversationId: string
+  children: ReactNode
+}) {
+  const router = useRouter()
+  const [state, setState] = useState<LoaderState>({ status: "loading" })
+
+  useEffect(() => {
+    let cancelled = false
+
+    const load = async () => {
+      try {
+        const token = await getAccessToken()
+        const res = await fetch(
+          `${API_BASE}/api/v1/conversations/${conversationId}`,
+          { headers: token ? { Authorization: `Bearer ${token}` } : {} },
+        )
+        if (res.status === 404) {
+          router.replace("/buildhistory")
+          return
+        }
+        if (!res.ok) throw new Error(`${res.status}`)
+        const data = await res.json()
+        if (cancelled) return
+
+        setState({
+          status: "ready",
+          meta: { title: data.title, created_at: data.created_at },
+          initialMessages: (
+            data.messages as Array<{
+              id: string
+              role: string
+              content: string | null
+              created_at: string
+            }>
+          )
+            .filter((m) => m.role === "user" || m.role === "assistant")
+            .map((m) => ({
+              id: m.id,
+              role: m.role as "user" | "assistant",
+              content: m.content ?? "",
+              createdAt: new Date(m.created_at),
+            })),
+        })
+      } catch {
+        if (!cancelled) {
+          setState({
+            status: "error",
+            message: "Failed to load this conversation.",
+          })
+        }
+      }
+    }
+
+    load()
+    return () => {
+      cancelled = true
+    }
+  }, [conversationId, router])
+
+  if (state.status === "loading") return null
+
+  if (state.status === "error") {
+    return (
+      <div className="flex h-full items-center justify-center p-8">
+        <p className="text-sm text-destructive">{state.message}</p>
+      </div>
+    )
+  }
+
+  return (
+    <ConversationMetaContext.Provider value={state.meta}>
+      <ChatRuntimeMount
+        conversationId={conversationId}
+        initialMessages={state.initialMessages}
+      >
+        {children}
+      </ChatRuntimeMount>
+    </ConversationMetaContext.Provider>
+  )
+}
+
+function ChatRuntimeMount({
+  conversationId,
+  initialMessages,
+  children,
+}: {
+  conversationId?: string
+  initialMessages?: ThreadMessageLike[]
+  children: ReactNode
+}) {
+  const conversationIdRef = useRef<string>(
+    conversationId ?? crypto.randomUUID(),
+  )
   const adapter = useMemo(
     () => createModelAdapter(conversationIdRef.current),
     [],
   )
 
   const runtime = useLocalRuntime(adapter, {
-    initialMessages: [],
+    initialMessages: initialMessages ?? [],
   })
 
   const phase = useConversationStateStore((s) => s.phase)
   const buildData = useConversationStateStore((s) => s.buildData)
   const [_listings, setListings] = useState<Record<string, unknown[]>>({})
+
+  useEffect(() => {
+    return () => {
+      useConversationStateStore.getState().reset()
+    }
+  }, [])
 
   useEffect(() => {
     if (phase === "complete" && buildData) {
