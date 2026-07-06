@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Union
 
 from pydantic import BaseModel, Field
 
@@ -60,13 +60,6 @@ class ListingPublic(BaseModel):
     model_config = {"from_attributes": True}
 
 
-class ListingsPublic(BaseModel):
-    """Container for multiple listings."""
-
-    data: list[ListingPublic]
-    count: int
-
-
 # ---------------------------------------------------------------------------
 # Amazon-specific schemas
 # ---------------------------------------------------------------------------
@@ -93,6 +86,8 @@ class AmazonListingPublic(ListingPublic):
     seller_name: Optional[str] = None
     affiliate_tag: Optional[str] = None
 
+    model_config = {"from_attributes": True}
+
 
 # ---------------------------------------------------------------------------
 # eBay-specific schemas
@@ -117,3 +112,23 @@ class EbayListingPublic(ListingPublic):
     condition: Optional[str] = None
     seller_feedback_score: Optional[int] = None
     buy_it_now: Optional[bool] = None
+
+    model_config = {"from_attributes": True}
+
+
+# ---------------------------------------------------------------------------
+# Container schemas
+# ---------------------------------------------------------------------------
+
+class ListingsPublic(BaseModel):
+    """
+    Container for multiple listings.
+
+    Uses a discriminated union so each listing is serialized with its
+    marketplace-specific fields (e.g. ``asin`` on Amazon listings).
+    eBay support is wired into the union but not yet returned — see
+    :func:`_serialize_listing` in the listings CRUD module.
+    """
+
+    data: list[Union[AmazonListingPublic]]  # noqa: F821
+    count: int

@@ -15,9 +15,10 @@ from sqlalchemy import func, select
 
 from app.api.deps import SessionDep, get_current_active_superuser
 from app.crud import listings as listings_crud
-from app.models.listing import Listing
+from app.models.listing import AmazonListing, Listing
 from app.models.pcparts import PCPart
 from app.schemas.listing import (
+    AmazonListingPublic,
     ListingCreate,
     ListingPublic,
     ListingUpdate,
@@ -25,6 +26,25 @@ from app.schemas.listing import (
 )
 
 router = APIRouter(prefix="/listings", tags=["listings"])
+
+
+# ---------------------------------------------------------------------------
+# Serialization helpers — dispatch to the correct marketplace-specific schema
+# ---------------------------------------------------------------------------
+
+def _serialize_listing(listing: Listing) -> ListingPublic:
+    """
+    Serialize a Listing ORM object into the appropriate public schema.
+
+    Amazon listings are returned with their ``asin`` field so the frontend
+    can build clickable buy links.  eBay support is wired into the dispatch
+    logic but not yet active — see the commented block below.
+    """
+    if isinstance(listing, AmazonListing):
+        return AmazonListingPublic.model_validate(listing)
+    # Future: elif isinstance(listing, EbayListing):
+    #     return EbayListingPublic.model_validate(listing)
+    return ListingPublic.model_validate(listing)
 
 
 # ---------------------------------------------------------------------------
@@ -60,7 +80,8 @@ async def read_listings(
     count_result = await session.execute(count_stmt)
     count = count_result.scalar() or 0
 
-    return ListingsPublic(data=listings, count=count)
+    serialized = [_serialize_listing(l) for l in listings]
+    return ListingsPublic(data=serialized, count=count)
 
 
 @router.get("/{listing_id}", response_model=ListingPublic)
@@ -74,7 +95,7 @@ async def read_listing(
     db_listing = await listings_crud.get_listing(session=session, listing_id=listing_id)
     if db_listing is None:
         raise HTTPException(status_code=404, detail="Listing not found")
-    return db_listing
+    return _serialize_listing(db_listing)
 
 
 @router.get("/by-part/{part_id}", response_model=ListingsPublic)
@@ -97,7 +118,8 @@ async def read_listings_by_part(
         part_id=part_id,
         active_only=True,
     )
-    return ListingsPublic(data=listings, count=len(listings))
+    serialized = [_serialize_listing(l) for l in listings]
+    return ListingsPublic(data=serialized, count=len(serialized))
 
 
 # ---------------------------------------------------------------------------

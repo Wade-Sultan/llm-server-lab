@@ -24,7 +24,7 @@ export const BuildCard: DataMessagePartComponent<BuildData> = (props) => {
       <CardHeader>
         <div className="flex items-center justify-between gap-2">
           <CardTitle className="text-base">{data.label}</CardTitle>
-          <Badge variant="secondary">{formatPrice(data.total_approx)}</Badge>
+          <Badge variant="secondary">~{formatPrice(data.total_approx / 100)}</Badge>
         </div>
         <CardDescription>{data.description}</CardDescription>
       </CardHeader>
@@ -74,4 +74,5 @@ export const BuildCard: DataMessagePartComponent<BuildData> = (props) => {
     </Card>
   )
 }
+
 
