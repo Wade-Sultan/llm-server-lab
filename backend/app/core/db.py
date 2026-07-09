@@ -89,9 +89,40 @@ def _create_async_engine():
     )
 
 
-# Sync engine/session — Alembic, backend_pre_start/tests_pre_start, initial_data, seeds.
-engine = _create_engine()
-SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+# Sync engine/session — Alembic, backend_pre_start/tests_pre_start, initial_data,
+# seeds. Built lazily (see __getattr__ below): with CLOUD_SQL_INSTANCE set, building
+# this eagerly constructs a google.cloud.sql.connector.Connector() at import time,
+# which is pure cold-start cost for the FastAPI app process — the app never uses the
+# sync engine at request time (it uses async_engine/AsyncSessionLocal below).
+_engine = None
+_session_local = None
+
+
+def _get_engine():
+    global _engine
+    if _engine is None:
+        _engine = _create_engine()
+    return _engine
+
+
+def _get_session_local():
+    global _session_local
+    if _session_local is None:
+        _session_local = sessionmaker(bind=_get_engine(), autocommit=False, autoflush=False)
+    return _session_local
+
+
+def __getattr__(name: str):
+    """PEP 562 lazy module attributes, so `from app.core.db import engine` /
+    `SessionLocal` (Alembic, backend_pre_start.py, initial_data.py, tests, ...)
+    keeps working unchanged, while the underlying engine/Connector is only
+    built the first time it's actually accessed."""
+    if name == "engine":
+        return _get_engine()
+    if name == "SessionLocal":
+        return _get_session_local()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 # Async engine/session — used by the FastAPI app at request time.
 async_engine = _create_async_engine()
@@ -99,7 +130,7 @@ AsyncSessionLocal = async_sessionmaker(bind=async_engine, autoflush=False, expir
 
 
 def get_db() -> Generator[Session, None, None]:
-    db = SessionLocal()
+    db = _get_session_local()()
     try:
         yield db
     finally:

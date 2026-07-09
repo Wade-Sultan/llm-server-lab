@@ -4,9 +4,6 @@ import os
 import threading
 from typing import Optional
 
-import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
-
 from .base import LLMEngine
 
 
@@ -20,6 +17,9 @@ class HuggingFaceEngine(LLMEngine):
     def load(self) -> None:
         if self._model is not None:
             return
+
+        import torch
+        from transformers import AutoModelForCausalLM, AutoTokenizer
 
         self._tokenizer = AutoTokenizer.from_pretrained(self.model_id, use_fast=True)
 
@@ -42,6 +42,8 @@ class HuggingFaceEngine(LLMEngine):
     ) -> str:
         if self._model is None:
             self.load()
+
+        import torch
 
         full_prompt = prompt if not system else f"{system}\n\n{prompt}"
 

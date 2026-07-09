@@ -11,7 +11,6 @@ from app.data.refbuilds import Build
 from app.schemas.chat import BuildProfile, ChatMessage
 from app.services.resolver import resolve_build
 from app.services.chat_models import ChatModelConfig
-from app.services.recommender.components.extractprofile import load_program as _load_extract_program
 from app.core.db import AsyncSessionLocal
 
 
@@ -47,8 +46,18 @@ _extract_program = None
 def _get_extract_program():
     global _extract_program
     if _extract_program is None:
-        _extract_program = _load_extract_program()
+        from app.services.recommender.dspy_pipeline import configure_dspy
+        from app.services.recommender.components.extractprofile import load_program
+
+        configure_dspy()
+        _extract_program = load_program()
     return _extract_program
+
+
+def warm_dspy_pipeline() -> None:
+    """Force the DSPy/litellm import chain and LM configuration to happen once,
+    off the request path (called from main.py's lifespan background task)."""
+    _get_extract_program()
 
 
 def _format_conversation(messages: list[ChatMessage]) -> str:
