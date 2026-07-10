@@ -33,6 +33,13 @@ class StorageSelection(dspy.Signature):
  
  
 class DecideStorage(dspy.Module):
+    # Telemetry metadata — bump signature_version only when this signature's
+    # input/output fields change shape (GEPA needs a consistent field shape).
+    signature_name = "DecideStorage"
+    signature_version = 1
+    category = "storage"
+    output_name_field = "storage_name"
+
     def __init__(self) -> None:
         self.chain = dspy.ChainOfThought(StorageSelection)
  

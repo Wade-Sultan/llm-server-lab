@@ -27,6 +27,13 @@ class FanSelection(dspy.Signature):
  
  
 class DecideFans(dspy.Module):
+    # Telemetry metadata — bump signature_version only when this signature's
+    # input/output fields change shape (GEPA needs a consistent field shape).
+    signature_name = "DecideFans"
+    signature_version = 1
+    category = "fans"
+    output_name_field = "fan_name"
+
     def __init__(self) -> None:
         self.predict = dspy.Predict(FanSelection)
  

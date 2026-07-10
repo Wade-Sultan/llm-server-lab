@@ -30,6 +30,14 @@ class CaseOptions(dspy.Signature):
  
  
 class DecideCase(dspy.Module):
+    # Telemetry metadata — bump signature_version only when this signature's
+    # input/output fields change shape (GEPA needs a consistent field shape).
+    # output_name_field is the primary (best-value) option; user picks later.
+    signature_name = "DecideCase"
+    signature_version = 1
+    category = "case"
+    output_name_field = "option_1"
+
     def __init__(self) -> None:
         self.chain = dspy.ChainOfThought(CaseOptions)
  

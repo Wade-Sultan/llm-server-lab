@@ -38,6 +38,13 @@ class CoolerSelection(dspy.Signature):
 
 
 class DecideCPUCooler(dspy.Module):
+    # Telemetry metadata — bump signature_version only when this signature's
+    # input/output fields change shape (GEPA needs a consistent field shape).
+    signature_name = "DecideCPUCooler"
+    signature_version = 1
+    category = "cooler"
+    output_name_field = "cooler_name"
+
     def __init__(self) -> None:
         self.chain = dspy.ChainOfThought(CoolerSelection)
 

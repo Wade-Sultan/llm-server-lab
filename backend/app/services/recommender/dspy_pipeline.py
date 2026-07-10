@@ -26,6 +26,8 @@ Status messages:
 from __future__ import annotations
 
 import os
+import subprocess
+import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -33,6 +35,9 @@ import dspy
 from dspy.streaming.messages import StatusMessage
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
+from app.models.build_session import BuildSessionStatus
+from app.services.recommender.recording import BuildRecorder
 from app.services.recommender.status_provider import BuildStatusProvider
 
 from app.services.recommender.components.decidecase import DecideCase, load_program as load_case
@@ -63,20 +68,54 @@ from app.schemas.chat import BuildRequest
 # Module-level singleton — stateless, safe to share across concurrent requests
 _status_provider = BuildStatusProvider()
 
+# Model the Decide* modules run on. Routed through OpenRouter so every call
+# returns cost/tokens uniformly (and model_name is meaningful for Haiku-vs-Gemma
+# comparisons). Override RECOMMENDER_MODEL to swap the model without a code change.
+RECOMMENDER_MODEL = os.getenv("RECOMMENDER_MODEL", "openrouter/anthropic/claude-haiku-4.5")
+
+# Dependency order of the Decide* steps — recorded as sequence_order so later
+# decisions (which depend on earlier ones) can be reconstructed.
+_SEQUENCE_ORDER: dict[str, int] = {
+    "ddr": 0, "cpu": 1, "cooler": 2, "motherboard": 3, "ram": 4,
+    "storage": 5, "gpu": 6, "psu": 7, "case": 8, "fans": 9,
+}
+
+
+def _resolve_pipeline_version() -> str:
+    """GEPA cohort key: pinned PIPELINE_VERSION env, else the git short SHA."""
+    env = os.getenv("PIPELINE_VERSION")
+    if env:
+        return env
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=os.path.dirname(__file__),
+            stderr=subprocess.DEVNULL,
+        ).decode().strip() or "unknown"
+    except Exception:
+        return "unknown"
+
+
+PIPELINE_VERSION = _resolve_pipeline_version()
+
 
 # ---------------------------------------------------------------------------
 # DSPy configuration
 # ---------------------------------------------------------------------------
 
 def configure_dspy() -> None:
-    """Configure DSPy with Haiku for inference. Call once at app startup."""
+    """Configure DSPy to run the Decide* modules via OpenRouter. Call once at startup."""
     lm = dspy.LM(
-        model="anthropic/claude-haiku-4-5-20251001",
-        api_key=os.environ["ANTHROPIC_API_KEY"],
+        model=RECOMMENDER_MODEL,
+        api_key=settings.OPENROUTER_API_KEY,
         max_tokens=1024,
         temperature=0.3,
+        # Ask OpenRouter to include usage/cost accounting in the response so
+        # litellm surfaces the real cost per call in the LM history.
+        extra_body={"usage": {"include": True}},
     )
-    dspy.configure(lm=lm)
+    # track_usage lets prediction.get_lm_usage() return per-prediction tokens.
+    dspy.configure(lm=lm, track_usage=True)
 
 
 # ---------------------------------------------------------------------------
@@ -104,6 +143,49 @@ async def _call_streamified(
             result = item
     if result is None:
         raise RuntimeError("DSPy streamify yielded no Prediction")
+    return result
+
+
+async def _run_step(
+    recorder: BuildRecorder | None,
+    program: dspy.Module,
+    status_fn: Callable[[str], None],
+    *,
+    candidates: str,
+    **inputs: Any,
+) -> dspy.Prediction:
+    """
+    Run one Decide* module via _call_streamified and, if a recorder is present,
+    capture the decision (candidates, inputs, usage, latency) into it.
+
+    Recording is best-effort and reads program-level telemetry metadata
+    (category / signature_name / signature_version / output_name_field) added to
+    each Decide* class. With no recorder this is a plain _call_streamified call.
+    """
+    lm = dspy.settings.lm
+    start = time.perf_counter()
+    result = await _call_streamified(program, status_fn, candidates=candidates, **inputs)
+    latency_ms = int((time.perf_counter() - start) * 1000)
+
+    if recorder is not None:
+        try:
+            history_entry = dict(lm.history[-1]) if getattr(lm, "history", None) else None
+        except Exception:
+            history_entry = None
+        category = getattr(program, "category", "unknown")
+        name_field = getattr(program, "output_name_field", "")
+        recorder.record_decision(
+            category=category,
+            sequence_order=_SEQUENCE_ORDER.get(category, -1),
+            signature_name=getattr(program, "signature_name", category),
+            signature_version=getattr(program, "signature_version", 1),
+            candidates_json=candidates,
+            input_state=inputs,
+            prediction=result,
+            history_entry=history_entry,
+            chosen_name=getattr(result, name_field, None) if name_field else None,
+            latency_ms=latency_ms,
+        )
     return result
 
 
@@ -200,10 +282,11 @@ def _emit(state: DSPyBuildState, step: str, message: str) -> None:
 # Pipeline steps
 # ---------------------------------------------------------------------------
 
-async def _step_ddr(state: DSPyBuildState, session: AsyncSession, budget: dict, program: DecideDDR) -> None:
+async def _step_ddr(state: DSPyBuildState, session: AsyncSession, budget: dict, program: DecideDDR, recorder: BuildRecorder | None) -> None:
     _emit(state, "ddr", "Deciding memory generation…")
     candidates = await get_ddr_candidates(session, budget["cpu"])
-    result = await _call_streamified(
+    result = await _run_step(
+        recorder,
         program,
         status_fn=lambda msg: _emit(state, "ddr", msg),
         use_cases=str(state.request.use_cases),
@@ -214,10 +297,11 @@ async def _step_ddr(state: DSPyBuildState, session: AsyncSession, budget: dict, 
     state.thresholds["ddr"] = result.reconsideration_threshold
 
 
-async def _step_cpu(state: DSPyBuildState, session: AsyncSession, budget: dict, program: DecideCPU) -> None:
+async def _step_cpu(state: DSPyBuildState, session: AsyncSession, budget: dict, program: DecideCPU, recorder: BuildRecorder | None) -> None:
     _emit(state, "cpu", "Choosing your CPU…")
     candidates = await get_cpu_candidates(session, budget["cpu"], state.request.preferences)
-    result = await _call_streamified(
+    result = await _run_step(
+        recorder,
         program,
         status_fn=lambda msg: _emit(state, "cpu", msg),
         use_cases=str(state.request.use_cases),
@@ -234,13 +318,14 @@ async def _step_cpu(state: DSPyBuildState, session: AsyncSession, budget: dict, 
         state.cpu_ddr_gen = (cpu.ddr_generation or ["ddr5"])[-1]
 
 
-async def _step_cooler(state: DSPyBuildState, session: AsyncSession, budget: dict, program: DecideCPUCooler) -> None:
+async def _step_cooler(state: DSPyBuildState, session: AsyncSession, budget: dict, program: DecideCPUCooler, recorder: BuildRecorder | None) -> None:
     _emit(state, "cooler", "Picking a cooler…")
     candidates = await get_cooler_candidates(
         session, state.cpu_tdp_w, state.cpu_socket, budget["cooler"],
         state.request.preferences.form_factor,
     )
-    result = await _call_streamified(
+    result = await _run_step(
+        recorder,
         program,
         status_fn=lambda msg: _emit(state, "cooler", msg),
         use_cases=str(state.request.use_cases),
@@ -253,7 +338,7 @@ async def _step_cooler(state: DSPyBuildState, session: AsyncSession, budget: dic
     state.thresholds["cooler"] = result.reconsideration_threshold
 
 
-async def _step_motherboard(state: DSPyBuildState, session: AsyncSession, budget: dict, program: DecideMotherboard) -> None:
+async def _step_motherboard(state: DSPyBuildState, session: AsyncSession, budget: dict, program: DecideMotherboard, recorder: BuildRecorder | None) -> None:
     _emit(state, "motherboard", "Selecting a motherboard…")
     candidates = await get_motherboard_candidates(
         session,
@@ -263,7 +348,8 @@ async def _step_motherboard(state: DSPyBuildState, session: AsyncSession, budget
         form_factor=state.request.preferences.form_factor,
         wifi_required=state.request.preferences.wifi_required,
     )
-    result = await _call_streamified(
+    result = await _run_step(
+        recorder,
         program,
         status_fn=lambda msg: _emit(state, "motherboard", msg),
         use_cases=str(state.request.use_cases),
@@ -281,10 +367,11 @@ async def _step_motherboard(state: DSPyBuildState, session: AsyncSession, budget
         state.mobo_sata_ports = mobo.sata_ports or 0
 
 
-async def _step_ram(state: DSPyBuildState, session: AsyncSession, budget: dict, program: DecideRAM) -> None:
+async def _step_ram(state: DSPyBuildState, session: AsyncSession, budget: dict, program: DecideRAM, recorder: BuildRecorder | None) -> None:
     _emit(state, "ram", "Choosing RAM…")
     candidates = await get_ram_candidates(session, state.cpu_ddr_gen, budget["ram"])
-    result = await _call_streamified(
+    result = await _run_step(
+        recorder,
         program,
         status_fn=lambda msg: _emit(state, "ram", msg),
         use_cases=str(state.request.use_cases),
@@ -296,12 +383,13 @@ async def _step_ram(state: DSPyBuildState, session: AsyncSession, budget: dict, 
     state.thresholds["ram"] = result.reconsideration_threshold
 
 
-async def _step_storage(state: DSPyBuildState, session: AsyncSession, budget: dict, program: DecideStorage) -> None:
+async def _step_storage(state: DSPyBuildState, session: AsyncSession, budget: dict, program: DecideStorage, recorder: BuildRecorder | None) -> None:
     _emit(state, "storage", "Selecting storage…")
     candidates = await get_storage_candidates(
         session, budget["storage"], state.mobo_m2_slots, state.mobo_sata_ports,
     )
-    result = await _call_streamified(
+    result = await _run_step(
+        recorder,
         program,
         status_fn=lambda msg: _emit(state, "storage", msg),
         use_cases=str(state.request.use_cases),
@@ -312,12 +400,13 @@ async def _step_storage(state: DSPyBuildState, session: AsyncSession, budget: di
     state.thresholds["storage"] = result.reconsideration_threshold
 
 
-async def _step_gpu(state: DSPyBuildState, session: AsyncSession, budget: dict, program: DecideGPU) -> None:
+async def _step_gpu(state: DSPyBuildState, session: AsyncSession, budget: dict, program: DecideGPU, recorder: BuildRecorder | None) -> None:
     _emit(state, "gpu", "Finding your GPU…")
     candidates = await get_gpu_candidates(
         session, budget["gpu"], state.case_max_gpu_length_mm, state.request.preferences,
     )
-    result = await _call_streamified(
+    result = await _run_step(
+        recorder,
         program,
         status_fn=lambda msg: _emit(state, "gpu", msg),
         use_cases=str(state.request.use_cases),
@@ -334,7 +423,7 @@ async def _step_gpu(state: DSPyBuildState, session: AsyncSession, budget: dict, 
             state.gpu_tdp_w = gpu.tdp_watts
 
 
-async def _step_psu(state: DSPyBuildState, session: AsyncSession, budget: dict, program: DecidePSU) -> None:
+async def _step_psu(state: DSPyBuildState, session: AsyncSession, budget: dict, program: DecidePSU, recorder: BuildRecorder | None) -> None:
     _emit(state, "psu", "Calculating power supply…")
     # Add 20% headroom over combined TDP
     system_tdp = state.cpu_tdp_w + state.gpu_tdp_w
@@ -342,7 +431,8 @@ async def _step_psu(state: DSPyBuildState, session: AsyncSession, budget: dict, 
     # Determine PSU form factor from case
     psu_form_factor = state.psu_form_factor  # updated after case step if ITX
     candidates = await get_psu_candidates(session, min_wattage, budget["psu"], psu_form_factor)
-    result = await _call_streamified(
+    result = await _run_step(
+        recorder,
         program,
         status_fn=lambda msg: _emit(state, "psu", msg),
         required_wattage=min_wattage,
@@ -352,12 +442,13 @@ async def _step_psu(state: DSPyBuildState, session: AsyncSession, budget: dict, 
     state.psu_name = result.psu_name
 
 
-async def _step_case(state: DSPyBuildState, session: AsyncSession, budget: dict, program: DecideCase) -> None:
+async def _step_case(state: DSPyBuildState, session: AsyncSession, budget: dict, program: DecideCase, recorder: BuildRecorder | None) -> None:
     _emit(state, "case", "Picking case options for you…")
     candidates = await get_case_candidates(
         session, budget["case"], state.mobo_form_factor, state.psu_form_factor,
     )
-    result = await _call_streamified(
+    result = await _run_step(
+        recorder,
         program,
         status_fn=lambda msg: _emit(state, "case", msg),
         use_cases=str(state.request.use_cases),
@@ -373,10 +464,11 @@ async def _step_case(state: DSPyBuildState, session: AsyncSession, budget: dict,
     # Pipeline pauses here — case_name is set externally after user picks
 
 
-async def _step_fans(state: DSPyBuildState, session: AsyncSession, budget: dict, program: DecideFans) -> None:
+async def _step_fans(state: DSPyBuildState, session: AsyncSession, budget: dict, program: DecideFans, recorder: BuildRecorder | None) -> None:
     _emit(state, "fans", "Checking airflow…")
     candidates = await get_fan_candidates(session, budget["fans"], state.case_fan_slots)
-    result = await _call_streamified(
+    result = await _run_step(
+        recorder,
         program,
         status_fn=lambda msg: _emit(state, "fans", msg),
         cpu_tdp_w=state.cpu_tdp_w,
@@ -397,6 +489,7 @@ async def run_pipeline(
     request: BuildRequest,
     session: AsyncSession,
     progress_callback: Callable[[str, str], None] | None = None,
+    recorder: BuildRecorder | None = None,
 ) -> DSPyBuildState:
     """
     Run the full DSPy component-by-component pipeline.
@@ -406,6 +499,11 @@ async def run_pipeline(
       - DSPy-native messages (module_start, lm_start) from BuildStatusProvider,
         forwarded via _call_streamified as the module runs.
 
+    Pass a BuildRecorder to capture per-decision telemetry (see recording.py).
+    The pipeline pauses at the case step, so on the success path the recorder is
+    NOT flushed here — reuse the same recorder for run_pipeline_post_case, which
+    finalizes it. On error the recorder is flushed with status=error.
+
     Returns a DSPyBuildState with all decisions populated up to (but not
     including) the case selection, which requires a round-trip to the user.
     Call run_pipeline_post_case() once the user has picked their case.
@@ -414,18 +512,20 @@ async def run_pipeline(
     budget = _allocate_budget(request.budget_usd, request.use_cases)
 
     try:
-        await _step_ddr(state, session, budget, load_ddr())
-        await _step_cpu(state, session, budget, load_cpu())
-        await _step_cooler(state, session, budget, load_cooler())
-        await _step_motherboard(state, session, budget, load_motherboard())
-        await _step_ram(state, session, budget, load_ram())
-        await _step_storage(state, session, budget, load_storage())
-        await _step_gpu(state, session, budget, load_gpu())
-        await _step_psu(state, session, budget, load_psu())
-        await _step_case(state, session, budget, load_case())
+        await _step_ddr(state, session, budget, load_ddr(), recorder)
+        await _step_cpu(state, session, budget, load_cpu(), recorder)
+        await _step_cooler(state, session, budget, load_cooler(), recorder)
+        await _step_motherboard(state, session, budget, load_motherboard(), recorder)
+        await _step_ram(state, session, budget, load_ram(), recorder)
+        await _step_storage(state, session, budget, load_storage(), recorder)
+        await _step_gpu(state, session, budget, load_gpu(), recorder)
+        await _step_psu(state, session, budget, load_psu(), recorder)
+        await _step_case(state, session, budget, load_case(), recorder)
         # Pipeline pauses — return state with case_options populated
     except Exception as exc:
         state.error = str(exc)
+        if recorder is not None:
+            recorder.finish(BuildSessionStatus.ERROR)
 
     return state
 
@@ -434,10 +534,14 @@ async def run_pipeline_post_case(
     state: DSPyBuildState,
     session: AsyncSession,
     case_name: str,
+    recorder: BuildRecorder | None = None,
 ) -> DSPyBuildState:
     """
     Resume the pipeline after the user has selected a case.
     Runs the fans step and finalizes the build.
+
+    Pass the same BuildRecorder used for run_pipeline so decisions accumulate
+    into one session; it is flushed here (status completed, or error on failure).
     """
     state.case_name = case_name
     case = await crud_components.get_case_by_name(session, case_name)
@@ -450,7 +554,11 @@ async def run_pipeline_post_case(
         state.case_fan_slots = [slot_size] * max(total_slots, 0)
     budget = _allocate_budget(state.request.budget_usd, state.request.use_cases)
     try:
-        await _step_fans(state, session, budget, load_fans())
+        await _step_fans(state, session, budget, load_fans(), recorder)
+        if recorder is not None:
+            recorder.finish(BuildSessionStatus.COMPLETED)
     except Exception as exc:
         state.error = str(exc)
+        if recorder is not None:
+            recorder.finish(BuildSessionStatus.ERROR)
     return state

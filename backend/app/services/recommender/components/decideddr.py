@@ -47,6 +47,13 @@ class DDRSelection(dspy.Signature):
 
 
 class DecideDDR(dspy.Module):
+    # Telemetry metadata — bump signature_version only when this signature's
+    # input/output fields change shape (GEPA needs a consistent field shape).
+    signature_name = "DecideDDR"
+    signature_version = 1
+    category = "ddr"
+    output_name_field = "ddr_gen"
+
     def __init__(self) -> None:
         self.chain = dspy.ChainOfThought(DDRSelection)
 

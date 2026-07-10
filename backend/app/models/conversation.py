@@ -1,9 +1,12 @@
 import uuid
 
 from sqlalchemy import (
+    Boolean,
     Column,
     DateTime,
     ForeignKey,
+    Integer,
+    Numeric,
     String,
     Text,
 )
@@ -41,6 +44,30 @@ class Conversation(Base):
     title = Column(String(255), nullable=True)
 
     summary = Column(Text, nullable=True)
+
+    # Running totals of all OpenRouter LLM spend across this conversation's turns
+    # (profile extraction, elicitation, recommendation). Incremented per turn.
+    total_cost_usd = Column(
+        Numeric,
+        nullable=False,
+        server_default="0",
+        doc="Sum of LLM API cost across every turn of this conversation",
+    )
+    total_tokens_in = Column(Integer, nullable=False, server_default="0")
+    total_tokens_out = Column(Integer, nullable=False, server_default="0")
+    llm_call_count = Column(
+        Integer,
+        nullable=False,
+        server_default="0",
+        doc="Number of LLM calls billed to this conversation",
+    )
+    reached_recommendation = Column(
+        Boolean,
+        nullable=False,
+        server_default="false",
+        doc="True once this conversation produced a recommended build — used to "
+            "distinguish 'cost per completed build' from 'cost per chat'",
+    )
 
     created_at = Column(
         DateTime(timezone=True),

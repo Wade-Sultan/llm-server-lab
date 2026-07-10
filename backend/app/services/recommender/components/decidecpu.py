@@ -45,6 +45,13 @@ class CPUSelection(dspy.Signature):
  
  
 class DecideCPU(dspy.Module):
+    # Telemetry metadata — bump signature_version only when this signature's
+    # input/output fields change shape (GEPA needs a consistent field shape).
+    signature_name = "DecideCPU"
+    signature_version = 1
+    category = "cpu"
+    output_name_field = "cpu_name"
+
     def __init__(self) -> None:
         self.chain = dspy.ChainOfThought(CPUSelection)
  

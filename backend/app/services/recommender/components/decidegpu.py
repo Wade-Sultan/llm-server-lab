@@ -48,6 +48,13 @@ class GPUSelection(dspy.Signature):
  
  
 class DecideGPU(dspy.Module):
+    # Telemetry metadata — bump signature_version only when this signature's
+    # input/output fields change shape (GEPA needs a consistent field shape).
+    signature_name = "DecideGPU"
+    signature_version = 1
+    category = "gpu"
+    output_name_field = "gpu_name"
+
     def __init__(self) -> None:
         self.chain = dspy.ChainOfThought(GPUSelection)
  

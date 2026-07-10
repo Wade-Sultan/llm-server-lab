@@ -364,14 +364,19 @@ model User {
 }
 
 model Conversation {
-  id        String    @id @db.Uuid
-  userId    String?   @db.Uuid @map("user_id")
-  buildId   String?   @db.Uuid @map("build_id")
-  title     String?
-  summary   String?
-  createdAt DateTime  @default(now()) @map("created_at")
-  updatedAt DateTime  @updatedAt @map("updated_at")
-  messages  Message[]
+  id                    String    @id @db.Uuid
+  userId                String?   @db.Uuid @map("user_id")
+  buildId               String?   @db.Uuid @map("build_id")
+  title                 String?
+  summary               String?
+  totalCostUsd          Decimal   @default(0) @map("total_cost_usd") @db.Decimal
+  totalTokensIn         Int       @default(0) @map("total_tokens_in")
+  totalTokensOut        Int       @default(0) @map("total_tokens_out")
+  llmCallCount          Int       @default(0) @map("llm_call_count")
+  reachedRecommendation Boolean   @default(false) @map("reached_recommendation")
+  createdAt             DateTime  @default(now()) @map("created_at")
+  updatedAt             DateTime  @updatedAt @map("updated_at")
+  messages              Message[]
 
   @@map("conversations")
 }
@@ -386,4 +391,62 @@ model Message {
   createdAt      DateTime     @default(now()) @map("created_at")
 
   @@map("messages")
+}
+
+enum BuildSessionStatus {
+  running
+  completed
+  abandoned
+  error
+
+  @@map("build_session_status")
+}
+
+// DSPy recommender telemetry — one row per pipeline run (the GEPA cohort).
+// Populated once the component pipeline is wired to a live route.
+model BuildSession {
+  id                          String             @id @db.Uuid
+  userId                      String?            @db.Uuid @map("user_id")
+  pipelineVersion             String             @map("pipeline_version")
+  budgetCents                 Int?               @map("budget_cents")
+  priceSensitivity            String?            @map("price_sensitivity")
+  inputProfile                Json               @map("input_profile")
+  finalBuild                  Json?              @map("final_build")
+  totalCostUsd                Decimal?           @map("total_cost_usd") @db.Decimal
+  totalLatencyMs              Int?               @map("total_latency_ms")
+  budgetDeltaCents            Int?               @map("budget_delta_cents")
+  compatibilityOverrideCount  Int                @default(0) @map("compatibility_override_count")
+  status                      BuildSessionStatus @default(running)
+  createdAt                   DateTime           @default(now()) @map("created_at")
+  updatedAt                   DateTime           @updatedAt @map("updated_at")
+  decisions                   ModuleDecision[]
+
+  @@map("build_sessions")
+}
+
+// One row per Decide* call — the GEPA training example.
+model ModuleDecision {
+  id               String       @id @db.Uuid
+  sessionId        String       @db.Uuid @map("session_id")
+  session          BuildSession @relation(fields: [sessionId], references: [id])
+  pipelineVersion  String       @map("pipeline_version")
+  category         String
+  sequenceOrder    Int          @map("sequence_order")
+  signatureName    String       @map("signature_name")
+  signatureVersion Int          @map("signature_version")
+  candidateSet     Json?        @map("candidate_set")
+  inputState       Json?        @map("input_state")
+  rawPromptHash    String?      @map("raw_prompt_hash")
+  outputDecision   Json?        @map("output_decision")
+  tokensIn         Int?         @map("tokens_in")
+  tokensOut        Int?         @map("tokens_out")
+  costUsd          Decimal?     @map("cost_usd") @db.Decimal
+  latencyMs        Int?         @map("latency_ms")
+  wasOverride      Boolean      @default(false) @map("was_override")
+  modelName        String?      @map("model_name")
+  outcomeSignal    Json?        @map("outcome_signal")
+  createdAt        DateTime     @default(now()) @map("created_at")
+
+  @@index([category, pipelineVersion, createdAt], map: "ix_module_decisions_category_pipeline_created")
+  @@map("module_decisions")
 }

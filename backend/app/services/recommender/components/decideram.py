@@ -34,6 +34,13 @@ class RAMSelection(dspy.Signature):
  
  
 class DecideRAM(dspy.Module):
+    # Telemetry metadata — bump signature_version only when this signature's
+    # input/output fields change shape (GEPA needs a consistent field shape).
+    signature_name = "DecideRAM"
+    signature_version = 1
+    category = "ram"
+    output_name_field = "ram_name"
+
     def __init__(self) -> None:
         self.chain = dspy.ChainOfThought(RAMSelection)
  

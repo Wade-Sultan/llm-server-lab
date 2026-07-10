@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import AsyncIterator
+from typing import Any, AsyncIterator
 
 import openai
 
@@ -15,6 +15,41 @@ from app.core.db import AsyncSessionLocal
 
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# LLM cost/usage capture
+# ---------------------------------------------------------------------------
+# Every OpenRouter call in a conversation (profile extraction, elicitation,
+# recommendation) is billed to the conversation. Streaming calls opt into
+# OpenRouter's usage accounting so the final chunk carries tokens + real cost.
+
+_STREAM_USAGE_OPTS: dict[str, Any] = {"stream_options": {"include_usage": True}}
+_OPENROUTER_USAGE_BODY: dict[str, Any] = {"extra_body": {"usage": {"include": True}}}
+
+
+def _usage_from_openai(usage_obj: Any) -> dict:
+    """Extract {tokens_in, tokens_out, cost_usd} from an OpenAI/OpenRouter usage object."""
+    if usage_obj is None:
+        return {}
+    tokens_in = getattr(usage_obj, "prompt_tokens", None)
+    tokens_out = getattr(usage_obj, "completion_tokens", None)
+    # OpenRouter returns real dollar cost as an extra `cost` field on usage.
+    cost = getattr(usage_obj, "cost", None)
+    if cost is None:
+        extra = getattr(usage_obj, "model_extra", None) or {}
+        cost = extra.get("cost")
+    return {"tokens_in": tokens_in, "tokens_out": tokens_out, "cost_usd": cost}
+
+
+def _merge_usage(total: dict, part: dict | None) -> None:
+    """Accumulate one call's usage into a running per-turn total (None-safe)."""
+    if not part:
+        return
+    total["tokens_in"] += part.get("tokens_in") or 0
+    total["tokens_out"] += part.get("tokens_out") or 0
+    total["cost_usd"] += float(part.get("cost_usd") or 0)
+    total["llm_call_count"] += 1
 
 # ---------------------------------------------------------------------------
 # Client
@@ -60,6 +95,25 @@ def warm_dspy_pipeline() -> None:
     _get_extract_program()
 
 
+def _capture_dspy_usage(prediction: Any, usage_sink: dict) -> None:
+    """Pull tokens + cost for the extractprofile DSPy call from the LM history."""
+    try:
+        import dspy
+
+        from app.services.recommender.recording import extract_usage
+
+        lm = dspy.settings.lm
+        history_entry = dict(lm.history[-1]) if getattr(lm, "history", None) else None
+        tokens_in, tokens_out, cost, _model, _hash = extract_usage(prediction, history_entry)
+        usage_sink.update({
+            "tokens_in": tokens_in,
+            "tokens_out": tokens_out,
+            "cost_usd": cost,
+        })
+    except Exception:
+        logger.debug("failed to capture dspy usage for extractprofile", exc_info=True)
+
+
 def _format_conversation(messages: list[ChatMessage]) -> str:
     lines = []
     for msg in messages:
@@ -68,11 +122,17 @@ def _format_conversation(messages: list[ChatMessage]) -> str:
     return "\n".join(lines)
 
 
-async def extract_profile(messages: list[ChatMessage]) -> BuildProfile:
+async def extract_profile(
+    messages: list[ChatMessage],
+    usage_sink: dict | None = None,
+) -> BuildProfile:
     """Extract a BuildProfile from the conversation using the DSPy module."""
     conversation = _format_conversation(messages)
     program = _get_extract_program()
     result = await asyncio.to_thread(program, conversation=conversation)
+
+    if usage_sink is not None:
+        _capture_dspy_usage(result, usage_sink)
 
     games = [g.strip() for g in result.games.split(",") if g.strip()]
     workloads = [w.strip() for w in result.workloads.split(",") if w.strip()]
@@ -142,10 +202,14 @@ async def stream_recommendation(
     profile: BuildProfile,
     build_key: str,
     build: Build,
+    usage_sink: dict | None = None,
 ) -> AsyncIterator[str]:
     """
     Stream the recommendation response token-by-token.
     Yields raw text chunks (not SSE-formatted — the route handles that).
+
+    If usage_sink is provided, it's filled with this call's tokens + cost from
+    OpenRouter's final usage chunk.
     """
     client = _get_client()
 
@@ -165,8 +229,14 @@ async def stream_recommendation(
         temperature=0.5,
         messages=api_messages,
         stream=True,
+        **_STREAM_USAGE_OPTS,
+        **_OPENROUTER_USAGE_BODY,
     )
     async for chunk in stream:
+        if getattr(chunk, "usage", None) and usage_sink is not None:
+            usage_sink.update(_usage_from_openai(chunk.usage))
+        if not chunk.choices:
+            continue
         delta = chunk.choices[0].delta.content
         if delta:
             yield delta
@@ -193,11 +263,15 @@ information has been gathered.
 
 async def stream_elicitation(
     messages: list[ChatMessage],
+    usage_sink: dict | None = None,
 ) -> AsyncIterator[str]:
     """
     Stream a conversational response that gathers more info from the user.
     Readiness to recommend is decided deterministically by `is_profile_complete()`,
     not by the model — this function only ever asks follow-up questions.
+
+    If usage_sink is provided, it's filled with this call's tokens + cost from
+    OpenRouter's final usage chunk.
     """
     client = _get_client()
 
@@ -214,8 +288,14 @@ async def stream_elicitation(
         temperature=0.6,
         messages=api_messages,
         stream=True,
+        **_STREAM_USAGE_OPTS,
+        **_OPENROUTER_USAGE_BODY,
     )
     async for chunk in stream:
+        if getattr(chunk, "usage", None) and usage_sink is not None:
+            usage_sink.update(_usage_from_openai(chunk.usage))
+        if not chunk.choices:
+            continue
         delta = chunk.choices[0].delta.content
         if delta:
             yield delta
@@ -272,20 +352,32 @@ async def run_chat_turn(
       {"type": "progress", "step": "...", "message": "..."}
       {"type": "token",    "text": "..."}
       {"type": "build",    "key": "...", "data": {...}}
+      {"type": "usage",    "cost_usd": ..., "tokens_in": ..., "tokens_out": ...}
       {"type": "done"}
+
+    The "usage" event totals every OpenRouter call made this turn; the route
+    consumes it internally (it is not forwarded to the client) to increment the
+    conversation's running cost.
     """
+    turn_usage = {"tokens_in": 0, "tokens_out": 0, "cost_usd": 0.0, "llm_call_count": 0}
+
     # Extract the structured profile up front — the model only ever populates
     # fields here. Whether that's "enough" to recommend is then a hard,
     # code-level decision (is_profile_complete), not something the model says.
     # No progress event yet: the frontend treats any "progress" event as
     # confirmation we're on the recommend path, so it can't fire until we know.
-    profile = await extract_profile(messages)
+    extract_usage_sink: dict = {}
+    profile = await extract_profile(messages, usage_sink=extract_usage_sink)
+    _merge_usage(turn_usage, extract_usage_sink)
 
     if not is_profile_complete(profile):
         # Elicitation mode — gather more info, then end the turn.
-        async for chunk in stream_elicitation(messages):
+        elicit_usage_sink: dict = {}
+        async for chunk in stream_elicitation(messages, usage_sink=elicit_usage_sink):
             yield {"type": "token", "text": chunk}
+        _merge_usage(turn_usage, elicit_usage_sink)
 
+        yield {"type": "usage", **turn_usage}
         yield {"type": "done"}
         return
 
@@ -309,7 +401,12 @@ async def run_chat_turn(
 
     yield {"type": "progress", "step": "presenting", "message": "Preparing your recommendation…"}
 
-    async for chunk in stream_recommendation(messages, profile, build_key, build):
+    recommend_usage_sink: dict = {}
+    async for chunk in stream_recommendation(
+        messages, profile, build_key, build, usage_sink=recommend_usage_sink
+    ):
         yield {"type": "token", "text": chunk}
+    _merge_usage(turn_usage, recommend_usage_sink)
 
+    yield {"type": "usage", **turn_usage}
     yield {"type": "done"}

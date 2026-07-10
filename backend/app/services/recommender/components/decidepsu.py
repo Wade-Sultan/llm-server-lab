@@ -25,6 +25,13 @@ class PSUSelection(dspy.Signature):
  
  
 class DecidePSU(dspy.Module):
+    # Telemetry metadata — bump signature_version only when this signature's
+    # input/output fields change shape (GEPA needs a consistent field shape).
+    signature_name = "DecidePSU"
+    signature_version = 1
+    category = "psu"
+    output_name_field = "psu_name"
+
     def __init__(self) -> None:
         # Plain Predict — no chain-of-thought needed for this slot
         self.predict = dspy.Predict(PSUSelection)

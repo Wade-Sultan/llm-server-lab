@@ -25,8 +25,12 @@ def _save_turn(
     conversation_id: str,
     messages: list[ChatMessage],
     assistant_text: str,
+    turn_usage: dict | None = None,
+    reached_recommendation: bool = False,
 ) -> None:
     """Persist this chat turn to the DB. Runs in a thread executor (sync SQLAlchemy)."""
+    from decimal import Decimal
+
     from app.core.db import SessionLocal
     from app.models.conversation import Conversation
     from app.models.message import Message
@@ -95,6 +99,28 @@ def _save_turn(
                 content=assistant_text,
             ))
 
+        # Roll this turn's OpenRouter spend into the conversation's running total.
+        if turn_usage:
+            conversation.total_cost_usd = (conversation.total_cost_usd or Decimal(0)) + Decimal(
+                str(turn_usage.get("cost_usd") or 0)
+            )
+            conversation.total_tokens_in = (conversation.total_tokens_in or 0) + int(
+                turn_usage.get("tokens_in") or 0
+            )
+            conversation.total_tokens_out = (conversation.total_tokens_out or 0) + int(
+                turn_usage.get("tokens_out") or 0
+            )
+            conversation.llm_call_count = (conversation.llm_call_count or 0) + int(
+                turn_usage.get("llm_call_count") or 0
+            )
+            db.add(conversation)
+
+        # Sticky flag: once a conversation has produced a recommendation, it
+        # counts as a "completed build" for cost-per-build analytics.
+        if reached_recommendation and not conversation.reached_recommendation:
+            conversation.reached_recommendation = True
+            db.add(conversation)
+
         db.commit()
     except Exception:
         logger.exception("Failed to save conversation turn")
@@ -106,10 +132,20 @@ def _save_turn(
 async def _event_stream(messages: list[ChatMessage], user: dict | None, conversation_id: str | None):
     """Async generator that yields SSE-formatted lines."""
     assistant_text = ""
+    turn_usage: dict | None = None
+    reached_recommendation = False
     try:
         async for event in run_chat_turn(messages):
-            if event.get("type") == "token":
+            etype = event.get("type")
+            if etype == "token":
                 assistant_text += event.get("text", "")
+            elif etype == "build":
+                # The recommend path emitted a build — this conversation is a completed build.
+                reached_recommendation = True
+            elif etype == "usage":
+                # Internal cost accounting — capture it, don't leak cost to the client.
+                turn_usage = event
+                continue
             # default=str guards against non-JSON-native types (UUID, Decimal,
             # datetime, ...) slipping into an event payload and killing the stream.
             line = f"data: {json.dumps(event, default=str)}\n\n"
@@ -131,6 +167,8 @@ async def _event_stream(messages: list[ChatMessage], user: dict | None, conversa
             conversation_id,
             messages,
             assistant_text,
+            turn_usage,
+            reached_recommendation,
         )
         await asyncio.get_running_loop().run_in_executor(None, save_fn)
 

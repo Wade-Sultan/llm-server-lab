@@ -34,6 +34,13 @@ class MotherboardSelection(dspy.Signature):
  
  
 class DecideMotherboard(dspy.Module):
+    # Telemetry metadata — bump signature_version only when this signature's
+    # input/output fields change shape (GEPA needs a consistent field shape).
+    signature_name = "DecideMotherboard"
+    signature_version = 1
+    category = "motherboard"
+    output_name_field = "motherboard_name"
+
     def __init__(self) -> None:
         self.chain = dspy.ChainOfThought(MotherboardSelection)
  
