@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import threading
 import time
 from typing import Any, AsyncIterator
 
@@ -91,16 +92,25 @@ def _get_client() -> openai.AsyncOpenAI:
 # ---------------------------------------------------------------------------
 
 _extract_program = None
+_extract_program_lock = threading.Lock()
 
 
 def _get_extract_program():
     global _extract_program
     if _extract_program is None:
-        from app.services.recommender.dspy_pipeline import configure_dspy
-        from app.services.recommender.components.extractprofile import load_program
+        # dspy.configure() may only be called by the thread that first calls it.
+        # The lifespan warm-up task and an early /chat request both reach here via
+        # asyncio.to_thread, i.e. from different worker threads, so the unlocked
+        # check-and-set below used to let both call configure_dspy() and the loser
+        # would hit "dspy.settings can only be changed by the thread that initially
+        # configured it." The lock makes the init happen exactly once.
+        with _extract_program_lock:
+            if _extract_program is None:
+                from app.services.recommender.dspy_pipeline import configure_dspy
+                from app.services.recommender.components.extractprofile import load_program
 
-        configure_dspy()
-        _extract_program = load_program()
+                configure_dspy()
+                _extract_program = load_program()
     return _extract_program
 
 

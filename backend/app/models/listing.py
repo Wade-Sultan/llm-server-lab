@@ -39,6 +39,7 @@ class Listing(Base):
     __mapper_args__ = {
         "polymorphic_on": listing_type,
         "polymorphic_identity": "listing",
+        "polymorphic_load": "selectin",
     }
 
 

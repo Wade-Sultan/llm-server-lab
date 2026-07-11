@@ -70,8 +70,8 @@ _status_provider = BuildStatusProvider()
 
 # Model the Decide* modules run on. Routed through OpenRouter so every call
 # returns cost/tokens uniformly (and model_name is meaningful for Haiku-vs-Gemma
-# comparisons). Override RECOMMENDER_MODEL to swap the model without a code change.
-RECOMMENDER_MODEL = os.getenv("RECOMMENDER_MODEL", "google/gemma-4-31b-it")
+# comparisons). Override RECOMMEND_MODEL to swap the model without a code change.
+RECOMMEND_MODEL = os.getenv("RECOMMEND_MODEL", "openrouter/google/gemma-4-31b-it")
 
 # Dependency order of the Decide* steps — recorded as sequence_order so later
 # decisions (which depend on earlier ones) can be reconstructed.
@@ -106,7 +106,7 @@ PIPELINE_VERSION = _resolve_pipeline_version()
 def configure_dspy() -> None:
     """Configure DSPy to run the Decide* modules via OpenRouter. Call once at startup."""
     lm = dspy.LM(
-        model=RECOMMENDER_MODEL,
+        model=RECOMMEND_MODEL,
         api_key=settings.OPENROUTER_API_KEY,
         max_tokens=1024,
         temperature=0.3,
