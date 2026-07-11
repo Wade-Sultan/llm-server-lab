@@ -1,6 +1,6 @@
 "use client"
 
-import type { ThreadMessageLike } from "@assistant-ui/react"
+import type { DataMessagePart, ThreadMessageLike } from "@assistant-ui/react"
 import {
   AssistantRuntimeProvider,
   makeAssistantDataUI,
@@ -20,7 +20,7 @@ import { toast } from "sonner"
 
 import { BuildCard } from "@/components/assistant-ui/build-card"
 import { getAccessToken } from "@/hooks/useAuth"
-import { useConversationStateStore } from "@/hooks/useConversationState"
+import { useConversationStateStore, type BuildData } from "@/hooks/useConversationState"
 import { createModelAdapter } from "./model-adapter"
 
 const BuildDataUI = makeAssistantDataUI({ name: "build", render: BuildCard })
@@ -110,15 +110,39 @@ function ConversationLoader({
               role: string
               content: string | null
               created_at: string
+              metadata?: { build?: BuildData }
             }>
           )
             .filter((m) => m.role === "user" || m.role === "assistant")
-            .map((m) => ({
-              id: m.id,
-              role: m.role as "user" | "assistant",
-              content: m.content ?? "",
-              createdAt: new Date(m.created_at),
-            })),
+            .map((m) => {
+              const base = {
+                id: m.id,
+                role: m.role as "user" | "assistant",
+                createdAt: new Date(m.created_at),
+              }
+
+              // Reconstruct build data messages from persisted metadata
+              const buildData = m.metadata?.build
+              if (buildData) {
+                const buildPart: DataMessagePart<BuildData> = {
+                  type: "data" as const,
+                  name: "build",
+                  data: buildData,
+                }
+                return {
+                  ...base,
+                  content: [
+                    { type: "text" as const, text: m.content ?? "" },
+                    buildPart,
+                  ],
+                }
+              }
+
+              return {
+                ...base,
+                content: m.content ?? "",
+              }
+            }),
         })
       } catch {
         if (!cancelled) {

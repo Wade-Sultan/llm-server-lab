@@ -27,6 +27,8 @@ def _save_turn(
     assistant_text: str,
     turn_usage: dict | None = None,
     reached_recommendation: bool = False,
+    build_data: dict | None = None,
+    build_key: str | None = None,
 ) -> None:
     """Persist this chat turn to the DB. Runs in a thread executor (sync SQLAlchemy)."""
     from decimal import Decimal
@@ -34,6 +36,7 @@ def _save_turn(
     from app.core.db import SessionLocal
     from app.models.conversation import Conversation
     from app.models.message import Message
+    from app.models.reference_build import ReferenceBuild
     from app.models.user import User
 
     db = SessionLocal()
@@ -97,6 +100,7 @@ def _save_turn(
                 conversation_id=conv_uuid,
                 role="assistant",
                 content=assistant_text,
+                metadata_={"build": build_data} if build_data else None,
             ))
 
         # Roll this turn's OpenRouter spend into the conversation's running total.
@@ -113,6 +117,11 @@ def _save_turn(
             conversation.llm_call_count = (conversation.llm_call_count or 0) + int(
                 turn_usage.get("llm_call_count") or 0
             )
+            new_models = turn_usage.get("models") or []
+            if new_models:
+                conversation.models_used = sorted(
+                    set(conversation.models_used or []) | set(new_models)
+                )
             db.add(conversation)
 
         # Sticky flag: once a conversation has produced a recommendation, it
@@ -120,6 +129,17 @@ def _save_turn(
         if reached_recommendation and not conversation.reached_recommendation:
             conversation.reached_recommendation = True
             db.add(conversation)
+
+        # Link the conversation to the concrete PCBuild row backing this
+        # reference build template, so pc_builds reflects what was actually
+        # recommended (not just the abstract build_key).
+        if build_key and not conversation.build_id:
+            ref_build = db.execute(
+                select(ReferenceBuild).where(ReferenceBuild.build_key == build_key)
+            ).scalar_one_or_none()
+            if ref_build and ref_build.pc_build_id:
+                conversation.build_id = ref_build.pc_build_id
+                db.add(conversation)
 
         db.commit()
     except Exception:
@@ -134,6 +154,8 @@ async def _event_stream(messages: list[ChatMessage], user: dict | None, conversa
     assistant_text = ""
     turn_usage: dict | None = None
     reached_recommendation = False
+    build_data: dict | None = None
+    build_key: str | None = None
     try:
         async for event in run_chat_turn(messages):
             etype = event.get("type")
@@ -142,6 +164,8 @@ async def _event_stream(messages: list[ChatMessage], user: dict | None, conversa
             elif etype == "build":
                 # The recommend path emitted a build — this conversation is a completed build.
                 reached_recommendation = True
+                build_data = event.get("data")
+                build_key = event.get("key")
             elif etype == "usage":
                 # Internal cost accounting — capture it, don't leak cost to the client.
                 turn_usage = event
@@ -169,6 +193,8 @@ async def _event_stream(messages: list[ChatMessage], user: dict | None, conversa
             assistant_text,
             turn_usage,
             reached_recommendation,
+            build_data,
+            build_key,
         )
         await asyncio.get_running_loop().run_in_executor(None, save_fn)
 

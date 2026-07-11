@@ -10,7 +10,7 @@ from sqlalchemy import (
     String,
     Text,
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import ARRAY, UUID
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -60,6 +60,13 @@ class Conversation(Base):
         nullable=False,
         server_default="0",
         doc="Number of LLM calls billed to this conversation",
+    )
+    models_used = Column(
+        ARRAY(String),
+        nullable=False,
+        server_default="{}",
+        doc="Distinct OpenRouter model names used across this conversation's turns "
+            "(extraction, elicitation, recommendation)",
     )
     reached_recommendation = Column(
         Boolean,

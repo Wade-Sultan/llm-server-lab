@@ -100,6 +100,7 @@ async def get_conversation(
                 role=m.role,
                 content=m.content,
                 created_at=m.created_at,
+                metadata=m.metadata_,
             )
             for m in conversation.messages
         ],

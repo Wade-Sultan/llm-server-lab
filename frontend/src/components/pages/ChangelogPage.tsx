@@ -32,7 +32,7 @@ interface Release {
 
 const releases: Release[] = [
   {
-    date: "June 2026 and Beyond",
+    date: "July 2026 and Beyond",
     label: "Upcoming Features",
     changes: [
       { type: "new", text: "Live Amazon and Ebay links to buy parts" },
@@ -42,7 +42,21 @@ const releases: Release[] = [
     ],
   },
   {
-    date: "4/11/2026",
+    date: "June 2026",
+    label: "Live Links and more",
+    changes: [
+      {
+        type: "new",
+        text: "Live Amazon links",
+      },
+      {
+        type: "new",
+        text: "PC Building Guides",
+      },
+    ],
+  },
+  {
+    date: "May 2026",
     label: "User Login and Chat History",
     changes: [
       {
@@ -60,7 +74,7 @@ const releases: Release[] = [
     ],
   },
   {
-    date: "4/8/2026",
+    date: "April 2026",
     label: "Beta Release",
     changes: [
       {

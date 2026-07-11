@@ -27,6 +27,7 @@ class MessageOut(BaseModel):
     role: str
     content: str | None
     created_at: datetime
+    metadata: dict | None = None
 
 class ConversationDetail(BaseModel):
     model_config = ConfigDict(from_attributes=True)

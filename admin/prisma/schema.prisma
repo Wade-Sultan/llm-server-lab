@@ -373,6 +373,7 @@ model Conversation {
   totalTokensIn         Int       @default(0) @map("total_tokens_in")
   totalTokensOut        Int       @default(0) @map("total_tokens_out")
   llmCallCount          Int       @default(0) @map("llm_call_count")
+  modelsUsed            String[]  @default([]) @map("models_used")
   reachedRecommendation Boolean   @default(false) @map("reached_recommendation")
   createdAt             DateTime  @default(now()) @map("created_at")
   updatedAt             DateTime  @updatedAt @map("updated_at")

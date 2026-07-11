@@ -42,6 +42,16 @@ def _usage_from_openai(usage_obj: Any) -> dict:
     return {"tokens_in": tokens_in, "tokens_out": tokens_out, "cost_usd": cost}
 
 
+def _capture_chunk_model(chunk: Any, usage_sink: dict | None) -> None:
+    """Record the actual model that served this streaming call (OpenRouter may
+    route to a different underlying model than requested)."""
+    if usage_sink is None or "model" in usage_sink:
+        return
+    model = getattr(chunk, "model", None)
+    if model:
+        usage_sink["model"] = model
+
+
 def _merge_usage(total: dict, part: dict | None) -> None:
     """Accumulate one call's usage into a running per-turn total (None-safe)."""
     if not part:
@@ -50,6 +60,9 @@ def _merge_usage(total: dict, part: dict | None) -> None:
     total["tokens_out"] += part.get("tokens_out") or 0
     total["cost_usd"] += float(part.get("cost_usd") or 0)
     total["llm_call_count"] += 1
+    model = part.get("model")
+    if model and model not in total["models"]:
+        total["models"].append(model)
 
 # ---------------------------------------------------------------------------
 # Client
@@ -104,11 +117,12 @@ def _capture_dspy_usage(prediction: Any, usage_sink: dict) -> None:
 
         lm = dspy.settings.lm
         history_entry = dict(lm.history[-1]) if getattr(lm, "history", None) else None
-        tokens_in, tokens_out, cost, _model, _hash = extract_usage(prediction, history_entry)
+        tokens_in, tokens_out, cost, model, _hash = extract_usage(prediction, history_entry)
         usage_sink.update({
             "tokens_in": tokens_in,
             "tokens_out": tokens_out,
             "cost_usd": cost,
+            "model": model,
         })
     except Exception:
         logger.debug("failed to capture dspy usage for extractprofile", exc_info=True)
@@ -233,6 +247,7 @@ async def stream_recommendation(
         **_OPENROUTER_USAGE_BODY,
     )
     async for chunk in stream:
+        _capture_chunk_model(chunk, usage_sink)
         if getattr(chunk, "usage", None) and usage_sink is not None:
             usage_sink.update(_usage_from_openai(chunk.usage))
         if not chunk.choices:
@@ -292,6 +307,7 @@ async def stream_elicitation(
         **_OPENROUTER_USAGE_BODY,
     )
     async for chunk in stream:
+        _capture_chunk_model(chunk, usage_sink)
         if getattr(chunk, "usage", None) and usage_sink is not None:
             usage_sink.update(_usage_from_openai(chunk.usage))
         if not chunk.choices:
@@ -352,14 +368,14 @@ async def run_chat_turn(
       {"type": "progress", "step": "...", "message": "..."}
       {"type": "token",    "text": "..."}
       {"type": "build",    "key": "...", "data": {...}}
-      {"type": "usage",    "cost_usd": ..., "tokens_in": ..., "tokens_out": ...}
+      {"type": "usage",    "cost_usd": ..., "tokens_in": ..., "tokens_out": ..., "models": [...]}
       {"type": "done"}
 
     The "usage" event totals every OpenRouter call made this turn; the route
     consumes it internally (it is not forwarded to the client) to increment the
     conversation's running cost.
     """
-    turn_usage = {"tokens_in": 0, "tokens_out": 0, "cost_usd": 0.0, "llm_call_count": 0}
+    turn_usage = {"tokens_in": 0, "tokens_out": 0, "cost_usd": 0.0, "llm_call_count": 0, "models": []}
 
     # Extract the structured profile up front — the model only ever populates
     # fields here. Whether that's "enough" to recommend is then a hard,

@@ -71,7 +71,7 @@ _status_provider = BuildStatusProvider()
 # Model the Decide* modules run on. Routed through OpenRouter so every call
 # returns cost/tokens uniformly (and model_name is meaningful for Haiku-vs-Gemma
 # comparisons). Override RECOMMENDER_MODEL to swap the model without a code change.
-RECOMMENDER_MODEL = os.getenv("RECOMMENDER_MODEL", "openrouter/anthropic/claude-haiku-4.5")
+RECOMMENDER_MODEL = os.getenv("RECOMMENDER_MODEL", "google/gemma-4-31b-it")
 
 # Dependency order of the Decide* steps — recorded as sequence_order so later
 # decisions (which depend on earlier ones) can be reconstructed.

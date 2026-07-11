@@ -36,6 +36,7 @@ export default async function AnalyticsPage() {
   const [
     convAgg,
     completedAgg,
+    completedCostAgg,
     buildSessionAgg,
     totalMessages,
     userMessages,
@@ -56,6 +57,15 @@ export default async function AnalyticsPage() {
     // Conversations that reached a recommendation = "completed builds".
     db.conversation.aggregate({
       where: { reachedRecommendation: true },
+      _count: true,
+    }),
+    // Same, but excludes zero-token conversations from the cost average
+    // (untracked/test runs with no recorded tokens skew it toward $0).
+    db.conversation.aggregate({
+      where: {
+        reachedRecommendation: true,
+        NOT: { totalTokensIn: 0, totalTokensOut: 0 },
+      },
       _count: true,
       _avg: { totalCostUsd: true },
     }),
@@ -81,7 +91,8 @@ export default async function AnalyticsPage() {
 
   const totalSpend = num(convAgg._sum.totalCostUsd);
   const avgCostPerChat = totalConversations > 0 ? num(convAgg._avg.totalCostUsd) : null;
-  const avgCostPerCompletedBuild = completedBuilds > 0 ? num(completedAgg._avg.totalCostUsd) : null;
+  const avgCostPerCompletedBuild =
+    completedCostAgg._count > 0 ? num(completedCostAgg._avg.totalCostUsd) : null;
   const avgCostPerDspyBuild = dspyBuilds > 0 ? num(buildSessionAgg._avg.totalCostUsd) : null;
 
   const completionRate =
@@ -171,6 +182,7 @@ export default async function AnalyticsPage() {
                 <TableHead className="text-right">Messages</TableHead>
                 <TableHead className="text-right">Cost</TableHead>
                 <TableHead className="text-right">Tokens</TableHead>
+                <TableHead>Model(s)</TableHead>
                 <TableHead>Build?</TableHead>
               </TableRow>
             </TableHeader>
@@ -187,6 +199,9 @@ export default async function AnalyticsPage() {
                   </TableCell>
                   <TableCell className="text-right tabular-nums text-muted-foreground text-sm">
                     {(conv.totalTokensIn + conv.totalTokensOut).toLocaleString()}
+                  </TableCell>
+                  <TableCell className="text-muted-foreground text-sm">
+                    {conv.modelsUsed.length > 0 ? conv.modelsUsed.join(', ') : '—'}
                   </TableCell>
                   <TableCell>
                     {conv.reachedRecommendation ? (
