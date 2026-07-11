@@ -169,6 +169,9 @@ class BuildRecorder:
         budget_usd = getattr(request, "budget_usd", None)
         self.budget_cents = int(budget_usd * 100) if budget_usd is not None else None
         self._decisions: list[_DecisionRecord] = []
+        # Reference build resolved in parallel; recorded on the same session row.
+        self.reference_build_key: str | None = None
+        self.reference_build: dict | None = None
 
     def record_decision(
         self,
@@ -225,6 +228,53 @@ class BuildRecorder:
         except Exception:  # pragma: no cover - defensive
             logger.debug("record_decision failed", exc_info=True)
 
+    def set_reference_build(self, build_key: str | None, build: Any | None) -> None:
+        """
+        Attach the parallel-resolved reference build to this session.
+
+        Call before finish() so it's flushed onto the same build_sessions row.
+        Stored even when the DSPy build wins and is shown to the customer, so the
+        run carries both builds for comparison.
+        """
+        try:
+            self.reference_build_key = build_key
+            if build is None:
+                self.reference_build = None
+            elif isinstance(build, dict):
+                self.reference_build = build
+            else:  # pydantic model or similar
+                self.reference_build = getattr(build, "model_dump", lambda: dict(build))()
+        except Exception:  # pragma: no cover - defensive
+            logger.debug("set_reference_build failed", exc_info=True)
+
+    def record_case_choice(self, case_name: str) -> None:
+        """
+        Overwrite the recorded case decision's chosen_name with the final pick.
+
+        DecideCase is recorded with option_1 as chosen_name at decision time,
+        but the actual case is selected afterwards (by the user, or auto-picked).
+        Call this before finish() so final_build reflects the real choice.
+        """
+        try:
+            for d in self._decisions:
+                if d.category != "case":
+                    continue
+                d.chosen_name = case_name
+                d.chosen_price_usd = None
+                candidate_names = set()
+                for c in d.candidate_set or []:
+                    if not isinstance(c, dict):
+                        continue
+                    candidate_names.add(c.get("name"))
+                    if c.get("name") == case_name:
+                        d.chosen_price_usd = c.get("street_price_usd")
+                d.was_override = case_name not in candidate_names
+                d.output_decision = dict(d.output_decision or {})
+                d.output_decision["case_selected"] = case_name
+                break
+        except Exception:  # pragma: no cover - defensive
+            logger.debug("record_case_choice failed", exc_info=True)
+
     def finish(self, status: BuildSessionStatus = BuildSessionStatus.COMPLETED) -> None:
         """Schedule the best-effort flush. Returns immediately; never awaited."""
         try:
@@ -279,6 +329,8 @@ class BuildRecorder:
                         budget_cents=self.budget_cents,
                         input_profile=self.input_profile,
                         final_build=final_build or None,
+                        reference_build_key=self.reference_build_key,
+                        reference_build=self.reference_build,
                         status=status,
                         **agg,
                     )

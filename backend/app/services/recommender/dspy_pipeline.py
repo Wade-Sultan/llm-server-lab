@@ -225,6 +225,33 @@ def _allocate_budget(budget_usd: int, use_cases: list[str]) -> dict[str, int]:
     return {slot: int(budget_usd * pct) for slot, pct in splits.items()}
 
 
+def _request_summary(request: BuildRequest) -> str:
+    """
+    Flatten the request into the `use_cases` input string the Decide*
+    signatures expect: use cases plus preferences and Q&A answers.
+    """
+    parts = [f"Use cases: {', '.join(request.use_cases)}"]
+    prefs = request.preferences
+    pref_bits = []
+    if prefs.form_factor != "no_preference":
+        pref_bits.append(f"{prefs.form_factor} form factor")
+    if prefs.color_theme:
+        pref_bits.append(f"color theme: {prefs.color_theme}")
+    if prefs.rgb_lighting:
+        pref_bits.append("RGB lighting")
+    if pref_bits:
+        parts.append(f"Preferences: {', '.join(pref_bits)}")
+    if request.answers:
+        answers = "; ".join(
+            f"{k}: {', '.join(v) if isinstance(v, list) else v}"
+            for k, v in request.answers.items()
+            if v
+        )
+        if answers:
+            parts.append(f"Q&A: {answers}")
+    return " | ".join(parts)
+
+
 # ---------------------------------------------------------------------------
 # Pipeline state
 # ---------------------------------------------------------------------------
@@ -234,6 +261,10 @@ class DSPyBuildState:
     """Accumulates decisions as the pipeline runs."""
     request: BuildRequest
     progress_callback: Callable[[str, str], None] | None = None
+
+    # Flattened use cases + preferences + Q&A, passed as the `use_cases`
+    # input to every Decide* module. Set once by run_pipeline.
+    use_case_summary: str = ""
 
     # Decisions (populated step by step)
     cpu_name: str = ""
@@ -289,7 +320,7 @@ async def _step_ddr(state: DSPyBuildState, session: AsyncSession, budget: dict, 
         recorder,
         program,
         status_fn=lambda msg: _emit(state, "ddr", msg),
-        use_cases=str(state.request.use_cases),
+        use_cases=state.use_case_summary or str(state.request.use_cases),
         budget_total=state.request.budget_usd,
         candidates=candidates,
     )
@@ -304,7 +335,7 @@ async def _step_cpu(state: DSPyBuildState, session: AsyncSession, budget: dict, 
         recorder,
         program,
         status_fn=lambda msg: _emit(state, "cpu", msg),
-        use_cases=str(state.request.use_cases),
+        use_cases=state.use_case_summary or str(state.request.use_cases),
         budget_total=state.request.budget_usd,
         cpu_budget_ceiling=budget["cpu"],
         candidates=candidates,
@@ -328,7 +359,7 @@ async def _step_cooler(state: DSPyBuildState, session: AsyncSession, budget: dic
         recorder,
         program,
         status_fn=lambda msg: _emit(state, "cooler", msg),
-        use_cases=str(state.request.use_cases),
+        use_cases=state.use_case_summary or str(state.request.use_cases),
         cpu_name=state.cpu_name,
         cpu_tdp_w=state.cpu_tdp_w,
         budget_ceiling=budget["cooler"],
@@ -352,7 +383,7 @@ async def _step_motherboard(state: DSPyBuildState, session: AsyncSession, budget
         recorder,
         program,
         status_fn=lambda msg: _emit(state, "motherboard", msg),
-        use_cases=str(state.request.use_cases),
+        use_cases=state.use_case_summary or str(state.request.use_cases),
         cpu_name=state.cpu_name,
         ddr_gen=state.cpu_ddr_gen,
         budget_ceiling=budget["mobo"],
@@ -374,7 +405,7 @@ async def _step_ram(state: DSPyBuildState, session: AsyncSession, budget: dict, 
         recorder,
         program,
         status_fn=lambda msg: _emit(state, "ram", msg),
-        use_cases=str(state.request.use_cases),
+        use_cases=state.use_case_summary or str(state.request.use_cases),
         ddr_gen=state.cpu_ddr_gen,
         budget_ceiling=budget["ram"],
         candidates=candidates,
@@ -392,7 +423,7 @@ async def _step_storage(state: DSPyBuildState, session: AsyncSession, budget: di
         recorder,
         program,
         status_fn=lambda msg: _emit(state, "storage", msg),
-        use_cases=str(state.request.use_cases),
+        use_cases=state.use_case_summary or str(state.request.use_cases),
         budget_ceiling=budget["storage"],
         candidates=candidates,
     )
@@ -409,7 +440,7 @@ async def _step_gpu(state: DSPyBuildState, session: AsyncSession, budget: dict, 
         recorder,
         program,
         status_fn=lambda msg: _emit(state, "gpu", msg),
-        use_cases=str(state.request.use_cases),
+        use_cases=state.use_case_summary or str(state.request.use_cases),
         budget_total=state.request.budget_usd,
         gpu_budget_ceiling=budget["gpu"],
         candidates=candidates,
@@ -451,7 +482,7 @@ async def _step_case(state: DSPyBuildState, session: AsyncSession, budget: dict,
         recorder,
         program,
         status_fn=lambda msg: _emit(state, "case", msg),
-        use_cases=str(state.request.use_cases),
+        use_cases=state.use_case_summary or str(state.request.use_cases),
         mobo_form_factor=state.mobo_form_factor,
         budget_ceiling=budget["case"],
         candidates=candidates,
@@ -509,6 +540,7 @@ async def run_pipeline(
     Call run_pipeline_post_case() once the user has picked their case.
     """
     state = DSPyBuildState(request=request, progress_callback=progress_callback)
+    state.use_case_summary = _request_summary(request)
     budget = _allocate_budget(request.budget_usd, request.use_cases)
 
     try:
@@ -544,6 +576,8 @@ async def run_pipeline_post_case(
     into one session; it is flushed here (status completed, or error on failure).
     """
     state.case_name = case_name
+    if recorder is not None:
+        recorder.record_case_choice(case_name)
     case = await crud_components.get_case_by_name(session, case_name)
     if case:
         state.case_included_fans = case.included_fan_count or 0

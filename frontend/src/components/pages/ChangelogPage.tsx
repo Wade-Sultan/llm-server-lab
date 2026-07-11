@@ -32,13 +32,20 @@ interface Release {
 
 const releases: Release[] = [
   {
-    date: "July 2026 and Beyond",
+    date: "August 2026 and Beyond",
     label: "Upcoming Features",
     changes: [
-      { type: "new", text: "Live Amazon and Ebay links to buy parts" },
-      { type: "new", text: "PC Building Guides page" },
+      { type: "new", text: "Live Ebay links" },
+      { type: "new", text: "Email price alerts for parts" },
       { type: "new", text: "Find a local PC builder page" },
       { type: "improved", text: "Upgraded recommendation pipeline" },
+    ],
+  },
+  {
+    date: "July 2026",
+    label: "Performance Improvements",
+    changes: [
+      { type: "improved", text: "First chat turn load time" },
     ],
   },
   {

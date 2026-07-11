@@ -7,11 +7,25 @@ hit typed columns rather than Python-only @property values.
 
 from __future__ import annotations
 
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.pcparts import CPU, GPU, Case, CPUCooler, Fan, Motherboard, PSU, RAM, Storage
+from app.models.pcparts import CPU, GPU, Case, CPUCooler, Fan, Motherboard, PCPart, PSU, RAM, Storage
 from app.schemas.chat import UserPreferences
+
+
+# ---------------------------------------------------------------------------
+# Generic (polymorphic base)
+# ---------------------------------------------------------------------------
+
+async def get_part_by_name(db: AsyncSession, name: str) -> PCPart | None:
+    """Case-insensitive lookup on the polymorphic base — any part type."""
+    stmt = select(PCPart).where(
+        func.lower(PCPart.name) == name.lower(),
+        PCPart.is_active == True,  # noqa: E712
+    ).limit(1)
+    result = await db.execute(stmt)
+    return result.scalars().first()
 
 
 # ---------------------------------------------------------------------------

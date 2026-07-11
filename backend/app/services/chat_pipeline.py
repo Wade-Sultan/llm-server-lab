@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import time
 from typing import Any, AsyncIterator
 
 import openai
 
 from app.core.config import settings
 from app.data.refbuilds import Build
-from app.schemas.chat import BuildProfile, ChatMessage
+from app.schemas.chat import BuildProfile, BuildRequest, ChatMessage
 from app.services.resolver import resolve_build
 from app.services.chat_models import ChatModelConfig
 from app.core.db import AsyncSessionLocal
@@ -357,6 +359,183 @@ async def _resolve_build_cached(
 
 
 # ---------------------------------------------------------------------------
+# DSPy custom-build path
+# ---------------------------------------------------------------------------
+# Once the profile is complete, the DSPy pipeline and the reference-build
+# resolver are started together. The reference build is the guaranteed
+# fallback: if the DSPy run errors out or exceeds the timeout, its result is
+# thrown away and the reference build is what gets recommended.
+
+_DSPY_CHAT_TIMEOUT_S = float(os.getenv("DSPY_CHAT_TIMEOUT_S", "180"))
+
+# Sentinel the DSPy runner always enqueues last, so the progress-forwarding
+# loop in run_chat_turn knows the pipeline is finished (success or not).
+_PIPELINE_DONE = object()
+
+_BUDGET_TIER_USD = {"entry": 1000, "mid": 1500, "high": 2500, "elite": 4000}
+
+# BuildProfile.primary_use → BuildRequest use-case key (must match the keys
+# _allocate_budget knows: gaming, aiml, creator, default-anything-else).
+_PRIMARY_USE_TO_USE_CASE = {
+    "gaming": "gaming",
+    "video_editing": "creator",
+    "local_llm": "aiml",
+    "general": "productivity",
+}
+
+# Display order + labels for the assembled BuildCard parts list.
+_DSPY_COMPONENT_SLOTS: list[tuple[str, str]] = [
+    ("CPU", "cpu_name"),
+    ("CPU Cooler", "cooler_name"),
+    ("Motherboard", "mobo_name"),
+    ("RAM", "ram_name"),
+    ("Storage", "storage_name"),
+    ("GPU", "gpu_name"),
+    ("PSU", "psu_name"),
+    ("Case", "case_name"),
+    ("Case Fans", "fans_name"),
+]
+
+
+def _profile_to_build_request(profile: BuildProfile) -> BuildRequest:
+    """Map the chat-extracted BuildProfile onto the pipeline's BuildRequest."""
+    answers: dict[str, str | list[str]] = {}
+    if profile.gaming_resolution:
+        answers["gaming.resolution"] = profile.gaming_resolution
+    if profile.games:
+        answers["gaming.games"] = profile.games
+    if profile.workloads:
+        answers["general.workloads"] = profile.workloads
+    if profile.notes:
+        answers["general.notes"] = profile.notes
+    return BuildRequest(
+        use_cases=[_PRIMARY_USE_TO_USE_CASE.get(profile.primary_use, "productivity")],
+        budget_usd=_BUDGET_TIER_USD.get(profile.budget_tier, 1500),
+        answers=answers,
+    )
+
+
+async def _assemble_dspy_build(state: Any, db) -> dict:
+    """Shape a finished DSPyBuildState like a reference Build dict so the
+    build SSE event and the recommendation prompt work unchanged."""
+    from app.crud.components import get_part_by_name
+
+    parts: list[dict] = []
+    total = 0.0
+    for component, attr in _DSPY_COMPONENT_SLOTS:
+        name = getattr(state, attr)
+        if not name:
+            continue
+        part = await get_part_by_name(db, name)
+        price = None
+        if part is not None and part.street_price_cents is not None:
+            price = round(part.street_price_cents / 100, 2)
+            total += price
+        parts.append({
+            "component": component,
+            "brand": (part.manufacturer if part else None) or "",
+            "model": name,
+            "approx_price": price,
+        })
+    return {
+        "label": "Custom Build",
+        "description": "Assembled component-by-component for your specific needs and budget.",
+        "total_approx": round(total),
+        "parts": parts,
+    }
+
+
+async def _attach_reference_build(recorder: Any, ref_task: asyncio.Task) -> None:
+    """Await the parallel reference-build task and record it on the DSPy session.
+
+    Guarded: a reference-resolution failure must not stop the DSPy run from
+    being recorded (it's simply recorded without a reference build).
+    """
+    try:
+        ref_key, ref_build = await ref_task
+        recorder.set_reference_build(ref_key, ref_build)
+    except Exception:
+        logger.warning(
+            "reference build resolution failed; DSPy run recorded without it",
+            exc_info=True,
+        )
+
+
+async def _run_dspy_build(
+    profile: BuildProfile,
+    progress_queue: asyncio.Queue,
+    ref_task: asyncio.Task,
+) -> dict | None:
+    """
+    Run the full DSPy pipeline for a chat turn on its own DB session.
+
+    Returns a build payload dict shaped like a reference Build, or None on any
+    failure — the caller falls back to the reference build. Always enqueues
+    _PIPELINE_DONE last. Never raises.
+
+    ref_task is the reference build being resolved in parallel. On success it is
+    recorded onto the same build_sessions row as the DSPy run (via the recorder),
+    so a completed run carries both the shown DSPy build and the reference build.
+
+    The pipeline's case step returns 3 options meant for a user round-trip;
+    the chat flow has no case-picker UI yet, so the best-value option (option 1)
+    is auto-selected. All 3 options and their reasons are still recorded.
+    """
+    from app.models.build_session import BuildSessionStatus
+    from app.services.recommender.dspy_pipeline import (
+        PIPELINE_VERSION,
+        run_pipeline,
+        run_pipeline_post_case,
+    )
+    from app.services.recommender.recording import BuildRecorder
+
+    request = _profile_to_build_request(profile)
+    recorder = BuildRecorder(request, PIPELINE_VERSION)
+
+    def _progress(step: str, message: str) -> None:
+        progress_queue.put_nowait({"type": "progress", "step": step, "message": message})
+
+    try:
+        async with AsyncSessionLocal() as db:
+            state = await run_pipeline(
+                request, db, progress_callback=_progress, recorder=recorder
+            )
+            if state.error:
+                logger.warning("DSPy pipeline failed; using reference build: %s", state.error)
+                return None
+            if not state.case_options or not state.case_options[0].get("name"):
+                logger.warning("DSPy pipeline produced no case options; using reference build")
+                recorder.finish(BuildSessionStatus.ERROR)
+                return None
+
+            case_name = state.case_options[0]["name"]
+            # Both builds succeeded far enough to record together: attach the
+            # reference build before post_case finishes (flushes) the recorder.
+            await _attach_reference_build(recorder, ref_task)
+            state = await run_pipeline_post_case(state, db, case_name, recorder=recorder)
+            if state.error:
+                logger.warning("DSPy post-case step failed; using reference build: %s", state.error)
+                return None
+
+            return await _assemble_dspy_build(state, db)
+    except asyncio.CancelledError:
+        # Timed out and cancelled by run_chat_turn — flush telemetry as error.
+        recorder.finish(BuildSessionStatus.ERROR)
+        raise
+    except Exception:
+        logger.exception("DSPy pipeline crashed; using reference build")
+        return None
+    finally:
+        progress_queue.put_nowait(_PIPELINE_DONE)
+
+
+async def _resolve_reference_build(profile: BuildProfile) -> tuple[str, Build]:
+    """Resolve the reference build on its own DB session (cached)."""
+    async with AsyncSessionLocal() as db:
+        return await _resolve_build_cached(profile, db)
+
+
+# ---------------------------------------------------------------------------
 # Public API — orchestrate the full flow
 # ---------------------------------------------------------------------------
 
@@ -397,11 +576,58 @@ async def run_chat_turn(
         yield {"type": "done"}
         return
 
-    # --- Profile is complete: resolve → recommend ---
+    # --- Profile is complete: run DSPy + reference build in parallel ---
+    # Both start as soon as the profile is complete. The DSPy pipeline's
+    # progress events stream through while it runs; if it fails or times out,
+    # its result is discarded and the reference build is recommended instead.
 
     yield {"type": "progress", "step": "resolving", "message": "Selecting your parts…"}
-    async with AsyncSessionLocal() as db:
-        build_key, build = await _resolve_build_cached(profile, db)
+
+    progress_queue: asyncio.Queue = asyncio.Queue()
+    ref_task = asyncio.create_task(_resolve_reference_build(profile))
+    dspy_task = asyncio.create_task(_run_dspy_build(profile, progress_queue, ref_task))
+
+    deadline = time.monotonic() + _DSPY_CHAT_TIMEOUT_S
+    timed_out = False
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            timed_out = True
+            break
+        try:
+            item = await asyncio.wait_for(progress_queue.get(), timeout=remaining)
+        except asyncio.TimeoutError:
+            timed_out = True
+            break
+        if item is _PIPELINE_DONE:
+            break
+        yield item
+
+    dspy_build: dict | None = None
+    if timed_out:
+        dspy_task.cancel()
+        try:
+            await dspy_task
+        except asyncio.CancelledError:
+            pass
+        logger.warning(
+            "DSPy pipeline timed out after %.0fs; using reference build",
+            _DSPY_CHAT_TIMEOUT_S,
+        )
+    else:
+        dspy_build = await dspy_task  # never raises; None on failure
+
+    if dspy_build is not None:
+        # Customer sees the DSPy build. The reference build was already awaited
+        # and recorded onto the same session row inside _run_dspy_build; we don't
+        # cancel it (it's the recorded comparison), just make sure it's reaped.
+        build_key, build = "custom_dspy", dspy_build
+        try:
+            await ref_task
+        except Exception:
+            logger.debug("reference build task errored (already recorded/ignored)", exc_info=True)
+    else:
+        build_key, build = await ref_task
 
     yield {
         "type": "build",

@@ -80,6 +80,20 @@ class BuildSession(Base):
         doc="Denormalized {category: part_id} of the final build for dashboard reads",
     )
 
+    # When the DSPy build succeeds, the customer is shown the DSPy build but the
+    # reference build that was resolved in parallel is still recorded here, so
+    # every successful run carries a DSPy-vs-reference comparison pair.
+    reference_build_key = Column(
+        Text,
+        nullable=True,
+        doc="Key of the reference build resolved alongside this DSPy run",
+    )
+    reference_build = Column(
+        JSONB,
+        nullable=True,
+        doc="Full resolved reference Build payload (label, parts, total) at run time",
+    )
+
     total_cost_usd = Column(
         Numeric,
         nullable=True,
