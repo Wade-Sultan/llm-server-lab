@@ -50,7 +50,12 @@ class BuildStatusProvider(StatusMessageProvider):
         if not label:
             return None
 
-        candidates_raw = inputs.get("candidates")
+        # with_callbacks builds `inputs` via inspect.getcallargs on
+        # Module.__call__(self, *args, **kwargs), so our keyword-only calls
+        # (candidates=..., use_cases=..., ...) land nested under "kwargs", not
+        # as top-level keys — inputs.get("candidates") was always None here.
+        call_kwargs = inputs.get("kwargs") or inputs
+        candidates_raw = call_kwargs.get("candidates")
         if candidates_raw:
             try:
                 count = len(json.loads(candidates_raw))

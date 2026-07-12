@@ -23,7 +23,7 @@ async def get_all_active(db: AsyncSession) -> dict[str, Build]:
         result = await db.execute(stmt)
         rows = result.unique().scalars().all()
         part_ids = [rbp.part_id for row in rows for rbp in row.parts]
-        amazon_urls = await _get_amazon_urls_by_part(db, part_ids)
+        amazon_urls = await get_amazon_urls_by_part(db, part_ids)
         return {row.build_key: _to_build(row, amazon_urls) for row in rows}
     except Exception as e:
         logger.warning("DB query for reference builds failed, falling back to static data: %s", e)
@@ -41,7 +41,7 @@ async def get_by_key(db: AsyncSession, build_key: str) -> tuple[str, Build] | No
         row = result.unique().scalars().first()
         if row is None:
             return BUILDS.get(build_key) and (build_key, BUILDS[build_key])
-        amazon_urls = await _get_amazon_urls_by_part(db, [rbp.part_id for rbp in row.parts])
+        amazon_urls = await get_amazon_urls_by_part(db, [rbp.part_id for rbp in row.parts])
         return build_key, _to_build(row, amazon_urls)
     except Exception as e:
         logger.warning("DB query for build key '%s' failed, falling back to static data: %s", build_key, e)
@@ -49,7 +49,7 @@ async def get_by_key(db: AsyncSession, build_key: str) -> tuple[str, Build] | No
         return (build_key, build) if build else None
 
 
-async def _get_amazon_urls_by_part(
+async def get_amazon_urls_by_part(
     db: AsyncSession, part_ids: list[uuid.UUID]
 ) -> dict[uuid.UUID, str]:
     """Map part_id -> Amazon product page URL, one listing per part."""

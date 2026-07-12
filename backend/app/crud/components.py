@@ -270,13 +270,19 @@ async def get_case_candidates(
     stmt = select(Case).where(
         Case.is_active == True,  # noqa: E712
         Case.street_price_cents <= budget_ceiling_usd * 100,
-        Case.supported_mobo_form_factors.contains([mobo_form_factor]),
     )
     # SFX/SFX-L PSU only fits cases that explicitly support it; ATX fits anywhere
     if psu_form_factor in ("sfx", "sfx_l"):
         stmt = stmt.where(Case.max_psu_length_mm.isnot(None))
     result = await db.execute(stmt)
-    return list(result.scalars().all())
+    # supported_mobo_form_factors is a free-text, comma-separated admin field
+    # (e.g. "ATX, mATX, ITX") — same casing/whitespace risk as
+    # CPUCooler.supported_sockets, so filter in Python against normalized values.
+    target = _normalize(mobo_form_factor)
+    return [
+        c for c in result.scalars().all()
+        if target in {_normalize(f) for f in (c.supported_mobo_form_factors or [])}
+    ]
 
 
 # ---------------------------------------------------------------------------
