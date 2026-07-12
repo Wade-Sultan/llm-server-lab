@@ -28,6 +28,12 @@ async def get_part_by_name(db: AsyncSession, name: str) -> PCPart | None:
     return result.scalars().first()
 
 
+def _normalize(value: str) -> str:
+    """Fold a free-text compatibility field (socket, ddr_generation, ...) to a
+    comparable form."""
+    return value.strip().lower()
+
+
 # ---------------------------------------------------------------------------
 # CPU
 # ---------------------------------------------------------------------------
@@ -103,14 +109,21 @@ async def get_cooler_candidates(
     cpu_socket: str,
     budget_ceiling_usd: int,
 ) -> list[CPUCooler]:
+    # supported_sockets is a free-text, admin-entered array (e.g. "LGA1700, AM5"),
+    # so array containment can't rely on exact casing/whitespace matching the
+    # CPU's own socket string — filter in Python against normalized values
+    # instead of CPUCooler.supported_sockets.contains([cpu_socket]).
     stmt = select(CPUCooler).where(
         CPUCooler.is_active == True,  # noqa: E712
         CPUCooler.street_price_cents <= budget_ceiling_usd * 100,
         CPUCooler.max_tdp_watts >= cpu_tdp_w,
-        CPUCooler.supported_sockets.contains([cpu_socket]),
     )
     result = await db.execute(stmt)
-    return list(result.scalars().all())
+    target = _normalize(cpu_socket)
+    return [
+        c for c in result.scalars().all()
+        if target in {_normalize(s) for s in (c.supported_sockets or [])}
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -134,11 +147,17 @@ async def get_motherboard_candidates(
     stmt = select(Motherboard).where(
         Motherboard.is_active == True,  # noqa: E712
         Motherboard.street_price_cents <= budget_ceiling_usd * 100,
-        Motherboard.socket == cpu_socket,
-        Motherboard.ddr_generation == ddr_gen,
+        # socket/ddr_generation are free-text admin-entered fields, not an
+        # enum — normalize both sides so e.g. "AM5"/"am5" or "DDR5"/"ddr5"
+        # still match instead of silently returning zero candidates.
+        func.lower(func.trim(Motherboard.socket)) == _normalize(cpu_socket),
+        func.lower(func.trim(Motherboard.ddr_generation)) == _normalize(ddr_gen),
     )
     if form_factor != "no_preference":
-        stmt = stmt.where(Motherboard.form_factor == form_factor)
+        # form_factor is a fixed lowercase Literal from preferences, but
+        # Motherboard.form_factor is the same free-text admin field as
+        # socket/ddr_generation above — normalize it too.
+        stmt = stmt.where(func.lower(func.trim(Motherboard.form_factor)) == _normalize(form_factor))
     if wifi_required:
         stmt = stmt.where(Motherboard.has_wifi == True)  # noqa: E712
     result = await db.execute(stmt)
@@ -163,7 +182,7 @@ async def get_ram_candidates(
     stmt = select(RAM).where(
         RAM.is_active == True,  # noqa: E712
         RAM.street_price_cents <= budget_ceiling_usd * 100,
-        RAM.ddr_generation == ddr_gen,
+        func.lower(func.trim(RAM.ddr_generation)) == _normalize(ddr_gen),
     )
     result = await db.execute(stmt)
     return list(result.scalars().all())
@@ -224,7 +243,9 @@ async def get_psu_candidates(
         PSU.is_active == True,  # noqa: E712
         PSU.street_price_cents <= budget_ceiling_usd * 100,
         PSU.wattage >= min_wattage,
-        PSU.form_factor == psu_form_factor,
+        # PSU.form_factor is the same free-text admin field as
+        # Motherboard.socket/ddr_generation — normalize it too.
+        func.lower(func.trim(PSU.form_factor)) == _normalize(psu_form_factor),
     )
     result = await db.execute(stmt)
     return list(result.scalars().all())
