@@ -157,7 +157,7 @@ async def _event_stream(messages: list[ChatMessage], user: dict | None, conversa
     build_data: dict | None = None
     build_key: str | None = None
     try:
-        async for event in run_chat_turn(messages):
+        async for event in run_chat_turn(messages, conversation_id=conversation_id):
             etype = event.get("type")
             if etype == "token":
                 assistant_text += event.get("text", "")

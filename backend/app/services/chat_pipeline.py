@@ -5,6 +5,7 @@ import logging
 import os
 import threading
 import time
+import uuid
 from typing import Any, AsyncIterator
 
 import openai
@@ -28,7 +29,19 @@ logger = logging.getLogger(__name__)
 # OpenRouter's usage accounting so the final chunk carries tokens + real cost.
 
 _STREAM_USAGE_OPTS: dict[str, Any] = {"stream_options": {"include_usage": True}}
-_OPENROUTER_USAGE_BODY: dict[str, Any] = {"extra_body": {"usage": {"include": True}}}
+
+
+def _extra_body(session_id: str | None) -> dict[str, Any]:
+    """
+    extra_body kwarg for an OpenRouter chat completion call. Always requests
+    usage/cost accounting; adds OpenRouter's `session_id` when one is given so
+    every call in a conversation turn groups into one session in OpenRouter's
+    dashboard.
+    """
+    body: dict[str, Any] = {"usage": {"include": True}}
+    if session_id:
+        body["session_id"] = session_id
+    return {"extra_body": body}
 
 
 def _usage_from_openai(usage_obj: Any) -> dict:
@@ -151,11 +164,22 @@ def _format_conversation(messages: list[ChatMessage]) -> str:
 async def extract_profile(
     messages: list[ChatMessage],
     usage_sink: dict | None = None,
+    session_id: str | None = None,
 ) -> BuildProfile:
-    """Extract a BuildProfile from the conversation using the DSPy module."""
+    """Extract a BuildProfile from the conversation using the DSPy module.
+
+    session_id, when given, tags this call with OpenRouter's session_id (via
+    dspy.context, which — unlike dspy.configure — is safe to use from any
+    thread/task) so it groups with the rest of the turn's calls.
+    """
+    import dspy
+
+    from app.services.recommender.dspy_pipeline import session_lm
+
     conversation = _format_conversation(messages)
     program = _get_extract_program()
-    result = await asyncio.to_thread(program, conversation=conversation)
+    with dspy.context(lm=session_lm(session_id)):
+        result = await asyncio.to_thread(program, conversation=conversation)
 
     if usage_sink is not None:
         _capture_dspy_usage(result, usage_sink)
@@ -229,13 +253,15 @@ async def stream_recommendation(
     build_key: str,
     build: Build,
     usage_sink: dict | None = None,
+    session_id: str | None = None,
 ) -> AsyncIterator[str]:
     """
     Stream the recommendation response token-by-token.
     Yields raw text chunks (not SSE-formatted — the route handles that).
 
     If usage_sink is provided, it's filled with this call's tokens + cost from
-    OpenRouter's final usage chunk.
+    OpenRouter's final usage chunk. session_id groups this call with the rest
+    of the turn's calls in OpenRouter's dashboard.
     """
     client = _get_client()
 
@@ -256,7 +282,7 @@ async def stream_recommendation(
         messages=api_messages,
         stream=True,
         **_STREAM_USAGE_OPTS,
-        **_OPENROUTER_USAGE_BODY,
+        **_extra_body(session_id),
     )
     async for chunk in stream:
         _capture_chunk_model(chunk, usage_sink)
@@ -291,6 +317,7 @@ information has been gathered.
 async def stream_elicitation(
     messages: list[ChatMessage],
     usage_sink: dict | None = None,
+    session_id: str | None = None,
 ) -> AsyncIterator[str]:
     """
     Stream a conversational response that gathers more info from the user.
@@ -298,7 +325,8 @@ async def stream_elicitation(
     not by the model — this function only ever asks follow-up questions.
 
     If usage_sink is provided, it's filled with this call's tokens + cost from
-    OpenRouter's final usage chunk.
+    OpenRouter's final usage chunk. session_id groups this call with the rest
+    of the turn's calls in OpenRouter's dashboard.
     """
     client = _get_client()
 
@@ -316,7 +344,7 @@ async def stream_elicitation(
         messages=api_messages,
         stream=True,
         **_STREAM_USAGE_OPTS,
-        **_OPENROUTER_USAGE_BODY,
+        **_extra_body(session_id),
     )
     async for chunk in stream:
         _capture_chunk_model(chunk, usage_sink)
@@ -551,6 +579,7 @@ async def _resolve_reference_build(profile: BuildProfile) -> tuple[str, Build]:
 
 async def run_chat_turn(
     messages: list[ChatMessage],
+    conversation_id: str | None = None,
 ) -> AsyncIterator[dict]:
     """
     Main entry point. Yields SSE-ready dicts:
@@ -563,7 +592,14 @@ async def run_chat_turn(
     The "usage" event totals every OpenRouter call made this turn; the route
     consumes it internally (it is not forwarded to the client) to increment the
     conversation's running cost.
+
+    conversation_id (when the caller has one — guests won't) is passed to
+    OpenRouter as session_id so every OpenRouter call this turn makes (extract,
+    elicit or recommend) groups into one session in OpenRouter's dashboard.
+    Falls back to a fresh id scoped to just this turn for guests, so at least
+    this turn's calls still group together.
     """
+    session_id = conversation_id or str(uuid.uuid4())
     turn_usage = {"tokens_in": 0, "tokens_out": 0, "cost_usd": 0.0, "llm_call_count": 0, "models": []}
 
     # Extract the structured profile up front — the model only ever populates
@@ -572,13 +608,13 @@ async def run_chat_turn(
     # No progress event yet: the frontend treats any "progress" event as
     # confirmation we're on the recommend path, so it can't fire until we know.
     extract_usage_sink: dict = {}
-    profile = await extract_profile(messages, usage_sink=extract_usage_sink)
+    profile = await extract_profile(messages, usage_sink=extract_usage_sink, session_id=session_id)
     _merge_usage(turn_usage, extract_usage_sink)
 
     if not is_profile_complete(profile):
         # Elicitation mode — gather more info, then end the turn.
         elicit_usage_sink: dict = {}
-        async for chunk in stream_elicitation(messages, usage_sink=elicit_usage_sink):
+        async for chunk in stream_elicitation(messages, usage_sink=elicit_usage_sink, session_id=session_id):
             yield {"type": "token", "text": chunk}
         _merge_usage(turn_usage, elicit_usage_sink)
 
@@ -655,7 +691,7 @@ async def run_chat_turn(
 
     recommend_usage_sink: dict = {}
     async for chunk in stream_recommendation(
-        messages, profile, build_key, build, usage_sink=recommend_usage_sink
+        messages, profile, build_key, build, usage_sink=recommend_usage_sink, session_id=session_id
     ):
         yield {"type": "token", "text": chunk}
     _merge_usage(turn_usage, recommend_usage_sink)

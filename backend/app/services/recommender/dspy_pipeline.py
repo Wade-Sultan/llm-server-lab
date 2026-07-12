@@ -25,9 +25,11 @@ Status messages:
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import time
+import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -81,6 +83,36 @@ _SEQUENCE_ORDER: dict[str, int] = {
 }
 
 
+class NoValidCandidatesError(RuntimeError):
+    """
+    Raised when a Decide* step has zero eligible parts to choose from (e.g. no
+    cooler in the DB fits the chosen CPU's socket/TDP within budget).
+
+    Handled the same way as any other pipeline failure: run_pipeline/
+    run_pipeline_post_case catch it, record status=error, and the chat
+    pipeline falls back to the reference build immediately.
+    """
+
+    def __init__(self, step: str) -> None:
+        super().__init__(f"No valid candidates for step '{step}'")
+        self.step = step
+
+
+def _ensure_candidates(step: str, candidates_json: str) -> None:
+    """Fail fast if a step's candidate query came back empty.
+
+    An empty candidate list means the LLM would be asked to choose from
+    nothing — there's no valid part in the DB compatible with the decisions
+    made so far, so continuing would only produce a hallucinated pick.
+    """
+    try:
+        candidates = json.loads(candidates_json)
+    except (TypeError, ValueError):
+        candidates = None
+    if not candidates:
+        raise NoValidCandidatesError(step)
+
+
 def _resolve_pipeline_version() -> str:
     """GEPA cohort key: pinned PIPELINE_VERSION env, else the git short SHA."""
     env = os.getenv("PIPELINE_VERSION")
@@ -103,6 +135,11 @@ PIPELINE_VERSION = _resolve_pipeline_version()
 # DSPy configuration
 # ---------------------------------------------------------------------------
 
+# Base extra_body sent on every OpenRouter call. Copied (not mutated) per
+# session so the "usage" flag survives alongside a per-session session_id.
+_OPENROUTER_EXTRA_BODY: dict[str, Any] = {"usage": {"include": True}}
+
+
 def configure_dspy() -> None:
     """Configure DSPy to run the Decide* modules via OpenRouter. Call once at startup."""
     lm = dspy.LM(
@@ -112,10 +149,25 @@ def configure_dspy() -> None:
         temperature=0.3,
         # Ask OpenRouter to include usage/cost accounting in the response so
         # litellm surfaces the real cost per call in the LM history.
-        extra_body={"usage": {"include": True}},
+        extra_body=dict(_OPENROUTER_EXTRA_BODY),
     )
     # track_usage lets prediction.get_lm_usage() return per-prediction tokens.
     dspy.configure(lm=lm, track_usage=True)
+
+
+def session_lm(session_id: str | None) -> dspy.LM:
+    """
+    Clone the globally-configured LM with OpenRouter's `session_id` set, so
+    every call made under it groups into one session in OpenRouter's
+    dashboard. With no session_id, returns the LM unchanged (no-op override).
+
+    Use via `with dspy.context(lm=session_lm(...)):` around a run — dspy.context
+    is safe to call from any thread/task, unlike dspy.configure (which is
+    restricted to the one thread that first called it).
+    """
+    if not session_id:
+        return dspy.settings.lm
+    return dspy.settings.lm.copy(extra_body={**_OPENROUTER_EXTRA_BODY, "session_id": session_id})
 
 
 # ---------------------------------------------------------------------------
@@ -262,6 +314,11 @@ class DSPyBuildState:
     request: BuildRequest
     progress_callback: Callable[[str, str], None] | None = None
 
+    # OpenRouter session id grouping every LLM call this build makes (ddr
+    # through fans) under one session in OpenRouter's dashboard. Set once by
+    # run_pipeline and reused by run_pipeline_post_case for the fans step.
+    session_id: str = ""
+
     # Flattened use cases + preferences + Q&A, passed as the `use_cases`
     # input to every Decide* module. Set once by run_pipeline.
     use_case_summary: str = ""
@@ -316,6 +373,7 @@ def _emit(state: DSPyBuildState, step: str, message: str) -> None:
 async def _step_ddr(state: DSPyBuildState, session: AsyncSession, budget: dict, program: DecideDDR, recorder: BuildRecorder | None) -> None:
     _emit(state, "ddr", "Deciding memory generation…")
     candidates = await get_ddr_candidates(session, budget["cpu"])
+    _ensure_candidates("ddr", candidates)
     result = await _run_step(
         recorder,
         program,
@@ -331,6 +389,7 @@ async def _step_ddr(state: DSPyBuildState, session: AsyncSession, budget: dict, 
 async def _step_cpu(state: DSPyBuildState, session: AsyncSession, budget: dict, program: DecideCPU, recorder: BuildRecorder | None) -> None:
     _emit(state, "cpu", "Choosing your CPU…")
     candidates = await get_cpu_candidates(session, budget["cpu"], state.request.preferences)
+    _ensure_candidates("cpu", candidates)
     result = await _run_step(
         recorder,
         program,
@@ -355,6 +414,7 @@ async def _step_cooler(state: DSPyBuildState, session: AsyncSession, budget: dic
         session, state.cpu_tdp_w, state.cpu_socket, budget["cooler"],
         state.request.preferences.form_factor,
     )
+    _ensure_candidates("cooler", candidates)
     result = await _run_step(
         recorder,
         program,
@@ -379,6 +439,7 @@ async def _step_motherboard(state: DSPyBuildState, session: AsyncSession, budget
         form_factor=state.request.preferences.form_factor,
         wifi_required=state.request.preferences.wifi_required,
     )
+    _ensure_candidates("motherboard", candidates)
     result = await _run_step(
         recorder,
         program,
@@ -401,6 +462,7 @@ async def _step_motherboard(state: DSPyBuildState, session: AsyncSession, budget
 async def _step_ram(state: DSPyBuildState, session: AsyncSession, budget: dict, program: DecideRAM, recorder: BuildRecorder | None) -> None:
     _emit(state, "ram", "Choosing RAM…")
     candidates = await get_ram_candidates(session, state.cpu_ddr_gen, budget["ram"])
+    _ensure_candidates("ram", candidates)
     result = await _run_step(
         recorder,
         program,
@@ -419,6 +481,7 @@ async def _step_storage(state: DSPyBuildState, session: AsyncSession, budget: di
     candidates = await get_storage_candidates(
         session, budget["storage"], state.mobo_m2_slots, state.mobo_sata_ports,
     )
+    _ensure_candidates("storage", candidates)
     result = await _run_step(
         recorder,
         program,
@@ -436,6 +499,7 @@ async def _step_gpu(state: DSPyBuildState, session: AsyncSession, budget: dict, 
     candidates = await get_gpu_candidates(
         session, budget["gpu"], state.case_max_gpu_length_mm, state.request.preferences,
     )
+    _ensure_candidates("gpu", candidates)
     result = await _run_step(
         recorder,
         program,
@@ -462,6 +526,7 @@ async def _step_psu(state: DSPyBuildState, session: AsyncSession, budget: dict, 
     # Determine PSU form factor from case
     psu_form_factor = state.psu_form_factor  # updated after case step if ITX
     candidates = await get_psu_candidates(session, min_wattage, budget["psu"], psu_form_factor)
+    _ensure_candidates("psu", candidates)
     result = await _run_step(
         recorder,
         program,
@@ -478,6 +543,7 @@ async def _step_case(state: DSPyBuildState, session: AsyncSession, budget: dict,
     candidates = await get_case_candidates(
         session, budget["case"], state.mobo_form_factor, state.psu_form_factor,
     )
+    _ensure_candidates("case", candidates)
     result = await _run_step(
         recorder,
         program,
@@ -541,19 +607,21 @@ async def run_pipeline(
     """
     state = DSPyBuildState(request=request, progress_callback=progress_callback)
     state.use_case_summary = _request_summary(request)
+    state.session_id = str(recorder.session_id) if recorder is not None else str(uuid.uuid4())
     budget = _allocate_budget(request.budget_usd, request.use_cases)
 
     try:
-        await _step_ddr(state, session, budget, load_ddr(), recorder)
-        await _step_cpu(state, session, budget, load_cpu(), recorder)
-        await _step_cooler(state, session, budget, load_cooler(), recorder)
-        await _step_motherboard(state, session, budget, load_motherboard(), recorder)
-        await _step_ram(state, session, budget, load_ram(), recorder)
-        await _step_storage(state, session, budget, load_storage(), recorder)
-        await _step_gpu(state, session, budget, load_gpu(), recorder)
-        await _step_psu(state, session, budget, load_psu(), recorder)
-        await _step_case(state, session, budget, load_case(), recorder)
-        # Pipeline pauses — return state with case_options populated
+        with dspy.context(lm=session_lm(state.session_id)):
+            await _step_ddr(state, session, budget, load_ddr(), recorder)
+            await _step_cpu(state, session, budget, load_cpu(), recorder)
+            await _step_cooler(state, session, budget, load_cooler(), recorder)
+            await _step_motherboard(state, session, budget, load_motherboard(), recorder)
+            await _step_ram(state, session, budget, load_ram(), recorder)
+            await _step_storage(state, session, budget, load_storage(), recorder)
+            await _step_gpu(state, session, budget, load_gpu(), recorder)
+            await _step_psu(state, session, budget, load_psu(), recorder)
+            await _step_case(state, session, budget, load_case(), recorder)
+            # Pipeline pauses — return state with case_options populated
     except Exception as exc:
         state.error = str(exc)
         if recorder is not None:
@@ -587,8 +655,10 @@ async def run_pipeline_post_case(
         total_slots = (case.max_fan_slots or 0) - state.case_included_fans
         state.case_fan_slots = [slot_size] * max(total_slots, 0)
     budget = _allocate_budget(state.request.budget_usd, state.request.use_cases)
+    session_id = state.session_id or str(uuid.uuid4())
     try:
-        await _step_fans(state, session, budget, load_fans(), recorder)
+        with dspy.context(lm=session_lm(session_id)):
+            await _step_fans(state, session, budget, load_fans(), recorder)
         if recorder is not None:
             recorder.finish(BuildSessionStatus.COMPLETED)
     except Exception as exc:
