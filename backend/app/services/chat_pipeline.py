@@ -461,22 +461,25 @@ async def _assemble_dspy_build(state: Any, db) -> dict:
     (crud/reference_builds.py._to_build) — BuildCard's Amazon button is gated
     on amazon_url and part_id doubles as its React list key, so both need to
     be resolved here rather than left off like the rest of the payload.
+
+    total_approx (and approx_price) are in cents, not dollars — BuildCard
+    renders `data.total_approx / 100` directly, same convention as every other
+    *_cents column in this codebase (street_price_cents, etc).
     """
     from app.crud.components import get_part_by_name
     from app.crud.reference_builds import get_amazon_urls_by_part
 
-    resolved: list[tuple[str, str, Any, float | None]] = []
-    total = 0.0
+    resolved: list[tuple[str, str, Any, int | None]] = []
+    total_cents = 0
     for component, attr in _DSPY_COMPONENT_SLOTS:
         name = getattr(state, attr)
         if not name:
             continue
         part = await get_part_by_name(db, name)
-        price = None
-        if part is not None and part.street_price_cents is not None:
-            price = round(part.street_price_cents / 100, 2)
-            total += price
-        resolved.append((component, name, part, price))
+        price_cents = part.street_price_cents if part is not None else None
+        if price_cents is not None:
+            total_cents += price_cents
+        resolved.append((component, name, part, price_cents))
 
     amazon_urls = await get_amazon_urls_by_part(
         db, [part.id for _, _, part, _ in resolved if part is not None]
@@ -487,16 +490,16 @@ async def _assemble_dspy_build(state: Any, db) -> dict:
             "component": component,
             "brand": (part.manufacturer if part else None) or "",
             "model": name,
-            "approx_price": price,
+            "approx_price": price_cents,
             "part_id": str(part.id) if part is not None else "",
             "amazon_url": amazon_urls.get(part.id) if part is not None else None,
         }
-        for component, name, part, price in resolved
+        for component, name, part, price_cents in resolved
     ]
     return {
         "label": "Custom Build",
         "description": "Assembled component-by-component for your specific needs and budget.",
-        "total_approx": round(total),
+        "total_approx": total_cents,
         "parts": parts,
     }
 
