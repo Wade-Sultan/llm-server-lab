@@ -57,7 +57,7 @@ class UserPreferences(BaseModel):
     preferred_brand_gpu: Literal["nvidia", "amd", "no_preference"] = "no_preference"
     form_factor: Literal["atx", "matx", "itx", "no_preference"] = "no_preference"
     rgb_lighting: bool = False
-    wifi_required: bool = True
+    wifi_required: bool = False
     color_theme: str | None = Field(None, description="e.g. 'black', 'white', 'black & red'")
 
 

@@ -327,12 +327,19 @@ class DSPyBuildState:
     cpu_name: str = ""
     cpu_socket: str = ""
     cpu_tdp_w: int = 65
+    # cpu_ddr_gen is the single "platform" generation (DDR step's pick, kept when
+    # the chosen CPU supports it); cpu_ddr_gens is the CPU's full supported set,
+    # used to admit any compatible motherboard generation.
     cpu_ddr_gen: str = "ddr5"
+    cpu_ddr_gens: list[str] = field(default_factory=lambda: ["ddr5"])
 
     cooler_name: str = ""
 
     mobo_name: str = ""
     mobo_form_factor: str = "atx"
+    # DDR generation of the *chosen* board — RAM must match this specific board,
+    # not the CPU's whole supported set.
+    mobo_ddr_gen: str = ""
     mobo_m2_slots: int = 2
     mobo_sata_ports: int = 4
 
@@ -405,7 +412,14 @@ async def _step_cpu(state: DSPyBuildState, session: AsyncSession, budget: dict, 
     if cpu:
         state.cpu_socket = cpu.socket
         state.cpu_tdp_w = cpu.tdp_watts
-        state.cpu_ddr_gen = (cpu.ddr_generation or ["ddr5"])[-1]
+        gens = [g for g in (cpu.ddr_generation or []) if g and g.strip()]
+        if gens:
+            state.cpu_ddr_gens = gens
+            # Keep the DDR step's platform pick when the CPU actually supports
+            # it; otherwise fall back to the CPU's newest supported generation.
+            supported = {g.strip().lower() for g in gens}
+            if state.cpu_ddr_gen.strip().lower() not in supported:
+                state.cpu_ddr_gen = gens[-1]
 
 
 async def _step_cooler(state: DSPyBuildState, session: AsyncSession, budget: dict, program: DecideCPUCooler, recorder: BuildRecorder | None) -> None:
@@ -434,7 +448,7 @@ async def _step_motherboard(state: DSPyBuildState, session: AsyncSession, budget
     candidates = await get_motherboard_candidates(
         session,
         cpu_socket=state.cpu_socket,
-        ddr_gen=state.cpu_ddr_gen,
+        ddr_gens=state.cpu_ddr_gens,
         budget_ceiling_usd=budget["mobo"],
         form_factor=state.request.preferences.form_factor,
         wifi_required=state.request.preferences.wifi_required,
@@ -446,7 +460,7 @@ async def _step_motherboard(state: DSPyBuildState, session: AsyncSession, budget
         status_fn=lambda msg: _emit(state, "motherboard", msg),
         use_cases=state.use_case_summary or str(state.request.use_cases),
         cpu_name=state.cpu_name,
-        ddr_gen=state.cpu_ddr_gen,
+        ddr_gen=", ".join(state.cpu_ddr_gens),
         budget_ceiling=budget["mobo"],
         candidates=candidates,
     )
@@ -455,20 +469,25 @@ async def _step_motherboard(state: DSPyBuildState, session: AsyncSession, budget
     mobo = await crud_components.get_motherboard_by_name(session, result.motherboard_name)
     if mobo:
         state.mobo_form_factor = mobo.form_factor
+        state.mobo_ddr_gen = mobo.ddr_generation or ""
         state.mobo_m2_slots = mobo.m2_slots or 0
         state.mobo_sata_ports = mobo.sata_ports or 0
 
 
 async def _step_ram(state: DSPyBuildState, session: AsyncSession, budget: dict, program: DecideRAM, recorder: BuildRecorder | None) -> None:
     _emit(state, "ram", "Choosing RAM…")
-    candidates = await get_ram_candidates(session, state.cpu_ddr_gen, budget["ram"])
+    # RAM must match the generation of the board that was actually chosen, not
+    # the CPU's whole supported set; fall back to the platform pick if the board
+    # lookup missed.
+    ddr_for_ram = state.mobo_ddr_gen or state.cpu_ddr_gen
+    candidates = await get_ram_candidates(session, ddr_for_ram, budget["ram"])
     _ensure_candidates("ram", candidates)
     result = await _run_step(
         recorder,
         program,
         status_fn=lambda msg: _emit(state, "ram", msg),
         use_cases=state.use_case_summary or str(state.request.use_cases),
-        ddr_gen=state.cpu_ddr_gen,
+        ddr_gen=ddr_for_ram,
         budget_ceiling=budget["ram"],
         candidates=candidates,
     )

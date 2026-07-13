@@ -174,13 +174,13 @@ async def get_cooler_candidates(
 async def get_motherboard_candidates(
     session: AsyncSession,
     cpu_socket: str,
-    ddr_gen: str,
+    ddr_gens: list[str],
     budget_ceiling_usd: int,
     form_factor: str,
     wifi_required: bool,
 ) -> str:
     parts = await crud.get_motherboard_candidates(
-        session, cpu_socket, ddr_gen, budget_ceiling_usd, form_factor, wifi_required
+        session, cpu_socket, ddr_gens, budget_ceiling_usd, form_factor, wifi_required
     )
     return _to_json(parts, _serialize_motherboard)
 

@@ -7,6 +7,8 @@ hit typed columns rather than Python-only @property values.
 
 from __future__ import annotations
 
+import re
+
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -28,10 +30,26 @@ async def get_part_by_name(db: AsyncSession, name: str) -> PCPart | None:
     return result.scalars().first()
 
 
+# Drop a leading "Socket " qualifier some sources prepend ("Socket AM5" → "am5").
+_SOCKET_PREFIX_RE = re.compile(r"^socket\s*")
+# Collapse away internal whitespace/hyphens ("LGA 1700"/"LGA-1700" → "lga1700").
+_INNER_SEP_RE = re.compile(r"[\s\-]+")
+
+
 def _normalize(value: str) -> str:
-    """Fold a free-text compatibility field (socket, ddr_generation, ...) to a
-    comparable form."""
-    return value.strip().lower()
+    """Fold a free-text compatibility field (socket, ddr_generation, form
+    factor, ...) to a comparable form so independently admin-entered variants
+    still match instead of silently returning zero candidates.
+
+    Beyond lowercasing/trimming, this drops a leading "Socket " qualifier and
+    removes internal whitespace and hyphens — so "Socket AM5"/"AM5",
+    "LGA 1700"/"LGA1700", and "LGA-1700"/"LGA1700" all compare equal.
+    Underscores are preserved on purpose: some values are keyed on them (e.g.
+    the "sfx_l" PSU form factor compared against a lower/trim SQL column)."""
+    v = value.strip().lower()
+    v = _SOCKET_PREFIX_RE.sub("", v)
+    v = _INNER_SEP_RE.sub("", v)
+    return v
 
 
 # ---------------------------------------------------------------------------
@@ -139,29 +157,41 @@ async def get_motherboard_by_name(db: AsyncSession, name: str) -> Motherboard | 
 async def get_motherboard_candidates(
     db: AsyncSession,
     cpu_socket: str,
-    ddr_gen: str,
+    ddr_gens: list[str],
     budget_ceiling_usd: int,
     form_factor: str,
     wifi_required: bool,
 ) -> list[Motherboard]:
+    # socket, ddr_generation and form_factor are all free-text, admin-entered
+    # fields (see the admin motherboard form) carrying the same casing/whitespace
+    # risk as CPUCooler.supported_sockets — so normalize and match in Python
+    # rather than via SQL equality, which only lower/trims.
+    #
+    # ddr_gens is the CPU's full set of supported DDR generations: a board is
+    # compatible if its single ddr_generation is *any* one of them (an Intel CPU
+    # that supports both DDR4 and DDR5 can pair with either kind of board).
     stmt = select(Motherboard).where(
         Motherboard.is_active == True,  # noqa: E712
         Motherboard.street_price_cents <= budget_ceiling_usd * 100,
-        # socket/ddr_generation are free-text admin-entered fields, not an
-        # enum — normalize both sides so e.g. "AM5"/"am5" or "DDR5"/"ddr5"
-        # still match instead of silently returning zero candidates.
-        func.lower(func.trim(Motherboard.socket)) == _normalize(cpu_socket),
-        func.lower(func.trim(Motherboard.ddr_generation)) == _normalize(ddr_gen),
     )
-    if form_factor != "no_preference":
-        # form_factor is a fixed lowercase Literal from preferences, but
-        # Motherboard.form_factor is the same free-text admin field as
-        # socket/ddr_generation above — normalize it too.
-        stmt = stmt.where(func.lower(func.trim(Motherboard.form_factor)) == _normalize(form_factor))
     if wifi_required:
         stmt = stmt.where(Motherboard.has_wifi == True)  # noqa: E712
     result = await db.execute(stmt)
-    return list(result.scalars().all())
+
+    target_socket = _normalize(cpu_socket)
+    target_gens = {_normalize(g) for g in ddr_gens if g and g.strip()}
+    target_ff = _normalize(form_factor) if form_factor != "no_preference" else None
+
+    boards: list[Motherboard] = []
+    for b in result.scalars().all():
+        if _normalize(b.socket or "") != target_socket:
+            continue
+        if _normalize(b.ddr_generation or "") not in target_gens:
+            continue
+        if target_ff is not None and _normalize(b.form_factor or "") != target_ff:
+            continue
+        boards.append(b)
+    return boards
 
 
 async def get_all_motherboards_active(db: AsyncSession) -> list[Motherboard]:
