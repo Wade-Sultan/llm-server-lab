@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/dialog"
 import { LoadingButton } from "@/components/ui/loading-button"
 import useAuth, { getAccessToken } from "@/hooks/useAuth"
+import { deleteAccount } from "@/lib/commerce"
 
 const DeleteConfirmation = () => {
   const { handleSubmit } = useForm()
@@ -33,20 +34,7 @@ const DeleteConfirmation = () => {
         return
       }
 
-      const res = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/api/v1/users/me`,
-        {
-          method: "DELETE",
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        },
-      )
-
-      if (!res.ok) {
-        const body = await res.json().catch(() => null)
-        throw new Error(body?.detail || "Failed to delete account")
-      }
+      await deleteAccount(token)
 
       await signOut()
     } catch (err) {

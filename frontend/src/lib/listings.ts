@@ -1,5 +1,4 @@
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"
-const COMMERCE_BASE = process.env.NEXT_PUBLIC_COMMERCE_URL ?? API_BASE
+import { COMMERCE_BASE } from "@/lib/commerce"
 
 export interface Listing {
   id: string

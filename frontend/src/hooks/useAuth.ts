@@ -1,9 +1,9 @@
 "use client"
 import {
   createUserWithEmailAndPassword,
-  GoogleAuthProvider,
   signOut as firebaseSignOut,
   updatePassword as firebaseUpdatePassword,
+  GoogleAuthProvider,
   onAuthStateChanged,
   sendPasswordResetEmail,
   signInWithEmailAndPassword,
@@ -13,8 +13,21 @@ import {
 } from "firebase/auth"
 import { useRouter } from "next/navigation"
 import { useCallback, useEffect, useState } from "react"
+import { syncAccount } from "@/lib/commerce"
 import { auth } from "@/lib/firebase"
 import { wakeUpBuilder } from "@/lib/wake-up-builder"
+
+/**
+ * Fire-and-forget sync of the Postgres users row (via the commerce service)
+ * after any successful authentication. Failures are ignored — chat
+ * auto-provisions the row as a fallback.
+ */
+function syncBackendAccount(user: User) {
+  user
+    .getIdToken()
+    .then(syncAccount)
+    .catch(() => undefined)
+}
 
 interface UseAuthReturn {
   user: User | null
@@ -70,7 +83,8 @@ export default function useAuth(): UseAuthReturn {
   const signIn = useCallback(
     async (email: string, password: string) => {
       try {
-        await signInWithEmailAndPassword(auth, email, password)
+        const { user } = await signInWithEmailAndPassword(auth, email, password)
+        syncBackendAccount(user)
         wakeUpBuilder()
         router.push("/build/new")
         return { error: null }
@@ -83,7 +97,8 @@ export default function useAuth(): UseAuthReturn {
 
   const signInWithGoogle = useCallback(async () => {
     try {
-      await signInWithPopup(auth, new GoogleAuthProvider())
+      const { user } = await signInWithPopup(auth, new GoogleAuthProvider())
+      syncBackendAccount(user)
       wakeUpBuilder()
       router.push("/build/new")
       return { error: null }
@@ -103,6 +118,7 @@ export default function useAuth(): UseAuthReturn {
         if (fullName) {
           await updateProfile(user, { displayName: fullName })
         }
+        syncBackendAccount(user)
         wakeUpBuilder()
         router.push("/login")
         return { error: null }
@@ -154,4 +170,3 @@ export default function useAuth(): UseAuthReturn {
     updatePassword,
   }
 }
-
