@@ -9,29 +9,33 @@ WEIGHTS_PATH = Path(__file__).parent / "weights" / "decidegpu.json"
  
 class GPUSelection(dspy.Signature):
     """
-    Select the best GPU for this build from the given candidates.
- 
+    Select the best GPU *chipset* for this build from the given candidates.
+
+    Each candidate is a chipset (e.g. "RTX 5080"), not a specific board — the
+    exact board variant (brand, length, price) is resolved deterministically
+    later, once the case and PSU are known. Choose at the chipset level here.
+
     This is the most financially consequential component choice. Consider:
     - Whether the target resolution and use case justify the VRAM tier
-    - Whether a last-gen card at lower cost outperforms a current-gen at this price
+    - Whether a last-gen chipset at lower cost outperforms a current-gen at this price
     - Whether ray tracing is a meaningful factor given the user's playstyle
     - If used_market_viable is true for a candidate, note it as a potential
       cost-saving option the user could consider on eBay
- 
+
     Output a reconsideration_threshold that is specific about price and tier.
     """
- 
+
     use_cases: str = dspy.InputField(desc="User's use cases, target resolution, and preferences")
     budget_total: int = dspy.InputField(desc="Total build budget in USD")
     gpu_budget_ceiling: int = dspy.InputField(desc="Maximum to spend on GPU in USD")
     candidates: str = dspy.InputField(
-        desc="JSON list of compatible GPUs with current street prices. Fields: name, "
-             "brand, vram_gb, tdp_w, length_mm, pcie_slots, street_price_usd, "
+        desc="JSON list of GPU chipsets with the cheapest available board price per "
+             "chipset. Fields: chipset, brand, vram_gb, tdp_w, starting_price_usd, "
              "used_market_viable"
     )
- 
-    gpu_name: str = dspy.OutputField(
-        desc="Exact product name of the chosen GPU, matching a name from candidates"
+
+    gpu_chipset: str = dspy.OutputField(
+        desc="Exact chipset string of the chosen GPU, matching a chipset from candidates"
     )
     reason: str = dspy.OutputField(
         desc="2-3 sentences. Lead with the value argument relative to the use case. "
@@ -39,7 +43,7 @@ class GPUSelection(dspy.Signature):
     )
     reconsideration_threshold: str = dspy.OutputField(
         desc="Specific price boundary at which a tier upgrade or downgrade becomes "
-             "worth reconsidering. Include the alternative GPU name and dollar figure."
+             "worth reconsidering. Include the alternative chipset and dollar figure."
     )
     gpu_required: bool = dspy.OutputField(
         desc="False only if the use case is fully covered by integrated graphics "
@@ -51,9 +55,11 @@ class DecideGPU(dspy.Module):
     # Telemetry metadata — bump signature_version only when this signature's
     # input/output fields change shape (GEPA needs a consistent field shape).
     signature_name = "DecideGPU"
-    signature_version = 1
+    # v2: main step chooses a chipset (gpu_chipset), not an exact board name —
+    # the specific board is resolved deterministically after case + PSU.
+    signature_version = 2
     category = "gpu"
-    output_name_field = "gpu_name"
+    output_name_field = "gpu_chipset"
 
     def __init__(self) -> None:
         self.chain = dspy.ChainOfThought(GPUSelection)

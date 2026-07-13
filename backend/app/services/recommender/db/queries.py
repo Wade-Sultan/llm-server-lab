@@ -214,6 +214,50 @@ async def get_gpu_candidates(
     return _to_json(parts, _serialize_gpu)
 
 
+async def get_gpu_chipset_candidates(
+    session: AsyncSession,
+    budget_ceiling_usd: int,
+    preferences: UserPreferences,
+) -> str:
+    """Aggregate affordable GPU boards into one entry per chipset for the main
+    GPU step, which chooses at the chipset level. Board-specific attributes
+    (length, exact price) aren't surfaced here — the exact board is resolved
+    deterministically later. Intrinsic stats (vram, tdp) are shared across a
+    chipset's boards; tdp_w takes the max so PSU sizing has headroom, and
+    starting_price_usd is the cheapest board (what the resolver will buy)."""
+    # Length can't be constrained yet (the case isn't chosen), so pass None.
+    parts = await crud.get_gpu_candidates(session, budget_ceiling_usd, None, preferences)
+
+    by_chipset: dict[str, dict] = {}
+    for p in parts:
+        key = p.chipset or p.name
+        price = _price(p)
+        entry = by_chipset.get(key)
+        if entry is None:
+            by_chipset[key] = {
+                "chipset": key,
+                "brand": p.brand,
+                "vram_gb": p.vram_gb,
+                "tdp_w": p.tdp_watts,
+                "starting_price_usd": price,
+                "used_market_viable": bool(p.used_market_viable),
+            }
+            continue
+        if p.vram_gb and (entry["vram_gb"] is None or p.vram_gb > entry["vram_gb"]):
+            entry["vram_gb"] = p.vram_gb
+        if p.tdp_watts and (entry["tdp_w"] is None or p.tdp_watts > entry["tdp_w"]):
+            entry["tdp_w"] = p.tdp_watts
+        if price is not None and (entry["starting_price_usd"] is None or price < entry["starting_price_usd"]):
+            entry["starting_price_usd"] = price
+        entry["used_market_viable"] = entry["used_market_viable"] or bool(p.used_market_viable)
+
+    rows = sorted(
+        by_chipset.values(),
+        key=lambda r: (r["starting_price_usd"] is None, r["starting_price_usd"] or 0),
+    )
+    return json.dumps(rows, indent=None)
+
+
 async def get_psu_candidates(
     session: AsyncSession,
     min_wattage: int,

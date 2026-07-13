@@ -26,6 +26,7 @@ Status messages:
 from __future__ import annotations
 
 import json
+import logging
 import os
 import subprocess
 import time
@@ -58,7 +59,7 @@ from app.services.recommender.db.queries import (
     get_cpu_candidates,
     get_ddr_candidates,
     get_fan_candidates,
-    get_gpu_candidates,
+    get_gpu_chipset_candidates,
     get_motherboard_candidates,
     get_psu_candidates,
     get_ram_candidates,
@@ -66,6 +67,8 @@ from app.services.recommender.db.queries import (
 )
 from app.crud import components as crud_components
 from app.schemas.chat import BuildRequest
+
+logger = logging.getLogger(__name__)
 
 # Module-level singleton — stateless, safe to share across concurrent requests
 _status_provider = BuildStatusProvider()
@@ -347,6 +350,9 @@ class DSPyBuildState:
 
     storage_name: str = ""
 
+    # gpu_chipset is chosen by the main DSPy step; gpu_name is the exact board,
+    # resolved deterministically post-case once length + PSU constraints are known.
+    gpu_chipset: str = ""
     gpu_name: str = ""
     gpu_tdp_w: int = 0
     gpu_required: bool = True
@@ -409,17 +415,22 @@ async def _step_cpu(state: DSPyBuildState, session: AsyncSession, budget: dict, 
     state.cpu_name = result.cpu_name
     state.thresholds["cpu"] = result.reconsideration_threshold
     cpu = await crud_components.get_cpu_by_name(session, result.cpu_name)
-    if cpu:
-        state.cpu_socket = cpu.socket
-        state.cpu_tdp_w = cpu.tdp_watts
-        gens = [g for g in (cpu.ddr_generation or []) if g and g.strip()]
-        if gens:
-            state.cpu_ddr_gens = gens
-            # Keep the DDR step's platform pick when the CPU actually supports
-            # it; otherwise fall back to the CPU's newest supported generation.
-            supported = {g.strip().lower() for g in gens}
-            if state.cpu_ddr_gen.strip().lower() not in supported:
-                state.cpu_ddr_gen = gens[-1]
+    if cpu is None:
+        # The chosen name didn't resolve to a catalog CPU even after tolerant
+        # matching. Proceeding would leave socket/tdp/ddr at their defaults and
+        # silently produce an incompatible build, so fail the step and fall back
+        # to the reference build instead.
+        raise RuntimeError(f"Chosen CPU {result.cpu_name!r} not found in catalog")
+    state.cpu_socket = cpu.socket
+    state.cpu_tdp_w = cpu.tdp_watts
+    gens = [g for g in (cpu.ddr_generation or []) if g and g.strip()]
+    if gens:
+        state.cpu_ddr_gens = gens
+        # Keep the DDR step's platform pick when the CPU actually supports
+        # it; otherwise fall back to the CPU's newest supported generation.
+        supported = {g.strip().lower() for g in gens}
+        if state.cpu_ddr_gen.strip().lower() not in supported:
+            state.cpu_ddr_gen = gens[-1]
 
 
 async def _step_cooler(state: DSPyBuildState, session: AsyncSession, budget: dict, program: DecideCPUCooler, recorder: BuildRecorder | None) -> None:
@@ -515,8 +526,10 @@ async def _step_storage(state: DSPyBuildState, session: AsyncSession, budget: di
 
 async def _step_gpu(state: DSPyBuildState, session: AsyncSession, budget: dict, program: DecideGPU, recorder: BuildRecorder | None) -> None:
     _emit(state, "gpu", "Finding your GPU…")
-    candidates = await get_gpu_candidates(
-        session, budget["gpu"], state.case_max_gpu_length_mm, state.request.preferences,
+    # The main step chooses a chipset; the exact board is resolved later, once
+    # the case (length) and PSU (power) are known — see _resolve_gpu_variant.
+    candidates = await get_gpu_chipset_candidates(
+        session, budget["gpu"], state.request.preferences,
     )
     _ensure_candidates("gpu", candidates)
     result = await _run_step(
@@ -530,11 +543,56 @@ async def _step_gpu(state: DSPyBuildState, session: AsyncSession, budget: dict, 
     )
     state.gpu_required = result.gpu_required
     if state.gpu_required:
-        state.gpu_name = result.gpu_name
+        state.gpu_chipset = result.gpu_chipset
         state.thresholds["gpu"] = result.reconsideration_threshold
-        gpu = await crud_components.get_gpu_by_name(session, result.gpu_name)
-        if gpu:
-            state.gpu_tdp_w = gpu.tdp_watts
+        # Size the PSU against the chipset's highest-TDP board so there's headroom
+        # regardless of which specific board the resolver later picks.
+        variants = await crud_components.get_gpus_for_chipset(session, result.gpu_chipset)
+        tdps = [v.tdp_watts for v in variants if v.tdp_watts]
+        if tdps:
+            state.gpu_tdp_w = max(tdps)
+
+
+async def _resolve_gpu_variant(state: DSPyBuildState, session: AsyncSession) -> None:
+    """Deterministically pick the exact GPU board for the chosen chipset now that
+    the case length and PSU are known: the cheapest board that fits the case's
+    max GPU length and the PSU's wattage. Not a DSPy decision.
+
+    If no board fits (rare — e.g. every variant is too long for the picked case),
+    fall back to the cheapest variant and warn, so the build still completes; the
+    reference build remains the safety net for genuinely incompatible outcomes.
+    """
+    if not state.gpu_required or not state.gpu_chipset:
+        return
+    variants = await crud_components.get_gpus_for_chipset(session, state.gpu_chipset)
+    if not variants:
+        logger.warning("no GPU boards found for chosen chipset %r", state.gpu_chipset)
+        return
+
+    psu = await crud_components.get_psu_by_name(session, state.psu_name) if state.psu_name else None
+    psu_watts = psu.wattage if psu else None
+    max_len = state.case_max_gpu_length_mm
+
+    def _fits(v) -> bool:
+        if max_len is not None and v.length_mm and v.length_mm > max_len:
+            return False
+        if psu_watts is not None and v.recommended_psu_watts and psu_watts < v.recommended_psu_watts:
+            return False
+        return True
+
+    def _price_key(v) -> float:
+        return v.street_price_cents if v.street_price_cents is not None else float("inf")
+
+    fitting = [v for v in variants if _fits(v)]
+    chosen = min(fitting or variants, key=_price_key)
+    if not fitting:
+        logger.warning(
+            "no %r board fits case length %smm / PSU %sW; using cheapest variant %r",
+            state.gpu_chipset, max_len, psu_watts, chosen.name,
+        )
+    state.gpu_name = chosen.name
+    if chosen.tdp_watts:
+        state.gpu_tdp_w = chosen.tdp_watts
 
 
 async def _step_psu(state: DSPyBuildState, session: AsyncSession, budget: dict, program: DecidePSU, recorder: BuildRecorder | None) -> None:
@@ -676,6 +734,9 @@ async def run_pipeline_post_case(
     budget = _allocate_budget(state.request.budget_usd, state.request.use_cases)
     session_id = state.session_id or str(uuid.uuid4())
     try:
+        # Case + PSU are both known now, so pin the exact GPU board for the
+        # chipset the main step chose (deterministic; no LLM call).
+        await _resolve_gpu_variant(state, session)
         with dspy.context(lm=session_lm(session_id)):
             await _step_fans(state, session, budget, load_fans(), recorder)
         if recorder is not None:

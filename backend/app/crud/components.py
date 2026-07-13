@@ -57,7 +57,14 @@ def _normalize(value: str) -> str:
 # ---------------------------------------------------------------------------
 
 async def get_cpu_by_name(db: AsyncSession, name: str) -> CPU | None:
-    stmt = select(CPU).where(CPU.name == name, CPU.is_active == True)  # noqa: E712
+    # The LLM is asked to echo an exact candidate name, but it drifts on casing
+    # and whitespace ("AMD Ryzen 5 7600X " vs "AMD Ryzen 5 7600X"). Match
+    # case-insensitively and trimmed so a near-miss still resolves the CPU
+    # instead of silently leaving socket/tdp/ddr at their defaults.
+    stmt = select(CPU).where(
+        func.lower(func.trim(CPU.name)) == name.strip().lower(),
+        CPU.is_active == True,  # noqa: E712
+    ).limit(1)
     result = await db.execute(stmt)
     return result.scalars().first()
 
@@ -91,6 +98,16 @@ async def get_gpu_by_name(db: AsyncSession, name: str) -> GPU | None:
     stmt = select(GPU).where(GPU.name == name, GPU.is_active == True)  # noqa: E712
     result = await db.execute(stmt)
     return result.scalars().first()
+
+
+async def get_gpus_for_chipset(db: AsyncSession, chipset: str) -> list[GPU]:
+    """All active board variants of a chipset (e.g. every RTX 5080 board). Used
+    by the deterministic post-case step that resolves the exact board. chipset
+    is a free-text admin field, so match on the normalized value."""
+    stmt = select(GPU).where(GPU.is_active == True)  # noqa: E712
+    result = await db.execute(stmt)
+    target = _normalize(chipset)
+    return [g for g in result.scalars().all() if _normalize(g.chipset or "") == target]
 
 
 async def get_gpu_candidates(
