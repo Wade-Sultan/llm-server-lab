@@ -27,6 +27,11 @@ const BuildDataUI = makeAssistantDataUI({ name: "build", render: BuildCard })
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"
 
+// Listings are served by the Go commerce service; everything else still hits
+// the FastAPI backend. Falls back to API_BASE so local dev and rollback work
+// without the extra env var.
+const COMMERCE_BASE = process.env.NEXT_PUBLIC_COMMERCE_URL ?? API_BASE
+
 const INITIAL_SUGGESTIONS = [
   { prompt: "I want to build a gaming PC for 1440p 144fps" },
   { prompt: "Help me build a workstation for AI model training" },
@@ -231,7 +236,7 @@ function ChatRuntimeMount({
           buildData.parts.map(async (part) => {
             try {
               const response = await fetch(
-                `${API_BASE}/api/v1/listings/?part_id=${part.part_id}`,
+                `${COMMERCE_BASE}/api/v1/listings/?part_id=${part.part_id}`,
                 {
                   headers,
                 },
