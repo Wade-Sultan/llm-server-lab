@@ -20,17 +20,15 @@ import { toast } from "sonner"
 
 import { BuildCard } from "@/components/assistant-ui/build-card"
 import { getAccessToken } from "@/hooks/useAuth"
-import { useConversationStateStore, type BuildData } from "@/hooks/useConversationState"
+import {
+  type BuildData,
+  useConversationStateStore,
+} from "@/hooks/useConversationState"
 import { createModelAdapter } from "./model-adapter"
 
 const BuildDataUI = makeAssistantDataUI({ name: "build", render: BuildCard })
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"
-
-// Listings are served by the Go commerce service; everything else still hits
-// the FastAPI backend. Falls back to API_BASE so local dev and rollback work
-// without the extra env var.
-const COMMERCE_BASE = process.env.NEXT_PUBLIC_COMMERCE_URL ?? API_BASE
 
 const INITIAL_SUGGESTIONS = [
   { prompt: "I want to build a gaming PC for 1440p 144fps" },
@@ -209,8 +207,6 @@ function ChatRuntimeMount({
   })
 
   const phase = useConversationStateStore((s) => s.phase)
-  const buildData = useConversationStateStore((s) => s.buildData)
-  const [_listings, setListings] = useState<Record<string, unknown[]>>({})
 
   useEffect(() => {
     return () => {
@@ -218,47 +214,13 @@ function ChatRuntimeMount({
     }
   }, [])
 
+  // Listings for the recommended parts are fetched by BuildCard itself (from
+  // the commerce service), so they work for historical builds too.
   useEffect(() => {
-    if (phase === "complete" && buildData) {
+    if (phase === "complete") {
       toast.success("Build ready!")
-
-      // Fetch listings for each recommended part
-      const fetchListingsForParts = async () => {
-        const token = await getAccessToken()
-        const headers: Record<string, string> = {
-          "Content-Type": "application/json",
-        }
-        if (token) headers.Authorization = `Bearer ${token}`
-
-        const results: Record<string, unknown[]> = {}
-
-        await Promise.allSettled(
-          buildData.parts.map(async (part) => {
-            try {
-              const response = await fetch(
-                `${COMMERCE_BASE}/api/v1/listings/?part_id=${part.part_id}`,
-                {
-                  headers,
-                },
-              )
-
-              if (response.ok) {
-                const data = await response.json()
-                results[part.component] = data.data ?? []
-              }
-            } catch {
-              // Silently fail for individual parts
-              results[part.component] = []
-            }
-          }),
-        )
-
-        setListings(results)
-      }
-
-      fetchListingsForParts()
     }
-  }, [phase, buildData])
+  }, [phase])
 
   return (
     <AssistantRuntimeProvider runtime={runtime}>
