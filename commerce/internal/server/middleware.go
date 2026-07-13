@@ -147,8 +147,10 @@ func cors(origins []string) middleware {
 				w.Header().Set("Vary", "Origin")
 			}
 			if r.Method == http.MethodOptions {
-				w.Header().Set("Access-Control-Allow-Methods", "*")
-				w.Header().Set("Access-Control-Allow-Headers", "*")
+				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
+				if reqHeaders := r.Header.Get("Access-Control-Request-Headers"); reqHeaders != "" {
+					w.Header().Set("Access-Control-Allow-Headers", reqHeaders)
+				}
 				w.WriteHeader(http.StatusNoContent)
 				return
 			}
