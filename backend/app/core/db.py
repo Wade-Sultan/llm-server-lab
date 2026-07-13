@@ -1,13 +1,11 @@
 import asyncio
 from collections.abc import AsyncGenerator, Generator
 
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import settings
-from app.models import User
-from app.schemas import UserCreate
 
 
 def _create_engine():
@@ -52,7 +50,7 @@ def _create_async_engine():
     if settings.CLOUD_SQL_INSTANCE:
         from google.cloud.sql.connector import Connector, IPTypes
 
-        connector: "Connector | None" = None
+        connector: Connector | None = None
 
         async def async_creator():
             nonlocal connector
@@ -140,28 +138,3 @@ def get_db() -> Generator[Session, None, None]:
 async def get_async_db() -> AsyncGenerator[AsyncSession, None]:
     async with AsyncSessionLocal() as session:
         yield session
-
-
-def init_db(session: Session) -> None:
-    # crud.create_user is async (used by the app's AsyncSession routes), so this
-    # one-off sync script path builds the superuser directly instead.
-    from app.core.security import get_password_hash
-
-    user = session.execute(
-        select(User).where(User.email == settings.FIRST_SUPERUSER)
-    ).scalar_one_or_none()
-    if not user:
-        user_in = UserCreate(
-            email=settings.FIRST_SUPERUSER,
-            password=settings.FIRST_SUPERUSER_PASSWORD,
-            is_superuser=True,
-        )
-        db_obj = User(
-            email=user_in.email,
-            full_name=user_in.full_name,
-            is_active=user_in.is_active,
-            is_superuser=user_in.is_superuser,
-            hashed_password=get_password_hash(user_in.password),
-        )
-        session.add(db_obj)
-        session.commit()
