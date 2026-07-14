@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useTransition } from 'react';
+import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -18,13 +18,17 @@ import {
 } from '@/components/ui/alert-dialog';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Input } from '@/components/ui/input';
-import { Textarea } from '@/components/ui/textarea';
 import { Checkbox } from '@/components/ui/checkbox';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ListingsDialog } from '@/components/listings-dialog';
-import { joinCommaList, centsToUsd, formatUsd } from '@/lib/utils';
+import { centsToUsd, formatUsd } from '@/lib/utils';
 import { createGpu, updateGpu, deleteGpu, type GpuFormData } from './actions';
 
-type GpuWithPart = Gpu & { pcPart: PcPart & { listings: (Listing & { amazonListing: AmazonListing | null })[] } };
+type GpuWithPart = Gpu & {
+  pcPart: PcPart & { listings: (Listing & { amazonListing: AmazonListing | null })[] };
+  chipset: { name: string };
+};
+type ChipsetOption = { id: string; name: string };
 
 const schema = z.object({
   name: z.string().min(1, 'Name is required'),
@@ -33,31 +37,17 @@ const schema = z.object({
   yearReleased: z.coerce.number().int().nullable(),
   isActive: z.boolean(),
   streetPriceUsd: z.coerce.number().nullable(),
+  gpuChipsetId: z.string().min(1, 'Chipset is required'),
   brand: z.string(),
-  chipset: z.string(),
-  vramGb: z.coerce.number().int().nullable(),
-  tdpWatts: z.coerce.number().int().nullable(),
   lengthMm: z.coerce.number().int().nullable(),
-  pciePowerPins: z.string(),
-  recommendedPsuWatts: z.coerce.number().int().nullable(),
-  vramType: z.string(),
   widthSlots: z.coerce.number().nullable(),
-  pcieGeneration: z.coerce.number().int().nullable(),
-  baseClockMhz: z.coerce.number().int().nullable(),
-  boostClockMhz: z.coerce.number().int().nullable(),
-  hasRayTracing: z.boolean(),
-  cudaCores: z.coerce.number().int().nullable(),
-  tensorCores: z.coerce.number().int().nullable(),
-  streamProcessors: z.coerce.number().int().nullable(),
-  matrixCores: z.coerce.number().int().nullable(),
+  pciePowerPins: z.string(),
   displayOutputs: z.string(),
   hdmiVersion: z.string(),
   dpVersion: z.string(),
-  supportedFeaturesInput: z.string(),
-  benchmarkScoresInput: z.string(),
 });
 
-function GpuForm({ item, onSuccess }: { item: GpuWithPart | null; onSuccess: () => void }) {
+function GpuForm({ item, chipsets, onSuccess }: { item: GpuWithPart | null; chipsets: ChipsetOption[]; onSuccess: () => void }) {
   const form = useForm<GpuFormData>({
     resolver: zodResolver(schema),
     defaultValues: item ? {
@@ -67,37 +57,18 @@ function GpuForm({ item, onSuccess }: { item: GpuWithPart | null; onSuccess: () 
       yearReleased: item.pcPart.yearReleased,
       isActive: item.pcPart.isActive,
       streetPriceUsd: centsToUsd(item.pcPart.streetPriceCents),
+      gpuChipsetId: item.gpuChipsetId,
       brand: item.brand ?? '',
-      chipset: item.chipset ?? '',
-      vramGb: item.vramGb,
-      tdpWatts: item.tdpWatts,
       lengthMm: item.lengthMm,
-      pciePowerPins: item.pciePowerPins ?? '',
-      recommendedPsuWatts: item.recommendedPsuWatts,
-      vramType: item.vramType ?? '',
       widthSlots: item.widthSlots,
-      pcieGeneration: item.pcieGeneration,
-      baseClockMhz: item.baseClockMhz,
-      boostClockMhz: item.boostClockMhz,
-      hasRayTracing: item.hasRayTracing,
-      cudaCores: item.cudaCores,
-      tensorCores: item.tensorCores,
-      streamProcessors: item.streamProcessors,
-      matrixCores: item.matrixCores,
+      pciePowerPins: item.pciePowerPins ?? '',
       displayOutputs: item.displayOutputs ?? '',
       hdmiVersion: item.hdmiVersion ?? '',
       dpVersion: item.dpVersion ?? '',
-      supportedFeaturesInput: joinCommaList(item.supportedFeatures),
-      benchmarkScoresInput: item.benchmarkScores ? JSON.stringify(item.benchmarkScores, null, 2) : '',
     } : {
-      name: '', manufacturer: '', modelNumber: '', yearReleased: null, isActive: true,
-      streetPriceUsd: null,
-      brand: '', chipset: '', vramGb: null, tdpWatts: null, lengthMm: null,
-      pciePowerPins: '', recommendedPsuWatts: null, vramType: '', widthSlots: null,
-      pcieGeneration: null, baseClockMhz: null, boostClockMhz: null, hasRayTracing: false,
-      cudaCores: null, tensorCores: null, streamProcessors: null, matrixCores: null,
+      name: '', manufacturer: '', modelNumber: '', yearReleased: null, isActive: true, streetPriceUsd: null,
+      gpuChipsetId: '', brand: '', lengthMm: null, widthSlots: null, pciePowerPins: '',
       displayOutputs: '', hdmiVersion: '', dpVersion: '',
-      supportedFeaturesInput: '', benchmarkScoresInput: '',
     },
   });
 
@@ -124,12 +95,25 @@ function GpuForm({ item, onSuccess }: { item: GpuWithPart | null; onSuccess: () 
   return (
     <Form {...form}>
       <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+        <FormField control={form.control} name="gpuChipsetId"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>Chipset * (intrinsic spec — VRAM, cores, TDP)</FormLabel>
+              <Select value={field.value} onValueChange={field.onChange}>
+                <FormControl><SelectTrigger><SelectValue placeholder="Select a chipset" /></SelectTrigger></FormControl>
+                <SelectContent>
+                  {chipsets.map((c) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
         <div className="grid grid-cols-2 gap-4">
           {([
-            ['name', 'Name *'], ['manufacturer', 'Manufacturer'], ['modelNumber', 'Model Number'],
-            ['brand', 'Brand'], ['chipset', 'Chipset'], ['vramType', 'VRAM Type'],
-            ['pciePowerPins', 'PCIe Power Pins'], ['displayOutputs', 'Display Outputs'],
-            ['hdmiVersion', 'HDMI Version'], ['dpVersion', 'DP Version'],
+            ['name', 'Product Name *'], ['manufacturer', 'Manufacturer (board partner)'], ['modelNumber', 'Model Number'],
+            ['brand', 'Brand (nvidia/amd/intel)'], ['pciePowerPins', 'PCIe Power Pins'],
+            ['displayOutputs', 'Display Outputs'], ['hdmiVersion', 'HDMI Version'], ['dpVersion', 'DP Version'],
           ] as [keyof GpuFormData, string][]).map(([name, label]) => (
             <FormField key={name} control={form.control} name={name}
               render={({ field }) => (
@@ -142,12 +126,7 @@ function GpuForm({ item, onSuccess }: { item: GpuWithPart | null; onSuccess: () 
             />
           ))}
           {([
-            ['yearReleased', 'Year'], ['vramGb', 'VRAM (GB)'], ['tdpWatts', 'TDP (W)'],
-            ['lengthMm', 'Length (mm)'], ['recommendedPsuWatts', 'Rec. PSU (W)'],
-            ['pcieGeneration', 'PCIe Gen'], ['baseClockMhz', 'Base Clock (MHz)'],
-            ['boostClockMhz', 'Boost Clock (MHz)'], ['cudaCores', 'CUDA Cores'],
-            ['tensorCores', 'Tensor Cores'], ['streamProcessors', 'Stream Procs'],
-            ['matrixCores', 'Matrix Cores'], ['widthSlots', 'Width (slots)'],
+            ['yearReleased', 'Year'], ['lengthMm', 'Length (mm) *'], ['widthSlots', 'Width (slots)'],
           ] as [keyof GpuFormData, string][]).map(([name, label]) => (
             <FormField key={name} control={form.control} name={name}
               render={({ field }) => (
@@ -173,38 +152,14 @@ function GpuForm({ item, onSuccess }: { item: GpuWithPart | null; onSuccess: () 
             )}
           />
         </div>
-        <FormField control={form.control} name="supportedFeaturesInput"
+        <FormField control={form.control} name="isActive"
           render={({ field }) => (
-            <FormItem>
-              <FormLabel>Supported Features (comma-separated)</FormLabel>
-              <FormControl><Input {...field} /></FormControl>
-              <FormMessage />
+            <FormItem className="flex items-center gap-2 space-y-0">
+              <FormControl><Checkbox checked={field.value} onCheckedChange={field.onChange} /></FormControl>
+              <FormLabel>Active</FormLabel>
             </FormItem>
           )}
         />
-        <FormField control={form.control} name="benchmarkScoresInput"
-          render={({ field }) => (
-            <FormItem>
-              <FormLabel>Benchmark Scores (JSON)</FormLabel>
-              <FormControl><Textarea rows={4} {...field} /></FormControl>
-              <FormMessage />
-            </FormItem>
-          )}
-        />
-        <div className="flex gap-6">
-          {([ ['hasRayTracing', 'Has Ray Tracing'], ['isActive', 'Active'] ] as [keyof GpuFormData, string][]).map(([name, label]) => (
-            <FormField key={name} control={form.control} name={name}
-              render={({ field }) => (
-                <FormItem className="flex items-center gap-2 space-y-0">
-                  <FormControl>
-                    <Checkbox checked={field.value as boolean} onCheckedChange={field.onChange} />
-                  </FormControl>
-                  <FormLabel>{label}</FormLabel>
-                </FormItem>
-              )}
-            />
-          ))}
-        </div>
         {error && <p className="text-sm text-destructive">{error}</p>}
         <div className="flex justify-end pt-2">
           <Button type="submit" disabled={form.formState.isSubmitting}>
@@ -216,24 +171,20 @@ function GpuForm({ item, onSuccess }: { item: GpuWithPart | null; onSuccess: () 
   );
 }
 
-export function GpuTable({ data }: { data: GpuWithPart[] }) {
+export function GpuTable({ data, chipsets }: { data: GpuWithPart[]; chipsets: ChipsetOption[] }) {
   const router = useRouter();
   const [selected, setSelected] = useState<GpuWithPart | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
-  const [, startTransition] = useTransition();
 
   const handleSuccess = () => { setDialogOpen(false); router.refresh(); };
-  const handleDelete = (id: string) => {
-    startTransition(async () => { await deleteGpu(id); setDeleteId(null); router.refresh(); });
-  };
+  const handleDelete = async (id: string) => { await deleteGpu(id); setDeleteId(null); router.refresh(); };
 
   const columns: ColumnDef<GpuWithPart>[] = [
     { id: 'name', accessorFn: (r) => r.pcPart.name, header: 'Name', enableSorting: true },
+    { id: 'chipset', accessorFn: (r) => r.chipset.name, header: 'Chipset', enableSorting: true },
     { id: 'manufacturer', accessorFn: (r) => r.pcPart.manufacturer ?? '', header: 'Manufacturer' },
-    { accessorKey: 'chipset', header: 'Chipset', enableSorting: true },
-    { accessorKey: 'vramGb', header: 'VRAM (GB)', enableSorting: true },
-    { accessorKey: 'tdpWatts', header: 'TDP (W)', enableSorting: true },
+    { accessorKey: 'lengthMm', header: 'Length (mm)', enableSorting: true },
     {
       id: 'streetPrice', accessorFn: (r) => r.pcPart.streetPriceCents, header: 'Street Price',
       cell: ({ getValue }) => formatUsd(getValue<number | null>()), enableSorting: true,
@@ -241,19 +192,13 @@ export function GpuTable({ data }: { data: GpuWithPart[] }) {
     {
       id: 'listings', header: 'Listings',
       cell: ({ row }) => (
-        <ListingsDialog
-          partId={row.original.pcPart.id}
-          partName={row.original.pcPart.name}
-          listings={row.original.pcPart.listings}
-        />
+        <ListingsDialog partId={row.original.pcPart.id} partName={row.original.pcPart.name} listings={row.original.pcPart.listings} />
       ),
     },
     {
       id: 'isActive', accessorFn: (r) => r.pcPart.isActive, header: 'Active',
       cell: ({ getValue }) => (
-        <Badge variant={getValue<boolean>() ? 'default' : 'secondary'}>
-          {getValue<boolean>() ? 'Active' : 'Inactive'}
-        </Badge>
+        <Badge variant={getValue<boolean>() ? 'default' : 'secondary'}>{getValue<boolean>() ? 'Active' : 'Inactive'}</Badge>
       ),
     },
     {
@@ -276,15 +221,18 @@ export function GpuTable({ data }: { data: GpuWithPart[] }) {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold">GPUs</h1>
-          <p className="text-muted-foreground text-sm mt-1">{data.length} total</p>
+          <p className="text-muted-foreground text-sm mt-1">{data.length} boards</p>
         </div>
-        <Button onClick={() => { setSelected(null); setDialogOpen(true); }}>New GPU</Button>
+        <Button onClick={() => { setSelected(null); setDialogOpen(true); }} disabled={chipsets.length === 0}>New GPU</Button>
       </div>
+      {chipsets.length === 0 && (
+        <p className="text-sm text-muted-foreground">Create a GPU Chipset first — every board belongs to one.</p>
+      )}
       <DataTable columns={columns} data={data} filterPlaceholder="Filter GPUs..." />
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent className="max-w-3xl">
           <DialogHeader><DialogTitle>{selected ? 'Edit GPU' : 'New GPU'}</DialogTitle></DialogHeader>
-          <GpuForm item={selected} onSuccess={handleSuccess} />
+          <GpuForm item={selected} chipsets={chipsets} onSuccess={handleSuccess} />
         </DialogContent>
       </Dialog>
       <AlertDialog open={!!deleteId} onOpenChange={(open) => !open && setDeleteId(null)}>

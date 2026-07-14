@@ -2,7 +2,7 @@
 
 import { revalidatePath } from 'next/cache';
 import { db } from '@/lib/prisma';
-import { splitCommaList, usdToCents } from '@/lib/utils';
+import { usdToCents } from '@/lib/utils';
 
 export interface GpuFormData {
   name: string;
@@ -11,115 +11,51 @@ export interface GpuFormData {
   yearReleased: number | null;
   isActive: boolean;
   streetPriceUsd: number | null;
+  gpuChipsetId: string;
   brand: string;
-  chipset: string;
-  vramGb: number | null;
-  tdpWatts: number | null;
   lengthMm: number | null;
-  pciePowerPins: string;
-  recommendedPsuWatts: number | null;
-  vramType: string;
   widthSlots: number | null;
-  pcieGeneration: number | null;
-  baseClockMhz: number | null;
-  boostClockMhz: number | null;
-  hasRayTracing: boolean;
-  cudaCores: number | null;
-  tensorCores: number | null;
-  streamProcessors: number | null;
-  matrixCores: number | null;
+  pciePowerPins: string;
   displayOutputs: string;
   hdmiVersion: string;
   dpVersion: string;
-  supportedFeaturesInput: string;
-  benchmarkScoresInput: string;
+}
+
+function partData(d: GpuFormData) {
+  return {
+    name: d.name,
+    manufacturer: d.manufacturer || null,
+    modelNumber: d.modelNumber || null,
+    yearReleased: d.yearReleased,
+    isActive: d.isActive,
+    streetPriceCents: usdToCents(d.streetPriceUsd),
+  };
+}
+
+function specData(d: GpuFormData) {
+  return {
+    gpuChipsetId: d.gpuChipsetId,
+    brand: d.brand,
+    lengthMm: d.lengthMm ?? 0,
+    widthSlots: d.widthSlots,
+    pciePowerPins: d.pciePowerPins || null,
+    displayOutputs: d.displayOutputs || null,
+    hdmiVersion: d.hdmiVersion || null,
+    dpVersion: d.dpVersion || null,
+  };
 }
 
 export async function createGpu(data: GpuFormData) {
-  const created = await db.pcPart.create({
-    data: {
-      name: data.name,
-      manufacturer: data.manufacturer || null,
-      modelNumber: data.modelNumber || null,
-      yearReleased: data.yearReleased,
-      isActive: data.isActive,
-      streetPriceCents: usdToCents(data.streetPriceUsd),
-      partType: 'gpu',
-      gpu: {
-        create: {
-          brand: data.brand || null,
-          chipset: data.chipset || null,
-          vramGb: data.vramGb,
-          tdpWatts: data.tdpWatts,
-          lengthMm: data.lengthMm,
-          pciePowerPins: data.pciePowerPins || null,
-          recommendedPsuWatts: data.recommendedPsuWatts,
-          vramType: data.vramType || null,
-          widthSlots: data.widthSlots,
-          pcieGeneration: data.pcieGeneration,
-          baseClockMhz: data.baseClockMhz,
-          boostClockMhz: data.boostClockMhz,
-          hasRayTracing: data.hasRayTracing,
-          cudaCores: data.cudaCores,
-          tensorCores: data.tensorCores,
-          streamProcessors: data.streamProcessors,
-          matrixCores: data.matrixCores,
-          displayOutputs: data.displayOutputs || null,
-          hdmiVersion: data.hdmiVersion || null,
-          dpVersion: data.dpVersion || null,
-          supportedFeatures: splitCommaList(data.supportedFeaturesInput),
-          benchmarkScores: data.benchmarkScoresInput
-            ? JSON.parse(data.benchmarkScoresInput)
-            : undefined,
-        },
-      },
-    },
+  await db.pcPart.create({
+    data: { ...partData(data), partType: 'gpu', gpu: { create: specData(data) } },
   });
   revalidatePath('/gpus');
 }
 
 export async function updateGpu(id: string, data: GpuFormData) {
   await db.$transaction([
-    db.pcPart.update({
-      where: { id },
-      data: {
-        name: data.name,
-        manufacturer: data.manufacturer || null,
-        modelNumber: data.modelNumber || null,
-        yearReleased: data.yearReleased,
-        isActive: data.isActive,
-        streetPriceCents: usdToCents(data.streetPriceUsd),
-      },
-    }),
-    db.gpu.update({
-      where: { id },
-      data: {
-        brand: data.brand || null,
-        chipset: data.chipset || null,
-        vramGb: data.vramGb,
-        tdpWatts: data.tdpWatts,
-        lengthMm: data.lengthMm,
-        pciePowerPins: data.pciePowerPins || null,
-        recommendedPsuWatts: data.recommendedPsuWatts,
-        vramType: data.vramType || null,
-        widthSlots: data.widthSlots,
-        pcieGeneration: data.pcieGeneration,
-        baseClockMhz: data.baseClockMhz,
-        boostClockMhz: data.boostClockMhz,
-        hasRayTracing: data.hasRayTracing,
-        cudaCores: data.cudaCores,
-        tensorCores: data.tensorCores,
-        streamProcessors: data.streamProcessors,
-        matrixCores: data.matrixCores,
-        displayOutputs: data.displayOutputs || null,
-        hdmiVersion: data.hdmiVersion || null,
-        dpVersion: data.dpVersion || null,
-        supportedFeatures: splitCommaList(data.supportedFeaturesInput),
-        benchmarkScores: data.benchmarkScoresInput
-          ? JSON.parse(data.benchmarkScoresInput)
-          : null,
-      },
-    }),
+    db.pcPart.update({ where: { id }, data: partData(data) }),
+    db.gpu.update({ where: { id }, data: specData(data) }),
   ]);
   revalidatePath('/gpus');
 }

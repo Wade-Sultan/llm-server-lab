@@ -11,16 +11,9 @@ export interface RamFormData {
   yearReleased: number | null;
   isActive: boolean;
   streetPriceUsd: number | null;
-  ddrGeneration: string;
-  speedMhz: number | null;
-  modules: number | null;
-  capacityGb: number | null;
+  ramGroupId: string;
   heightMm: number | null;
-  moduleCapacityGb: number | null;
-  casLatency: number | null;
-  voltage: number | null;
   hasRgb: boolean;
-  isEcc: boolean;
 }
 
 const partData = (d: RamFormData) => ({
@@ -29,21 +22,19 @@ const partData = (d: RamFormData) => ({
   streetPriceCents: usdToCents(d.streetPriceUsd),
 });
 
-const specificData = (d: RamFormData) => ({
-  ddrGeneration: d.ddrGeneration || null, speedMhz: d.speedMhz, modules: d.modules,
-  capacityGb: d.capacityGb, heightMm: d.heightMm, moduleCapacityGb: d.moduleCapacityGb,
-  casLatency: d.casLatency, voltage: d.voltage, hasRgb: d.hasRgb, isEcc: d.isEcc,
+const specData = (d: RamFormData) => ({
+  ramGroupId: d.ramGroupId, heightMm: d.heightMm, hasRgb: d.hasRgb,
 });
 
 export async function createRam(data: RamFormData) {
-  const created = await db.pcPart.create({ data: { ...partData(data), partType: 'ram', ram: { create: specificData(data) } } });
+  await db.pcPart.create({ data: { ...partData(data), partType: 'ramkit', ramKit: { create: specData(data) } } });
   revalidatePath('/ram');
 }
 
 export async function updateRam(id: string, data: RamFormData) {
   await db.$transaction([
     db.pcPart.update({ where: { id }, data: partData(data) }),
-    db.ram.update({ where: { id }, data: specificData(data) }),
+    db.ramKit.update({ where: { id }, data: specData(data) }),
   ]);
   revalidatePath('/ram');
 }

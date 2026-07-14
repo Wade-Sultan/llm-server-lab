@@ -16,6 +16,7 @@ import {
   Wind,
   BookMarked,
   Users,
+  Layers,
 } from 'lucide-react';
 
 type NavItem =
@@ -34,6 +35,11 @@ const navItems: NavItem[] = [
   { label: 'PSUs', href: '/psus', icon: Zap },
   { label: 'Fans', href: '/fans', icon: Fan },
   { label: 'CPU Coolers', href: '/cpu-coolers', icon: Wind },
+  { type: 'separator', label: 'Component Groups' },
+  { label: 'GPU Chipsets', href: '/gpu-chipsets', icon: Layers },
+  { label: 'PSU Groups', href: '/psu-groups', icon: Layers },
+  { label: 'RAM Groups', href: '/ram-groups', icon: Layers },
+  { label: 'Storage Groups', href: '/storage-groups', icon: Layers },
   { type: 'separator', label: 'Catalog' },
   { label: 'Reference Builds', href: '/reference-builds', icon: BookMarked },
   { type: 'separator', label: 'Users' },

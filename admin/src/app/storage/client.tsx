@@ -6,7 +6,7 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import type { ColumnDef } from '@tanstack/react-table';
-import type { Storage, PcPart, Listing, AmazonListing } from '@prisma/client';
+import type { StorageDrive, PcPart, Listing, AmazonListing } from '@prisma/client';
 import { Pencil, Trash2 } from 'lucide-react';
 import { DataTable } from '@/components/data-table';
 import { Button } from '@/components/ui/button';
@@ -16,40 +16,35 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ListingsDialog } from '@/components/listings-dialog';
 import { centsToUsd, formatUsd } from '@/lib/utils';
 import { createStorage, updateStorage, deleteStorage, type StorageFormData } from './actions';
 
-type StorageWithPart = Storage & { pcPart: PcPart & { listings: (Listing & { amazonListing: AmazonListing | null })[] } };
+type StorageWithPart = StorageDrive & {
+  pcPart: PcPart & { listings: (Listing & { amazonListing: AmazonListing | null })[] };
+  group: { name: string };
+};
+type GroupOption = { id: string; name: string };
 
 const schema = z.object({
   name: z.string().min(1), manufacturer: z.string(), modelNumber: z.string(),
   yearReleased: z.coerce.number().int().nullable(), isActive: z.boolean(),
   streetPriceUsd: z.coerce.number().nullable(),
-  storageType: z.string(), formFactor: z.string(), interface: z.string(),
-  capacityGb: z.coerce.number().int().nullable(), readSpeedMbps: z.coerce.number().int().nullable(),
-  writeSpeedMbps: z.coerce.number().int().nullable(), hasDramCache: z.boolean(),
-  enduranceTbw: z.coerce.number().int().nullable(), rpm: z.coerce.number().int().nullable(),
+  storageGroupId: z.string().min(1, 'Group is required'),
 });
 
-function StorageForm({ item, onSuccess }: { item: StorageWithPart | null; onSuccess: () => void }) {
+function StorageForm({ item, groups, onSuccess }: { item: StorageWithPart | null; groups: GroupOption[]; onSuccess: () => void }) {
   const form = useForm<StorageFormData>({
     resolver: zodResolver(schema),
     defaultValues: item ? {
       name: item.pcPart.name, manufacturer: item.pcPart.manufacturer ?? '',
       modelNumber: item.pcPart.modelNumber ?? '', yearReleased: item.pcPart.yearReleased,
       isActive: item.pcPart.isActive, streetPriceUsd: centsToUsd(item.pcPart.streetPriceCents),
-      storageType: item.storageType ?? '',
-      formFactor: item.formFactor ?? '', interface: item.interface ?? '',
-      capacityGb: item.capacityGb, readSpeedMbps: item.readSpeedMbps,
-      writeSpeedMbps: item.writeSpeedMbps, hasDramCache: item.hasDramCache,
-      enduranceTbw: item.enduranceTbw, rpm: item.rpm,
+      storageGroupId: item.storageGroupId,
     } : {
       name: '', manufacturer: '', modelNumber: '', yearReleased: null, isActive: true,
-      streetPriceUsd: null,
-      storageType: '', formFactor: '', interface: '', capacityGb: null,
-      readSpeedMbps: null, writeSpeedMbps: null, hasDramCache: false,
-      enduranceTbw: null, rpm: null,
+      streetPriceUsd: null, storageGroupId: '',
     },
   });
 
@@ -68,10 +63,20 @@ function StorageForm({ item, onSuccess }: { item: StorageWithPart | null; onSucc
   return (
     <Form {...form}>
       <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+        <FormField control={form.control} name="storageGroupId"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>Group * (spec — type, interface, capacity, speeds)</FormLabel>
+              <Select value={field.value} onValueChange={field.onChange}>
+                <FormControl><SelectTrigger><SelectValue placeholder="Select a group" /></SelectTrigger></FormControl>
+                <SelectContent>{groups.map((g) => <SelectItem key={g.id} value={g.id}>{g.name}</SelectItem>)}</SelectContent>
+              </Select>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
         <div className="grid grid-cols-2 gap-4">
-          {([ ['name','Name *'], ['manufacturer','Manufacturer'], ['modelNumber','Model Number'],
-              ['storageType','Type (SSD/HDD)'], ['formFactor','Form Factor'], ['interface','Interface'],
-          ] as [keyof StorageFormData, string][]).map(([name, label]) => (
+          {([ ['name','Product Name *'], ['manufacturer','Manufacturer'], ['modelNumber','Model Number'] ] as [keyof StorageFormData, string][]).map(([name, label]) => (
             <FormField key={name} control={form.control} name={name}
               render={({ field }) => (
                 <FormItem><FormLabel>{label}</FormLabel>
@@ -81,20 +86,16 @@ function StorageForm({ item, onSuccess }: { item: StorageWithPart | null; onSucc
               )}
             />
           ))}
-          {([ ['yearReleased','Year'], ['capacityGb','Capacity (GB)'], ['readSpeedMbps','Read (MB/s)'],
-              ['writeSpeedMbps','Write (MB/s)'], ['enduranceTbw','Endurance (TBW)'], ['rpm','RPM'],
-          ] as [keyof StorageFormData, string][]).map(([name, label]) => (
-            <FormField key={name} control={form.control} name={name}
-              render={({ field }) => (
-                <FormItem><FormLabel>{label}</FormLabel>
-                  <FormControl>
-                    <Input type="number" value={(field.value as number | null) ?? ''} onChange={numChange(field.onChange)} />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-          ))}
+          <FormField control={form.control} name="yearReleased"
+            render={({ field }) => (
+              <FormItem><FormLabel>Year</FormLabel>
+                <FormControl>
+                  <Input type="number" value={(field.value as number | null) ?? ''} onChange={numChange(field.onChange)} />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
           <FormField control={form.control} name="streetPriceUsd"
             render={({ field }) => (
               <FormItem><FormLabel>Street Price (USD)</FormLabel>
@@ -106,18 +107,14 @@ function StorageForm({ item, onSuccess }: { item: StorageWithPart | null; onSucc
             )}
           />
         </div>
-        <div className="flex gap-6">
-          {([ ['hasDramCache','DRAM Cache'], ['isActive','Active'] ] as [keyof StorageFormData, string][]).map(([name, label]) => (
-            <FormField key={name} control={form.control} name={name}
-              render={({ field }) => (
-                <FormItem className="flex items-center gap-2 space-y-0">
-                  <FormControl><Checkbox checked={field.value as boolean} onCheckedChange={field.onChange} /></FormControl>
-                  <FormLabel>{label}</FormLabel>
-                </FormItem>
-              )}
-            />
-          ))}
-        </div>
+        <FormField control={form.control} name="isActive"
+          render={({ field }) => (
+            <FormItem className="flex items-center gap-2 space-y-0">
+              <FormControl><Checkbox checked={field.value} onCheckedChange={field.onChange} /></FormControl>
+              <FormLabel>Active</FormLabel>
+            </FormItem>
+          )}
+        />
         {error && <p className="text-sm text-destructive">{error}</p>}
         <div className="flex justify-end pt-2">
           <Button type="submit" disabled={form.formState.isSubmitting}>
@@ -129,7 +126,7 @@ function StorageForm({ item, onSuccess }: { item: StorageWithPart | null; onSucc
   );
 }
 
-export function StorageTable({ data }: { data: StorageWithPart[] }) {
+export function StorageTable({ data, groups }: { data: StorageWithPart[]; groups: GroupOption[] }) {
   const router = useRouter();
   const [selected, setSelected] = useState<StorageWithPart | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -143,20 +140,14 @@ export function StorageTable({ data }: { data: StorageWithPart[] }) {
 
   const columns: ColumnDef<StorageWithPart>[] = [
     { id: 'name', accessorFn: (r) => r.pcPart.name, header: 'Name', enableSorting: true },
+    { id: 'group', accessorFn: (r) => r.group.name, header: 'Group', enableSorting: true },
     { id: 'manufacturer', accessorFn: (r) => r.pcPart.manufacturer ?? '', header: 'Manufacturer' },
-    { accessorKey: 'storageType', header: 'Type', enableSorting: true },
-    { accessorKey: 'capacityGb', header: 'Capacity (GB)', enableSorting: true },
-    { accessorKey: 'interface', header: 'Interface', enableSorting: true },
     { id: 'streetPrice', accessorFn: (r) => r.pcPart.streetPriceCents, header: 'Street Price',
       cell: ({ getValue }) => formatUsd(getValue<number | null>()), enableSorting: true },
     {
       id: 'listings', header: 'Listings',
       cell: ({ row }) => (
-        <ListingsDialog
-          partId={row.original.pcPart.id}
-          partName={row.original.pcPart.name}
-          listings={row.original.pcPart.listings}
-        />
+        <ListingsDialog partId={row.original.pcPart.id} partName={row.original.pcPart.name} listings={row.original.pcPart.listings} />
       ),
     },
     { id: 'isActive', accessorFn: (r) => r.pcPart.isActive, header: 'Active',
@@ -172,14 +163,15 @@ export function StorageTable({ data }: { data: StorageWithPart[] }) {
   return (
     <div className="p-6 space-y-6">
       <div className="flex items-center justify-between">
-        <div><h1 className="text-2xl font-bold">Storage</h1><p className="text-muted-foreground text-sm mt-1">{data.length} total</p></div>
-        <Button onClick={() => { setSelected(null); setDialogOpen(true); }}>New Storage</Button>
+        <div><h1 className="text-2xl font-bold">Storage</h1><p className="text-muted-foreground text-sm mt-1">{data.length} drives</p></div>
+        <Button onClick={() => { setSelected(null); setDialogOpen(true); }} disabled={groups.length === 0}>New Storage</Button>
       </div>
+      {groups.length === 0 && <p className="text-sm text-muted-foreground">Create a Storage Group first — every drive belongs to one.</p>}
       <DataTable columns={columns} data={data} filterPlaceholder="Filter storage..." />
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent className="max-w-2xl">
           <DialogHeader><DialogTitle>{selected ? 'Edit Storage' : 'New Storage'}</DialogTitle></DialogHeader>
-          <StorageForm item={selected} onSuccess={handleSuccess} />
+          <StorageForm item={selected} groups={groups} onSuccess={handleSuccess} />
         </DialogContent>
       </Dialog>
       <AlertDialog open={!!deleteId} onOpenChange={(open) => !open && setDeleteId(null)}>

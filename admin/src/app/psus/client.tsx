@@ -16,42 +16,36 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ListingsDialog } from '@/components/listings-dialog';
 import { centsToUsd, formatUsd } from '@/lib/utils';
 import { createPsu, updatePsu, deletePsu, type PsuFormData } from './actions';
 
-type PsuWithPart = Psu & { pcPart: PcPart & { listings: (Listing & { amazonListing: AmazonListing | null })[] } };
+type PsuWithPart = Psu & {
+  pcPart: PcPart & { listings: (Listing & { amazonListing: AmazonListing | null })[] };
+  group: { name: string };
+};
+type GroupOption = { id: string; name: string };
 
 const schema = z.object({
   name: z.string().min(1), manufacturer: z.string(), modelNumber: z.string(),
   yearReleased: z.coerce.number().int().nullable(), isActive: z.boolean(),
   streetPriceUsd: z.coerce.number().nullable(),
-  wattage: z.coerce.number().int().nullable(), formFactor: z.string(),
-  efficiencyRating: z.string(), pcie8pinConnectors: z.coerce.number().int().nullable(),
-  pcie12pinConnectors: z.coerce.number().int().nullable(), pcie16pinConnectors: z.coerce.number().int().nullable(),
-  depthMm: z.coerce.number().int().nullable(), modular: z.string(),
-  epsConnectors: z.coerce.number().int().nullable(), fanSizeMm: z.coerce.number().int().nullable(),
-  isFanless: z.boolean(),
+  psuGroupId: z.string().min(1, 'Group is required'),
+  depthMm: z.coerce.number().int().nullable(),
 });
 
-function PsuForm({ item, onSuccess }: { item: PsuWithPart | null; onSuccess: () => void }) {
+function PsuForm({ item, groups, onSuccess }: { item: PsuWithPart | null; groups: GroupOption[]; onSuccess: () => void }) {
   const form = useForm<PsuFormData>({
     resolver: zodResolver(schema),
     defaultValues: item ? {
       name: item.pcPart.name, manufacturer: item.pcPart.manufacturer ?? '',
       modelNumber: item.pcPart.modelNumber ?? '', yearReleased: item.pcPart.yearReleased,
       isActive: item.pcPart.isActive, streetPriceUsd: centsToUsd(item.pcPart.streetPriceCents),
-      wattage: item.wattage, formFactor: item.formFactor ?? '',
-      efficiencyRating: item.efficiencyRating ?? '', pcie8pinConnectors: item.pcie8pinConnectors,
-      pcie12pinConnectors: item.pcie12pinConnectors, pcie16pinConnectors: item.pcie16pinConnectors,
-      depthMm: item.depthMm, modular: item.modular ?? '', epsConnectors: item.epsConnectors,
-      fanSizeMm: item.fanSizeMm, isFanless: item.isFanless,
+      psuGroupId: item.psuGroupId, depthMm: item.depthMm,
     } : {
       name: '', manufacturer: '', modelNumber: '', yearReleased: null, isActive: true,
-      streetPriceUsd: null,
-      wattage: null, formFactor: '', efficiencyRating: '', pcie8pinConnectors: null,
-      pcie12pinConnectors: null, pcie16pinConnectors: null, depthMm: null,
-      modular: '', epsConnectors: null, fanSizeMm: null, isFanless: false,
+      streetPriceUsd: null, psuGroupId: '', depthMm: null,
     },
   });
 
@@ -70,10 +64,20 @@ function PsuForm({ item, onSuccess }: { item: PsuWithPart | null; onSuccess: () 
   return (
     <Form {...form}>
       <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+        <FormField control={form.control} name="psuGroupId"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>Group * (spec — wattage, efficiency, form factor)</FormLabel>
+              <Select value={field.value} onValueChange={field.onChange}>
+                <FormControl><SelectTrigger><SelectValue placeholder="Select a group" /></SelectTrigger></FormControl>
+                <SelectContent>{groups.map((g) => <SelectItem key={g.id} value={g.id}>{g.name}</SelectItem>)}</SelectContent>
+              </Select>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
         <div className="grid grid-cols-2 gap-4">
-          {([ ['name','Name *'], ['manufacturer','Manufacturer'], ['modelNumber','Model Number'],
-              ['formFactor','Form Factor'], ['efficiencyRating','Efficiency Rating'], ['modular','Modular Type'],
-          ] as [keyof PsuFormData, string][]).map(([name, label]) => (
+          {([ ['name','Product Name *'], ['manufacturer','Manufacturer'], ['modelNumber','Model Number'] ] as [keyof PsuFormData, string][]).map(([name, label]) => (
             <FormField key={name} control={form.control} name={name}
               render={({ field }) => (
                 <FormItem><FormLabel>{label}</FormLabel>
@@ -83,10 +87,7 @@ function PsuForm({ item, onSuccess }: { item: PsuWithPart | null; onSuccess: () 
               )}
             />
           ))}
-          {([ ['yearReleased','Year'], ['wattage','Wattage (W)'], ['pcie8pinConnectors','PCIe 8-pin'],
-              ['pcie12pinConnectors','PCIe 12-pin'], ['pcie16pinConnectors','PCIe 16-pin'],
-              ['depthMm','Depth (mm)'], ['epsConnectors','EPS Connectors'], ['fanSizeMm','Fan Size (mm)'],
-          ] as [keyof PsuFormData, string][]).map(([name, label]) => (
+          {([ ['yearReleased','Year'], ['depthMm','Depth (mm)'] ] as [keyof PsuFormData, string][]).map(([name, label]) => (
             <FormField key={name} control={form.control} name={name}
               render={({ field }) => (
                 <FormItem><FormLabel>{label}</FormLabel>
@@ -109,18 +110,14 @@ function PsuForm({ item, onSuccess }: { item: PsuWithPart | null; onSuccess: () 
             )}
           />
         </div>
-        <div className="flex gap-6">
-          {([ ['isFanless','Fanless'], ['isActive','Active'] ] as [keyof PsuFormData, string][]).map(([name, label]) => (
-            <FormField key={name} control={form.control} name={name}
-              render={({ field }) => (
-                <FormItem className="flex items-center gap-2 space-y-0">
-                  <FormControl><Checkbox checked={field.value as boolean} onCheckedChange={field.onChange} /></FormControl>
-                  <FormLabel>{label}</FormLabel>
-                </FormItem>
-              )}
-            />
-          ))}
-        </div>
+        <FormField control={form.control} name="isActive"
+          render={({ field }) => (
+            <FormItem className="flex items-center gap-2 space-y-0">
+              <FormControl><Checkbox checked={field.value} onCheckedChange={field.onChange} /></FormControl>
+              <FormLabel>Active</FormLabel>
+            </FormItem>
+          )}
+        />
         {error && <p className="text-sm text-destructive">{error}</p>}
         <div className="flex justify-end pt-2">
           <Button type="submit" disabled={form.formState.isSubmitting}>
@@ -132,7 +129,7 @@ function PsuForm({ item, onSuccess }: { item: PsuWithPart | null; onSuccess: () 
   );
 }
 
-export function PsuTable({ data }: { data: PsuWithPart[] }) {
+export function PsuTable({ data, groups }: { data: PsuWithPart[]; groups: GroupOption[] }) {
   const router = useRouter();
   const [selected, setSelected] = useState<PsuWithPart | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -146,20 +143,14 @@ export function PsuTable({ data }: { data: PsuWithPart[] }) {
 
   const columns: ColumnDef<PsuWithPart>[] = [
     { id: 'name', accessorFn: (r) => r.pcPart.name, header: 'Name', enableSorting: true },
+    { id: 'group', accessorFn: (r) => r.group.name, header: 'Group', enableSorting: true },
     { id: 'manufacturer', accessorFn: (r) => r.pcPart.manufacturer ?? '', header: 'Manufacturer' },
-    { accessorKey: 'wattage', header: 'Wattage (W)', enableSorting: true },
-    { accessorKey: 'efficiencyRating', header: 'Efficiency', enableSorting: true },
-    { accessorKey: 'modular', header: 'Modular', enableSorting: true },
     { id: 'streetPrice', accessorFn: (r) => r.pcPart.streetPriceCents, header: 'Street Price',
       cell: ({ getValue }) => formatUsd(getValue<number | null>()), enableSorting: true },
     {
       id: 'listings', header: 'Listings',
       cell: ({ row }) => (
-        <ListingsDialog
-          partId={row.original.pcPart.id}
-          partName={row.original.pcPart.name}
-          listings={row.original.pcPart.listings}
-        />
+        <ListingsDialog partId={row.original.pcPart.id} partName={row.original.pcPart.name} listings={row.original.pcPart.listings} />
       ),
     },
     { id: 'isActive', accessorFn: (r) => r.pcPart.isActive, header: 'Active',
@@ -175,14 +166,15 @@ export function PsuTable({ data }: { data: PsuWithPart[] }) {
   return (
     <div className="p-6 space-y-6">
       <div className="flex items-center justify-between">
-        <div><h1 className="text-2xl font-bold">PSUs</h1><p className="text-muted-foreground text-sm mt-1">{data.length} total</p></div>
-        <Button onClick={() => { setSelected(null); setDialogOpen(true); }}>New PSU</Button>
+        <div><h1 className="text-2xl font-bold">PSUs</h1><p className="text-muted-foreground text-sm mt-1">{data.length} units</p></div>
+        <Button onClick={() => { setSelected(null); setDialogOpen(true); }} disabled={groups.length === 0}>New PSU</Button>
       </div>
+      {groups.length === 0 && <p className="text-sm text-muted-foreground">Create a PSU Group first — every unit belongs to one.</p>}
       <DataTable columns={columns} data={data} filterPlaceholder="Filter PSUs..." />
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent className="max-w-2xl">
           <DialogHeader><DialogTitle>{selected ? 'Edit PSU' : 'New PSU'}</DialogTitle></DialogHeader>
-          <PsuForm item={selected} onSuccess={handleSuccess} />
+          <PsuForm item={selected} groups={groups} onSuccess={handleSuccess} />
         </DialogContent>
       </Dialog>
       <AlertDialog open={!!deleteId} onOpenChange={(open) => !open && setDeleteId(null)}>

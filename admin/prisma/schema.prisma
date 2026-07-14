@@ -23,8 +23,8 @@ model PcPart {
   cpu             Cpu?
   gpu             Gpu?
   motherboard     Motherboard?
-  ram             Ram?
-  storage         Storage?
+  ramKit          RamKit?
+  storageDrive    StorageDrive?
   psu             Psu?
   pcCase          PcCase?
   cpuCooler       CpuCooler?
@@ -69,6 +69,95 @@ model AmazonListing {
   @@map("amazon_listings")
 }
 
+// Component groups — intrinsic spec shared across every purchasable variant of
+// the same part. Standalone tables (no pc_parts row / price / listings); each
+// exact PcPart subtype FKs its group.
+
+model GpuChipset {
+  id                  String   @id @default(uuid()) @db.Uuid
+  name                String
+  vramGb              Int      @map("vram_gb")
+  vramType            String?  @map("vram_type")
+  tdpWatts            Int      @map("tdp_watts")
+  recommendedPsuWatts Int?     @map("recommended_psu_watts")
+  pcieGeneration      Int?     @map("pcie_generation")
+  baseClockMhz        Int?     @map("base_clock_mhz")
+  boostClockMhz       Int?     @map("boost_clock_mhz")
+  hasRayTracing       Boolean  @default(false) @map("has_ray_tracing")
+  cudaCores           Int?     @map("cuda_cores")
+  tensorCores         Int?     @map("tensor_cores")
+  streamProcessors    Int?     @map("stream_processors")
+  matrixCores         Int?     @map("matrix_cores")
+  supportedFeatures   String[] @map("supported_features")
+  benchmarkScores     Json?    @map("benchmark_scores")
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+
+  variants Gpu[]
+
+  @@map("gpu_chipsets")
+}
+
+model PsuGroup {
+  id                  String   @id @default(uuid()) @db.Uuid
+  name                String
+  wattage             Int
+  formFactor          String   @map("form_factor")
+  efficiencyRating    String   @map("efficiency_rating")
+  modular             String?
+  isFanless           Boolean  @default(false) @map("is_fanless")
+  fanSizeMm           Int?     @map("fan_size_mm")
+  pcie8pinConnectors  Int?     @map("pcie_8pin_connectors")
+  pcie12pinConnectors Int?     @map("pcie_12pin_connectors")
+  pcie16pinConnectors Int?     @map("pcie_16pin_connectors")
+  epsConnectors       Int?     @map("eps_connectors")
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+
+  variants Psu[]
+
+  @@map("psu_groups")
+}
+
+model RamGroup {
+  id               String   @id @default(uuid()) @db.Uuid
+  name             String
+  ddrGeneration    String   @map("ddr_generation")
+  speedMhz         Int      @map("speed_mhz")
+  capacityGb       Int      @map("capacity_gb")
+  modules          Int
+  moduleCapacityGb Int?     @map("module_capacity_gb")
+  casLatency       Int?     @map("cas_latency")
+  voltage          Float?
+  isEcc            Boolean  @default(false) @map("is_ecc")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  variants RamKit[]
+
+  @@map("ram_groups")
+}
+
+model StorageGroup {
+  id             String   @id @default(uuid()) @db.Uuid
+  name           String
+  storageType    String   @map("storage_type")
+  formFactor     String   @map("form_factor")
+  interface      String
+  capacityGb     Int      @map("capacity_gb")
+  readSpeedMbps  Int?     @map("read_speed_mbps")
+  writeSpeedMbps Int?     @map("write_speed_mbps")
+  hasDramCache   Boolean  @default(false) @map("has_dram_cache")
+  enduranceTbw   Int?     @map("endurance_tbw")
+  rpm            Int?
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  variants StorageDrive[]
+
+  @@map("storage_groups")
+}
+
 model Cpu {
   id                String   @id @db.Uuid
   pcPart            PcPart   @relation(fields: [id], references: [id], onDelete: Cascade)
@@ -92,30 +181,17 @@ model Cpu {
 }
 
 model Gpu {
-  id                  String   @id @db.Uuid
-  pcPart              PcPart   @relation(fields: [id], references: [id], onDelete: Cascade)
-  brand               String?
-  chipset             String?
-  vramGb              Int?     @map("vram_gb")
-  tdpWatts            Int?     @map("tdp_watts")
-  lengthMm            Int?     @map("length_mm")
-  pciePowerPins       String?  @map("pcie_power_pins")
-  recommendedPsuWatts Int?     @map("recommended_psu_watts")
-  supportedFeatures   String[] @map("supported_features")
-  benchmarkScores     Json?    @map("benchmark_scores")
-  vramType            String?  @map("vram_type")
-  widthSlots          Float?   @map("width_slots")
-  pcieGeneration      Int?     @map("pcie_generation")
-  baseClockMhz        Int?     @map("base_clock_mhz")
-  boostClockMhz       Int?     @map("boost_clock_mhz")
-  hasRayTracing       Boolean  @default(false) @map("has_ray_tracing")
-  cudaCores           Int?     @map("cuda_cores")
-  tensorCores         Int?     @map("tensor_cores")
-  streamProcessors    Int?     @map("stream_processors")
-  matrixCores         Int?     @map("matrix_cores")
-  displayOutputs      String?  @map("display_outputs")
-  hdmiVersion         String?  @map("hdmi_version")
-  dpVersion           String?  @map("dp_version")
+  id             String     @id @db.Uuid
+  pcPart         PcPart     @relation(fields: [id], references: [id], onDelete: Cascade)
+  gpuChipsetId   String     @map("gpu_chipset_id") @db.Uuid
+  chipset        GpuChipset @relation(fields: [gpuChipsetId], references: [id])
+  brand          String
+  lengthMm       Int        @map("length_mm")
+  widthSlots     Float?     @map("width_slots")
+  pciePowerPins  String?    @map("pcie_power_pins")
+  displayOutputs String?    @map("display_outputs")
+  hdmiVersion    String?    @map("hdmi_version")
+  dpVersion      String?    @map("dp_version")
 
   @@map("gpus")
 }
@@ -143,53 +219,32 @@ model Motherboard {
   @@map("motherboards")
 }
 
-model Ram {
-  id               String  @id @db.Uuid
-  pcPart           PcPart  @relation(fields: [id], references: [id], onDelete: Cascade)
-  ddrGeneration    String? @map("ddr_generation")
-  speedMhz         Int?    @map("speed_mhz")
-  modules          Int?
-  capacityGb       Int?    @map("capacity_gb")
-  heightMm         Int?    @map("height_mm")
-  moduleCapacityGb Int?    @map("module_capacity_gb")
-  casLatency       Int?    @map("cas_latency")
-  voltage          Float?
-  hasRgb           Boolean @default(false) @map("has_rgb")
-  isEcc            Boolean @default(false) @map("is_ecc")
+model RamKit {
+  id         String   @id @db.Uuid
+  pcPart     PcPart   @relation(fields: [id], references: [id], onDelete: Cascade)
+  ramGroupId String   @map("ram_group_id") @db.Uuid
+  group      RamGroup @relation(fields: [ramGroupId], references: [id])
+  heightMm   Int?     @map("height_mm")
+  hasRgb     Boolean  @default(false) @map("has_rgb")
 
-  @@map("ram")
+  @@map("ram_kits")
 }
 
-model Storage {
-  id             String  @id @db.Uuid
-  pcPart         PcPart  @relation(fields: [id], references: [id], onDelete: Cascade)
-  storageType    String? @map("storage_type")
-  formFactor     String? @map("form_factor")
-  interface      String?
-  capacityGb     Int?    @map("capacity_gb")
-  readSpeedMbps  Int?    @map("read_speed_mbps")
-  writeSpeedMbps Int?    @map("write_speed_mbps")
-  hasDramCache   Boolean @default(false) @map("has_dram_cache")
-  enduranceTbw   Int?    @map("endurance_tbw")
-  rpm            Int?
+model StorageDrive {
+  id             String       @id @db.Uuid
+  pcPart         PcPart       @relation(fields: [id], references: [id], onDelete: Cascade)
+  storageGroupId String       @map("storage_group_id") @db.Uuid
+  group          StorageGroup @relation(fields: [storageGroupId], references: [id])
 
-  @@map("storage")
+  @@map("storage_drives")
 }
 
 model Psu {
-  id                  String  @id @db.Uuid
-  pcPart              PcPart  @relation(fields: [id], references: [id], onDelete: Cascade)
-  wattage             Int?
-  formFactor          String? @map("form_factor")
-  efficiencyRating    String? @map("efficiency_rating")
-  pcie8pinConnectors  Int?    @map("pcie_8pin_connectors")
-  pcie12pinConnectors Int?    @map("pcie_12pin_connectors")
-  pcie16pinConnectors Int?    @map("pcie_16pin_connectors")
-  depthMm             Int?    @map("depth_mm")
-  modular             String?
-  epsConnectors       Int?    @map("eps_connectors")
-  fanSizeMm           Int?    @map("fan_size_mm")
-  isFanless           Boolean @default(false) @map("is_fanless")
+  id         String   @id @db.Uuid
+  pcPart     PcPart   @relation(fields: [id], references: [id], onDelete: Cascade)
+  psuGroupId String   @map("psu_group_id") @db.Uuid
+  group      PsuGroup @relation(fields: [psuGroupId], references: [id])
+  depthMm    Int?     @map("depth_mm")
 
   @@map("psus")
 }

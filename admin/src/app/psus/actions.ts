@@ -11,17 +11,8 @@ export interface PsuFormData {
   yearReleased: number | null;
   isActive: boolean;
   streetPriceUsd: number | null;
-  wattage: number | null;
-  formFactor: string;
-  efficiencyRating: string;
-  pcie8pinConnectors: number | null;
-  pcie12pinConnectors: number | null;
-  pcie16pinConnectors: number | null;
+  psuGroupId: string;
   depthMm: number | null;
-  modular: string;
-  epsConnectors: number | null;
-  fanSizeMm: number | null;
-  isFanless: boolean;
 }
 
 const partData = (d: PsuFormData) => ({
@@ -30,23 +21,17 @@ const partData = (d: PsuFormData) => ({
   streetPriceCents: usdToCents(d.streetPriceUsd),
 });
 
-const specificData = (d: PsuFormData) => ({
-  wattage: d.wattage, formFactor: d.formFactor || null,
-  efficiencyRating: d.efficiencyRating || null, pcie8pinConnectors: d.pcie8pinConnectors,
-  pcie12pinConnectors: d.pcie12pinConnectors, pcie16pinConnectors: d.pcie16pinConnectors,
-  depthMm: d.depthMm, modular: d.modular || null, epsConnectors: d.epsConnectors,
-  fanSizeMm: d.fanSizeMm, isFanless: d.isFanless,
-});
+const specData = (d: PsuFormData) => ({ psuGroupId: d.psuGroupId, depthMm: d.depthMm });
 
 export async function createPsu(data: PsuFormData) {
-  const created = await db.pcPart.create({ data: { ...partData(data), partType: 'psu', psu: { create: specificData(data) } } });
+  await db.pcPart.create({ data: { ...partData(data), partType: 'psu', psu: { create: specData(data) } } });
   revalidatePath('/psus');
 }
 
 export async function updatePsu(id: string, data: PsuFormData) {
   await db.$transaction([
     db.pcPart.update({ where: { id }, data: partData(data) }),
-    db.psu.update({ where: { id }, data: specificData(data) }),
+    db.psu.update({ where: { id }, data: specData(data) }),
   ]);
   revalidatePath('/psus');
 }

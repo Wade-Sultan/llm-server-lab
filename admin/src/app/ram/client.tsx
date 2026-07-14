@@ -6,7 +6,7 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import type { ColumnDef } from '@tanstack/react-table';
-import type { Ram, PcPart, Listing, AmazonListing } from '@prisma/client';
+import type { RamKit, PcPart, Listing, AmazonListing } from '@prisma/client';
 import { Pencil, Trash2 } from 'lucide-react';
 import { DataTable } from '@/components/data-table';
 import { Button } from '@/components/ui/button';
@@ -16,39 +16,36 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ListingsDialog } from '@/components/listings-dialog';
 import { centsToUsd, formatUsd } from '@/lib/utils';
 import { createRam, updateRam, deleteRam, type RamFormData } from './actions';
 
-type RamWithPart = Ram & { pcPart: PcPart & { listings: (Listing & { amazonListing: AmazonListing | null })[] } };
+type RamWithPart = RamKit & {
+  pcPart: PcPart & { listings: (Listing & { amazonListing: AmazonListing | null })[] };
+  group: { name: string };
+};
+type GroupOption = { id: string; name: string };
 
 const schema = z.object({
   name: z.string().min(1), manufacturer: z.string(), modelNumber: z.string(),
   yearReleased: z.coerce.number().int().nullable(), isActive: z.boolean(),
   streetPriceUsd: z.coerce.number().nullable(),
-  ddrGeneration: z.string(), speedMhz: z.coerce.number().int().nullable(),
-  modules: z.coerce.number().int().nullable(), capacityGb: z.coerce.number().int().nullable(),
-  heightMm: z.coerce.number().int().nullable(), moduleCapacityGb: z.coerce.number().int().nullable(),
-  casLatency: z.coerce.number().int().nullable(), voltage: z.coerce.number().nullable(),
-  hasRgb: z.boolean(), isEcc: z.boolean(),
+  ramGroupId: z.string().min(1, 'Group is required'),
+  heightMm: z.coerce.number().int().nullable(), hasRgb: z.boolean(),
 });
 
-function RamForm({ item, onSuccess }: { item: RamWithPart | null; onSuccess: () => void }) {
+function RamForm({ item, groups, onSuccess }: { item: RamWithPart | null; groups: GroupOption[]; onSuccess: () => void }) {
   const form = useForm<RamFormData>({
     resolver: zodResolver(schema),
     defaultValues: item ? {
       name: item.pcPart.name, manufacturer: item.pcPart.manufacturer ?? '',
       modelNumber: item.pcPart.modelNumber ?? '', yearReleased: item.pcPart.yearReleased,
       isActive: item.pcPart.isActive, streetPriceUsd: centsToUsd(item.pcPart.streetPriceCents),
-      ddrGeneration: item.ddrGeneration ?? '',
-      speedMhz: item.speedMhz, modules: item.modules, capacityGb: item.capacityGb,
-      heightMm: item.heightMm, moduleCapacityGb: item.moduleCapacityGb,
-      casLatency: item.casLatency, voltage: item.voltage, hasRgb: item.hasRgb, isEcc: item.isEcc,
+      ramGroupId: item.ramGroupId, heightMm: item.heightMm, hasRgb: item.hasRgb,
     } : {
       name: '', manufacturer: '', modelNumber: '', yearReleased: null, isActive: true,
-      streetPriceUsd: null,
-      ddrGeneration: '', speedMhz: null, modules: null, capacityGb: null, heightMm: null,
-      moduleCapacityGb: null, casLatency: null, voltage: null, hasRgb: false, isEcc: false,
+      streetPriceUsd: null, ramGroupId: '', heightMm: null, hasRgb: false,
     },
   });
 
@@ -67,8 +64,20 @@ function RamForm({ item, onSuccess }: { item: RamWithPart | null; onSuccess: () 
   return (
     <Form {...form}>
       <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+        <FormField control={form.control} name="ramGroupId"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>Group * (spec — DDR, speed, capacity, timings)</FormLabel>
+              <Select value={field.value} onValueChange={field.onChange}>
+                <FormControl><SelectTrigger><SelectValue placeholder="Select a group" /></SelectTrigger></FormControl>
+                <SelectContent>{groups.map((g) => <SelectItem key={g.id} value={g.id}>{g.name}</SelectItem>)}</SelectContent>
+              </Select>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
         <div className="grid grid-cols-2 gap-4">
-          {([ ['name','Name *'], ['manufacturer','Manufacturer'], ['modelNumber','Model Number'], ['ddrGeneration','DDR Generation'] ] as [keyof RamFormData, string][]).map(([name, label]) => (
+          {([ ['name','Product Name *'], ['manufacturer','Manufacturer'], ['modelNumber','Model Number'] ] as [keyof RamFormData, string][]).map(([name, label]) => (
             <FormField key={name} control={form.control} name={name}
               render={({ field }) => (
                 <FormItem><FormLabel>{label}</FormLabel>
@@ -78,14 +87,12 @@ function RamForm({ item, onSuccess }: { item: RamWithPart | null; onSuccess: () 
               )}
             />
           ))}
-          {([ ['yearReleased','Year'], ['speedMhz','Speed (MHz)'], ['modules','Modules'], ['capacityGb','Capacity (GB)'],
-              ['heightMm','Height (mm)'], ['moduleCapacityGb','Module Cap (GB)'], ['casLatency','CAS Latency'], ['voltage','Voltage (V)'],
-          ] as [keyof RamFormData, string][]).map(([name, label]) => (
+          {([ ['yearReleased','Year'], ['heightMm','Height (mm)'] ] as [keyof RamFormData, string][]).map(([name, label]) => (
             <FormField key={name} control={form.control} name={name}
               render={({ field }) => (
                 <FormItem><FormLabel>{label}</FormLabel>
                   <FormControl>
-                    <Input type="number" step="any" value={(field.value as number | null) ?? ''} onChange={numChange(field.onChange)} />
+                    <Input type="number" value={(field.value as number | null) ?? ''} onChange={numChange(field.onChange)} />
                   </FormControl>
                   <FormMessage />
                 </FormItem>
@@ -104,7 +111,7 @@ function RamForm({ item, onSuccess }: { item: RamWithPart | null; onSuccess: () 
           />
         </div>
         <div className="flex gap-6">
-          {([ ['hasRgb','RGB'], ['isEcc','ECC'], ['isActive','Active'] ] as [keyof RamFormData, string][]).map(([name, label]) => (
+          {([ ['hasRgb','RGB'], ['isActive','Active'] ] as [keyof RamFormData, string][]).map(([name, label]) => (
             <FormField key={name} control={form.control} name={name}
               render={({ field }) => (
                 <FormItem className="flex items-center gap-2 space-y-0">
@@ -126,7 +133,7 @@ function RamForm({ item, onSuccess }: { item: RamWithPart | null; onSuccess: () 
   );
 }
 
-export function RamTable({ data }: { data: RamWithPart[] }) {
+export function RamTable({ data, groups }: { data: RamWithPart[]; groups: GroupOption[] }) {
   const router = useRouter();
   const [selected, setSelected] = useState<RamWithPart | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -140,20 +147,14 @@ export function RamTable({ data }: { data: RamWithPart[] }) {
 
   const columns: ColumnDef<RamWithPart>[] = [
     { id: 'name', accessorFn: (r) => r.pcPart.name, header: 'Name', enableSorting: true },
+    { id: 'group', accessorFn: (r) => r.group.name, header: 'Group', enableSorting: true },
     { id: 'manufacturer', accessorFn: (r) => r.pcPart.manufacturer ?? '', header: 'Manufacturer' },
-    { accessorKey: 'ddrGeneration', header: 'DDR', enableSorting: true },
-    { accessorKey: 'speedMhz', header: 'Speed (MHz)', enableSorting: true },
-    { accessorKey: 'capacityGb', header: 'Capacity (GB)', enableSorting: true },
     { id: 'streetPrice', accessorFn: (r) => r.pcPart.streetPriceCents, header: 'Street Price',
       cell: ({ getValue }) => formatUsd(getValue<number | null>()), enableSorting: true },
     {
       id: 'listings', header: 'Listings',
       cell: ({ row }) => (
-        <ListingsDialog
-          partId={row.original.pcPart.id}
-          partName={row.original.pcPart.name}
-          listings={row.original.pcPart.listings}
-        />
+        <ListingsDialog partId={row.original.pcPart.id} partName={row.original.pcPart.name} listings={row.original.pcPart.listings} />
       ),
     },
     { id: 'isActive', accessorFn: (r) => r.pcPart.isActive, header: 'Active',
@@ -169,14 +170,15 @@ export function RamTable({ data }: { data: RamWithPart[] }) {
   return (
     <div className="p-6 space-y-6">
       <div className="flex items-center justify-between">
-        <div><h1 className="text-2xl font-bold">RAM</h1><p className="text-muted-foreground text-sm mt-1">{data.length} total</p></div>
-        <Button onClick={() => { setSelected(null); setDialogOpen(true); }}>New RAM</Button>
+        <div><h1 className="text-2xl font-bold">RAM</h1><p className="text-muted-foreground text-sm mt-1">{data.length} kits</p></div>
+        <Button onClick={() => { setSelected(null); setDialogOpen(true); }} disabled={groups.length === 0}>New RAM</Button>
       </div>
+      {groups.length === 0 && <p className="text-sm text-muted-foreground">Create a RAM Group first — every kit belongs to one.</p>}
       <DataTable columns={columns} data={data} filterPlaceholder="Filter RAM..." />
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent className="max-w-2xl">
           <DialogHeader><DialogTitle>{selected ? 'Edit RAM' : 'New RAM'}</DialogTitle></DialogHeader>
-          <RamForm item={selected} onSuccess={handleSuccess} />
+          <RamForm item={selected} groups={groups} onSuccess={handleSuccess} />
         </DialogContent>
       </Dialog>
       <AlertDialog open={!!deleteId} onOpenChange={(open) => !open && setDeleteId(null)}>

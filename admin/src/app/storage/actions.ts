@@ -11,15 +11,7 @@ export interface StorageFormData {
   yearReleased: number | null;
   isActive: boolean;
   streetPriceUsd: number | null;
-  storageType: string;
-  formFactor: string;
-  interface: string;
-  capacityGb: number | null;
-  readSpeedMbps: number | null;
-  writeSpeedMbps: number | null;
-  hasDramCache: boolean;
-  enduranceTbw: number | null;
-  rpm: number | null;
+  storageGroupId: string;
 }
 
 const partData = (d: StorageFormData) => ({
@@ -28,22 +20,17 @@ const partData = (d: StorageFormData) => ({
   streetPriceCents: usdToCents(d.streetPriceUsd),
 });
 
-const specificData = (d: StorageFormData) => ({
-  storageType: d.storageType || null, formFactor: d.formFactor || null,
-  interface: d.interface || null, capacityGb: d.capacityGb, readSpeedMbps: d.readSpeedMbps,
-  writeSpeedMbps: d.writeSpeedMbps, hasDramCache: d.hasDramCache,
-  enduranceTbw: d.enduranceTbw, rpm: d.rpm,
-});
-
 export async function createStorage(data: StorageFormData) {
-  const created = await db.pcPart.create({ data: { ...partData(data), partType: 'storage', storage: { create: specificData(data) } } });
+  await db.pcPart.create({
+    data: { ...partData(data), partType: 'storagedrive', storageDrive: { create: { storageGroupId: data.storageGroupId } } },
+  });
   revalidatePath('/storage');
 }
 
 export async function updateStorage(id: string, data: StorageFormData) {
   await db.$transaction([
     db.pcPart.update({ where: { id }, data: partData(data) }),
-    db.storage.update({ where: { id }, data: specificData(data) }),
+    db.storageDrive.update({ where: { id }, data: { storageGroupId: data.storageGroupId } }),
   ]);
   revalidatePath('/storage');
 }
