@@ -2,9 +2,11 @@
 
 import { revalidatePath } from 'next/cache';
 import { db } from '@/lib/prisma';
+import { usdToCents } from '@/lib/utils';
 
 export interface RamGroupFormData {
   name: string;
+  streetPriceUsd: number | null;
   ddrGeneration: string;
   speedMhz: number | null;
   capacityGb: number | null;
@@ -18,6 +20,7 @@ export interface RamGroupFormData {
 function toData(d: RamGroupFormData) {
   return {
     name: d.name,
+    streetPriceCents: usdToCents(d.streetPriceUsd),
     ddrGeneration: d.ddrGeneration,
     speedMhz: d.speedMhz ?? 0,
     capacityGb: d.capacityGb ?? 0,

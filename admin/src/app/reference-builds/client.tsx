@@ -20,9 +20,22 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { createReferenceBuild, updateReferenceBuild, deleteReferenceBuild, type ReferenceBuildFormData } from './actions';
 
-type PartOption = { id: string; name: string; partType: string; streetPriceCents: number | null };
-type BuildPart = { partId: string; part: PartOption };
-type BuildWithParts = ReferenceBuild & { parts: BuildPart[] };
+// A selectable option — a specific part (non-grouped) or a group (grouped).
+type Option = { id: string; name: string; streetPriceCents: number | null };
+type PartOption = Option & { partType: string };
+
+type BuildPartRow = {
+  partId: string;
+  component: string;
+  part: {
+    id: string; name: string; partType: string;
+    gpu: { gpuChipsetId: string } | null;
+    ramKit: { ramGroupId: string } | null;
+    storageDrive: { storageGroupId: string } | null;
+    psu: { psuGroupId: string } | null;
+  };
+};
+type BuildWithParts = ReferenceBuild & { parts: BuildPartRow[] };
 
 const RESOLUTIONS = [1080, 1440, 2160] as const;
 
@@ -34,13 +47,13 @@ const schema = z.object({
   maxResolution: z.number().nullable(),
   cpuId: z.string().nullable(),
   motherboardId: z.string().nullable(),
-  ramId: z.string().nullable(),
-  psuId: z.string().nullable(),
   caseId: z.string().nullable(),
   cpuCoolerId: z.string().nullable(),
-  gpuIds: z.array(z.string()),
-  storageIds: z.array(z.string()),
   fanIds: z.array(z.string()),
+  ramGroupId: z.string().nullable(),
+  psuGroupId: z.string().nullable(),
+  gpuChipsetIds: z.array(z.string()),
+  storageGroupIds: z.array(z.string()),
 });
 
 function fmtPrice(cents: number | null) {
@@ -52,38 +65,36 @@ function buildDefaults(item: BuildWithParts | null): ReferenceBuildFormData {
   if (!item) {
     return {
       buildKey: '', label: '', description: '', isActive: true, maxResolution: null,
-      cpuId: null, motherboardId: null, ramId: null, psuId: null,
-      caseId: null, cpuCoolerId: null, gpuIds: [], storageIds: [], fanIds: [],
+      cpuId: null, motherboardId: null, caseId: null, cpuCoolerId: null, fanIds: [],
+      ramGroupId: null, psuGroupId: null, gpuChipsetIds: [], storageGroupIds: [],
     };
   }
-  const single = (type: string) => item.parts.find(p => p.part.partType === type)?.partId ?? null;
-  const multi = (type: string) => item.parts.filter(p => p.part.partType === type).map(p => p.partId);
+  const partOf = (comp: string) => item.parts.find(p => p.component === comp)?.partId ?? null;
+  const partsOf = (comp: string) => item.parts.filter(p => p.component === comp);
   return {
     buildKey: item.buildKey,
     label: item.label,
     description: item.description ?? '',
     isActive: item.isActive,
     maxResolution: item.maxResolution ?? null,
-    cpuId: single('cpu'),
-    motherboardId: single('motherboard'),
-    ramId: single('ram'),
-    psuId: single('psu'),
-    caseId: single('case'),
-    cpuCoolerId: single('cpucooler'),
-    gpuIds: multi('gpu'),
-    storageIds: multi('storage'),
-    fanIds: multi('fan'),
+    cpuId: partOf('cpu'),
+    motherboardId: partOf('motherboard'),
+    caseId: partOf('case'),
+    cpuCoolerId: partOf('cpucooler'),
+    fanIds: partsOf('fan').map(p => p.partId),
+    // Grouped slots pre-select the group the frozen member belongs to.
+    ramGroupId: partsOf('ram')[0]?.part.ramKit?.ramGroupId ?? null,
+    psuGroupId: partsOf('psu')[0]?.part.psu?.psuGroupId ?? null,
+    gpuChipsetIds: partsOf('gpu').map(p => p.part.gpu?.gpuChipsetId).filter((x): x is string => !!x),
+    storageGroupIds: partsOf('storage').map(p => p.part.storageDrive?.storageGroupId).filter((x): x is string => !!x),
   };
 }
 
-function PartSelect({
-  label,
-  options,
-  value,
-  onChange,
+function OptionSelect({
+  label, options, value, onChange,
 }: {
   label: string;
-  options: PartOption[];
+  options: Option[];
   value: string | null;
   onChange: (v: string | null) => void;
 }) {
@@ -97,9 +108,7 @@ function PartSelect({
         <SelectContent>
           <SelectItem value="__none">— None —</SelectItem>
           {options.map(p => (
-            <SelectItem key={p.id} value={p.id}>
-              {p.name}{fmtPrice(p.streetPriceCents)}
-            </SelectItem>
+            <SelectItem key={p.id} value={p.id}>{p.name}{fmtPrice(p.streetPriceCents)}</SelectItem>
           ))}
         </SelectContent>
       </Select>
@@ -107,19 +116,15 @@ function PartSelect({
   );
 }
 
-function MultiPartSelect({
-  label,
-  options,
-  selected,
-  onChange,
+function MultiOptionSelect({
+  label, options, selected, onChange,
 }: {
   label: string;
-  options: PartOption[];
+  options: Option[];
   selected: string[];
   onChange: (v: string[]) => void;
 }) {
-  const setAt = (i: number, id: string) =>
-    onChange(selected.map((s, idx) => (idx === i ? id : s)));
+  const setAt = (i: number, id: string) => onChange(selected.map((s, idx) => (idx === i ? id : s)));
   const addSlot = () => onChange([...selected, options[0]?.id ?? '']);
   const removeSlot = (i: number) => onChange(selected.filter((_, idx) => idx !== i));
 
@@ -127,12 +132,10 @@ function MultiPartSelect({
     <div className="space-y-1">
       <p className="text-sm font-medium">{label}</p>
       {options.length === 0 ? (
-        <p className="text-xs text-muted-foreground">No eligible parts</p>
+        <p className="text-xs text-muted-foreground">No eligible options</p>
       ) : (
         <div className="space-y-2">
-          {selected.length === 0 && (
-            <p className="text-xs text-muted-foreground">None selected</p>
-          )}
+          {selected.length === 0 && <p className="text-xs text-muted-foreground">None selected</p>}
           {selected.map((id, i) => (
             <div key={i} className="flex items-center gap-2">
               <Select value={id} onValueChange={v => setAt(i, v)}>
@@ -141,9 +144,7 @@ function MultiPartSelect({
                 </SelectTrigger>
                 <SelectContent>
                   {options.map(p => (
-                    <SelectItem key={p.id} value={p.id}>
-                      {p.name}{fmtPrice(p.streetPriceCents)}
-                    </SelectItem>
+                    <SelectItem key={p.id} value={p.id}>{p.name}{fmtPrice(p.streetPriceCents)}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
@@ -161,13 +162,14 @@ function MultiPartSelect({
   );
 }
 
+type Groups = { gpuChipsets: Option[]; ramGroups: Option[]; storageGroups: Option[]; psuGroups: Option[] };
+
 function BuildForm({
-  item,
-  partOptions,
-  onSuccess,
+  item, partOptions, groups, onSuccess,
 }: {
   item: BuildWithParts | null;
   partOptions: PartOption[];
+  groups: Groups;
   onSuccess: () => void;
 }) {
   const byType = (type: string) => partOptions.filter(p => p.partType === type);
@@ -182,11 +184,7 @@ function BuildForm({
   async function onSubmit(data: ReferenceBuildFormData) {
     setError(null);
     try {
-      if (item) {
-        await updateReferenceBuild(item.id, data);
-      } else {
-        await createReferenceBuild(data);
-      }
+      if (item) { await updateReferenceBuild(item.id, data); } else { await createReferenceBuild(data); }
       onSuccess();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'An error occurred');
@@ -232,16 +230,10 @@ function BuildForm({
                 value={field.value == null ? '__none' : String(field.value)}
                 onValueChange={v => field.onChange(v === '__none' ? null : Number(v))}
               >
-                <FormControl>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select max resolution…" />
-                  </SelectTrigger>
-                </FormControl>
+                <FormControl><SelectTrigger><SelectValue placeholder="Select max resolution…" /></SelectTrigger></FormControl>
                 <SelectContent>
                   <SelectItem value="__none">— None —</SelectItem>
-                  {RESOLUTIONS.map(r => (
-                    <SelectItem key={r} value={String(r)}>{r}p</SelectItem>
-                  ))}
+                  {RESOLUTIONS.map(r => <SelectItem key={r} value={String(r)}>{r}p</SelectItem>)}
                 </SelectContent>
               </Select>
               <FormMessage />
@@ -260,81 +252,58 @@ function BuildForm({
 
         <div className="border-t pt-4 space-y-4">
           <p className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">Parts</p>
+          <p className="text-xs text-muted-foreground -mt-2">
+            GPU / RAM / Storage / PSU pick a <strong>group</strong>; a random member is frozen in on save.
+            Re-save to re-roll.
+          </p>
 
           <div className="grid grid-cols-2 gap-4">
             <FormField control={form.control} name="cpuId"
               render={({ field }) => (
-                <FormItem>
-                  <PartSelect label="CPU" options={byType('cpu')} value={field.value} onChange={field.onChange} />
-                  <FormMessage />
-                </FormItem>
+                <FormItem><OptionSelect label="CPU" options={byType('cpu')} value={field.value} onChange={field.onChange} /><FormMessage /></FormItem>
               )}
             />
             <FormField control={form.control} name="motherboardId"
               render={({ field }) => (
-                <FormItem>
-                  <PartSelect label="Motherboard" options={byType('motherboard')} value={field.value} onChange={field.onChange} />
-                  <FormMessage />
-                </FormItem>
+                <FormItem><OptionSelect label="Motherboard" options={byType('motherboard')} value={field.value} onChange={field.onChange} /><FormMessage /></FormItem>
               )}
             />
-            <FormField control={form.control} name="ramId"
+            <FormField control={form.control} name="ramGroupId"
               render={({ field }) => (
-                <FormItem>
-                  <PartSelect label="RAM" options={byType('ram')} value={field.value} onChange={field.onChange} />
-                  <FormMessage />
-                </FormItem>
+                <FormItem><OptionSelect label="RAM Group" options={groups.ramGroups} value={field.value} onChange={field.onChange} /><FormMessage /></FormItem>
               )}
             />
-            <FormField control={form.control} name="psuId"
+            <FormField control={form.control} name="psuGroupId"
               render={({ field }) => (
-                <FormItem>
-                  <PartSelect label="PSU" options={byType('psu')} value={field.value} onChange={field.onChange} />
-                  <FormMessage />
-                </FormItem>
+                <FormItem><OptionSelect label="PSU Group" options={groups.psuGroups} value={field.value} onChange={field.onChange} /><FormMessage /></FormItem>
               )}
             />
             <FormField control={form.control} name="caseId"
               render={({ field }) => (
-                <FormItem>
-                  <PartSelect label="Case" options={byType('case')} value={field.value} onChange={field.onChange} />
-                  <FormMessage />
-                </FormItem>
+                <FormItem><OptionSelect label="Case" options={byType('case')} value={field.value} onChange={field.onChange} /><FormMessage /></FormItem>
               )}
             />
             <FormField control={form.control} name="cpuCoolerId"
               render={({ field }) => (
-                <FormItem>
-                  <PartSelect label="CPU Cooler" options={byType('cpucooler')} value={field.value} onChange={field.onChange} />
-                  <FormMessage />
-                </FormItem>
+                <FormItem><OptionSelect label="CPU Cooler" options={byType('cpucooler')} value={field.value} onChange={field.onChange} /><FormMessage /></FormItem>
               )}
             />
           </div>
 
           <div className="grid grid-cols-2 gap-4">
-            <FormField control={form.control} name="gpuIds"
+            <FormField control={form.control} name="gpuChipsetIds"
               render={({ field }) => (
-                <FormItem>
-                  <MultiPartSelect label="GPU" options={byType('gpu')} selected={field.value} onChange={field.onChange} />
-                  <FormMessage />
-                </FormItem>
+                <FormItem><MultiOptionSelect label="GPU Chipset" options={groups.gpuChipsets} selected={field.value} onChange={field.onChange} /><FormMessage /></FormItem>
               )}
             />
-            <FormField control={form.control} name="storageIds"
+            <FormField control={form.control} name="storageGroupIds"
               render={({ field }) => (
-                <FormItem>
-                  <MultiPartSelect label="Storage" options={byType('storage')} selected={field.value} onChange={field.onChange} />
-                  <FormMessage />
-                </FormItem>
+                <FormItem><MultiOptionSelect label="Storage Group" options={groups.storageGroups} selected={field.value} onChange={field.onChange} /><FormMessage /></FormItem>
               )}
             />
             <FormField control={form.control} name="fanIds"
               render={({ field }) => (
-                <FormItem>
-                  <MultiPartSelect label="Fan" options={byType('fan')} selected={field.value} onChange={field.onChange} />
-                  <FormMessage />
-                </FormItem>
+                <FormItem><MultiOptionSelect label="Fan" options={byType('fan')} selected={field.value} onChange={field.onChange} /><FormMessage /></FormItem>
               )}
             />
           </div>
@@ -352,11 +321,14 @@ function BuildForm({
 }
 
 export function ReferenceBuildTable({
-  builds,
-  partOptions,
+  builds, partOptions, gpuChipsets, ramGroups, storageGroups, psuGroups,
 }: {
   builds: BuildWithParts[];
   partOptions: PartOption[];
+  gpuChipsets: Option[];
+  ramGroups: Option[];
+  storageGroups: Option[];
+  psuGroups: Option[];
 }) {
   const router = useRouter();
   const [selected, setSelected] = useState<BuildWithParts | null>(null);
@@ -364,6 +336,7 @@ export function ReferenceBuildTable({
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [, startTransition] = useTransition();
 
+  const groups: Groups = { gpuChipsets, ramGroups, storageGroups, psuGroups };
   const handleSuccess = () => { setDialogOpen(false); router.refresh(); };
   const handleDelete = (id: string) => {
     startTransition(async () => { await deleteReferenceBuild(id); setDeleteId(null); router.refresh(); });
@@ -373,17 +346,16 @@ export function ReferenceBuildTable({
     { accessorKey: 'buildKey', header: 'Build Key', enableSorting: true },
     { accessorKey: 'label', header: 'Label', enableSorting: true },
     {
-      id: 'parts',
-      header: 'Parts',
+      id: 'parts', header: 'Parts',
       cell: ({ row }) => {
         const parts = row.original.parts;
         if (!parts.length) return <span className="text-muted-foreground text-xs">None</span>;
-        const byType = (t: string) => parts.filter(p => p.part.partType === t);
+        const byRole = (r: string) => parts.filter(p => p.component === r);
         const tags = [
-          byType('cpu')[0]?.part.name,
-          byType('gpu').length > 1 ? `${byType('gpu').length}× GPU` : byType('gpu')[0]?.part.name,
-          byType('ram')[0]?.part.name,
-          byType('storage').length > 1 ? `${byType('storage').length}× Storage` : byType('storage')[0]?.part.name,
+          byRole('cpu')[0]?.part.name,
+          byRole('gpu').length > 1 ? `${byRole('gpu').length}× GPU` : byRole('gpu')[0]?.part.name,
+          byRole('ram')[0]?.part.name,
+          byRole('storage').length > 1 ? `${byRole('storage').length}× Storage` : byRole('storage')[0]?.part.name,
         ].filter(Boolean);
         return <span className="text-xs text-muted-foreground">{tags.join(', ') || `${parts.length} parts`}</span>;
       },
@@ -419,7 +391,7 @@ export function ReferenceBuildTable({
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader><DialogTitle>{selected ? 'Edit Reference Build' : 'New Reference Build'}</DialogTitle></DialogHeader>
-          <BuildForm item={selected} partOptions={partOptions} onSuccess={handleSuccess} />
+          <BuildForm item={selected} partOptions={partOptions} groups={groups} onSuccess={handleSuccess} />
         </DialogContent>
       </Dialog>
       <AlertDialog open={!!deleteId} onOpenChange={(open) => !open && setDeleteId(null)}>

@@ -2,10 +2,11 @@
 
 import { revalidatePath } from 'next/cache';
 import { db } from '@/lib/prisma';
-import { splitCommaList } from '@/lib/utils';
+import { splitCommaList, usdToCents } from '@/lib/utils';
 
 export interface GpuChipsetFormData {
   name: string;
+  streetPriceUsd: number | null;
   vramGb: number | null;
   vramType: string;
   tdpWatts: number | null;
@@ -25,6 +26,7 @@ export interface GpuChipsetFormData {
 function toData(d: GpuChipsetFormData) {
   return {
     name: d.name,
+    streetPriceCents: usdToCents(d.streetPriceUsd),
     vramGb: d.vramGb ?? 0,
     vramType: d.vramType || null,
     tdpWatts: d.tdpWatts ?? 0,

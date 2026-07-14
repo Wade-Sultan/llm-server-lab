@@ -29,9 +29,8 @@ class GPUSelection(dspy.Signature):
     budget_total: int = dspy.InputField(desc="Total build budget in USD")
     gpu_budget_ceiling: int = dspy.InputField(desc="Maximum to spend on GPU in USD")
     candidates: str = dspy.InputField(
-        desc="JSON list of GPU chipsets with the cheapest available board price per "
-             "chipset. Fields: chipset, brand, vram_gb, tdp_w, starting_price_usd, "
-             "used_market_viable"
+        desc="JSON list of GPU chipsets with the chipset's street price. Fields: "
+             "chipset, brand, vram_gb, tdp_w, street_price_usd, used_market_viable"
     )
 
     gpu_chipset: str = dspy.OutputField(

@@ -22,9 +22,9 @@ class StorageSelection(dspy.Signature):
     use_cases: str = dspy.InputField(desc="User's use cases and preferences summary")
     budget_ceiling: int = dspy.InputField(desc="Maximum to spend on storage in USD")
     candidates: str = dspy.InputField(
-        desc="JSON list of storage groups with the cheapest drive price per group. "
-             "Fields: storage_group, type, interface, capacity_gb, seq_read_mbs, "
-             "seq_write_mbs, starting_price_usd"
+        desc="JSON list of storage groups with the group's street price. Fields: "
+             "storage_group, type, interface, capacity_gb, seq_read_mbs, "
+             "seq_write_mbs, street_price_usd"
     )
 
     storage_group: str = dspy.OutputField(desc="Exact storage_group label of the chosen spec, matching a candidate")

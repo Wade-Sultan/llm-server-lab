@@ -2,7 +2,6 @@
 
 import { revalidatePath } from 'next/cache';
 import { db } from '@/lib/prisma';
-import { usdToCents } from '@/lib/utils';
 
 export interface PsuFormData {
   name: string;
@@ -10,7 +9,6 @@ export interface PsuFormData {
   modelNumber: string;
   yearReleased: number | null;
   isActive: boolean;
-  streetPriceUsd: number | null;
   psuGroupId: string;
   depthMm: number | null;
 }
@@ -18,7 +16,6 @@ export interface PsuFormData {
 const partData = (d: PsuFormData) => ({
   name: d.name, manufacturer: d.manufacturer || null,
   modelNumber: d.modelNumber || null, yearReleased: d.yearReleased, isActive: d.isActive,
-  streetPriceCents: usdToCents(d.streetPriceUsd),
 });
 
 const specData = (d: PsuFormData) => ({ psuGroupId: d.psuGroupId, depthMm: d.depthMm });

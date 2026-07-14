@@ -2,9 +2,11 @@
 
 import { revalidatePath } from 'next/cache';
 import { db } from '@/lib/prisma';
+import { usdToCents } from '@/lib/utils';
 
 export interface StorageGroupFormData {
   name: string;
+  streetPriceUsd: number | null;
   storageType: string;
   formFactor: string;
   interface: string;
@@ -19,6 +21,7 @@ export interface StorageGroupFormData {
 function toData(d: StorageGroupFormData) {
   return {
     name: d.name,
+    streetPriceCents: usdToCents(d.streetPriceUsd),
     storageType: d.storageType,
     formFactor: d.formFactor,
     interface: d.interface,

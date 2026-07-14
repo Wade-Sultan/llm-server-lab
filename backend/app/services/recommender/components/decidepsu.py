@@ -19,8 +19,8 @@ class PSUSelection(dspy.Signature):
     required_wattage: int = dspy.InputField(desc="Minimum wattage required by the system in watts")
     budget_ceiling: int = dspy.InputField(desc="Maximum to spend on PSU in USD")
     candidates: str = dspy.InputField(
-        desc="JSON list of PSU groups with the cheapest unit price per group. Fields: "
-             "psu_group, wattage, efficiency, form_factor, modular, starting_price_usd"
+        desc="JSON list of PSU groups with the group's street price. Fields: "
+             "psu_group, wattage, efficiency, form_factor, modular, street_price_usd"
     )
 
     psu_group: str = dspy.OutputField(desc="Exact psu_group label of the chosen spec, matching a candidate")

@@ -2,7 +2,6 @@
 
 import { revalidatePath } from 'next/cache';
 import { db } from '@/lib/prisma';
-import { usdToCents } from '@/lib/utils';
 
 export interface GpuFormData {
   name: string;
@@ -10,7 +9,6 @@ export interface GpuFormData {
   modelNumber: string;
   yearReleased: number | null;
   isActive: boolean;
-  streetPriceUsd: number | null;
   gpuChipsetId: string;
   brand: string;
   lengthMm: number | null;
@@ -28,7 +26,6 @@ function partData(d: GpuFormData) {
     modelNumber: d.modelNumber || null,
     yearReleased: d.yearReleased,
     isActive: d.isActive,
-    streetPriceCents: usdToCents(d.streetPriceUsd),
   };
 }
 

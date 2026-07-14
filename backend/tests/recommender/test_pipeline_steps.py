@@ -41,11 +41,11 @@ def _state(**overrides) -> dp.DSPyBuildState:
     return state
 
 
-def _chipset(*, name="RTX 5080", tdp=300, rec_psu=None, vram=16, has_rt=True):
-    # Stands in for a GPUChipset (group) row.
+def _chipset(*, name="RTX 5080", tdp=300, rec_psu=None, vram=16, has_rt=True, price=120000):
+    # Stands in for a GPUChipset (group) row — street price lives here now.
     return SimpleNamespace(
         id=name, name=name, tdp_watts=tdp, recommended_psu_watts=rec_psu,
-        vram_gb=vram, has_ray_tracing=has_rt,
+        vram_gb=vram, has_ray_tracing=has_rt, street_price_cents=price,
     )
 
 
@@ -90,22 +90,23 @@ def _patch_run_step(monkeypatch, prediction, capture: dict | None = None):
 # _cheapest_exact
 # ---------------------------------------------------------------------------
 
-def test_cheapest_exact_picks_lowest_price():
+def test_pick_exact_returns_first():
+    # Price now lives on the group, so members are priced identically — the
+    # resolver just returns the first active member.
     exacts = [_exact("a", 9000), _exact("b", 8000), _exact("c", 12000)]
-    assert dp._cheapest_exact(exacts).name == "b"
+    assert dp._pick_exact(exacts).name == "a"
 
 
-def test_cheapest_exact_none_priced_last_and_empty():
-    assert dp._cheapest_exact([]) is None
-    exacts = [_exact("priced", 5000), _exact("unpriced", None)]
-    assert dp._cheapest_exact(exacts).name == "priced"
+def test_pick_exact_empty_returns_none():
+    assert dp._pick_exact([]) is None
 
 
 # ---------------------------------------------------------------------------
 # _resolve_gpu_variant — chipset → exact board
 # ---------------------------------------------------------------------------
 
-def test_resolve_gpu_variant_picks_cheapest_that_fits(monkeypatch):
+def test_resolve_gpu_variant_picks_first_that_fits(monkeypatch):
+    # Price is uniform across a chipset's boards, so resolution is first-that-fits.
     chip = _chipset(rec_psu=700)
     variants = [
         _gpu("MSI 5080", 120000, chipset=chip, length_mm=320),
@@ -120,8 +121,8 @@ def test_resolve_gpu_variant_picks_cheapest_that_fits(monkeypatch):
                    psu_name="psu", case_max_gpu_length_mm=360)
     asyncio.run(dp._resolve_gpu_variant(state, object()))
 
-    assert state.gpu_name == "Gigabyte 5080"   # cheapest of the three that fit
-    assert state.gpu_tdp_w == 300              # chipset TDP pinned
+    assert state.gpu_name == "MSI 5080"   # first board that fits
+    assert state.gpu_tdp_w == 300         # chipset TDP pinned
 
 
 def test_resolve_gpu_variant_excludes_too_long(monkeypatch):
@@ -157,7 +158,7 @@ def test_resolve_gpu_variant_underpowered_chipset_falls_back(monkeypatch):
                    psu_name="psu", case_max_gpu_length_mm=360)
     asyncio.run(dp._resolve_gpu_variant(state, object()))
 
-    assert state.gpu_name == "B"   # cheapest overall
+    assert state.gpu_name == "A"   # none fit → first variant
 
 
 def test_resolve_gpu_variant_skips_when_not_required(monkeypatch):
@@ -229,7 +230,7 @@ def test_step_gpu_not_required_leaves_chipset_empty(monkeypatch):
 # RAM / Storage / PSU — pick a group, resolve the cheapest exact
 # ---------------------------------------------------------------------------
 
-def test_step_ram_picks_group_and_resolves_cheapest_kit(monkeypatch):
+def test_step_ram_picks_group_and_resolves_first_kit(monkeypatch):
     monkeypatch.setattr(dp, "get_ram_candidates", _async_return('[{"ram_group": "G"}]'))
     _patch_run_step(monkeypatch, SimpleNamespace(
         ram_group="DDR5-6000 32GB (2x16)", reconsideration_threshold="t"))
@@ -241,10 +242,10 @@ def test_step_ram_picks_group_and_resolves_cheapest_kit(monkeypatch):
     asyncio.run(dp._step_ram(state, object(), BUDGET, object(), None))
 
     assert state.ram_group == "DDR5-6000 32GB (2x16)"
-    assert state.ram_name == "G.Skill kit"   # cheapest kit in the group
+    assert state.ram_name == "Corsair kit"   # first member (price is on the group)
 
 
-def test_step_storage_picks_group_and_resolves_cheapest_drive(monkeypatch):
+def test_step_storage_picks_group_and_resolves_first_drive(monkeypatch):
     monkeypatch.setattr(dp, "get_storage_candidates", _async_return('[{"storage_group": "G"}]'))
     _patch_run_step(monkeypatch, SimpleNamespace(
         storage_group="2000GB pcie_gen4 nvme", reconsideration_threshold="t"))
@@ -256,10 +257,10 @@ def test_step_storage_picks_group_and_resolves_cheapest_drive(monkeypatch):
     asyncio.run(dp._step_storage(state, object(), BUDGET, object(), None))
 
     assert state.storage_group == "2000GB pcie_gen4 nvme"
-    assert state.storage_name == "Crucial T500"
+    assert state.storage_name == "WD SN850X"
 
 
-def test_step_psu_picks_group_and_resolves_cheapest_unit(monkeypatch):
+def test_step_psu_picks_group_and_resolves_first_unit(monkeypatch):
     monkeypatch.setattr(dp, "get_psu_candidates", _async_return('[{"psu_group": "G"}]'))
     _patch_run_step(monkeypatch, SimpleNamespace(psu_group="850W 80plus_gold atx", reason="r"))
     monkeypatch.setattr(dp.crud_components, "get_psus_for_group", _async_return([
@@ -270,7 +271,7 @@ def test_step_psu_picks_group_and_resolves_cheapest_unit(monkeypatch):
     asyncio.run(dp._step_psu(state, object(), BUDGET, object(), None))
 
     assert state.psu_group == "850W 80plus_gold atx"
-    assert state.psu_name == "MSI MAG A850"
+    assert state.psu_name == "Corsair RM850x"
 
 
 # ---------------------------------------------------------------------------
@@ -278,8 +279,8 @@ def test_step_psu_picks_group_and_resolves_cheapest_unit(monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_gpu_chipset_candidates_aggregates_one_row_per_chipset(monkeypatch):
-    chip_5080 = _chipset(name="RTX 5080", tdp=300, vram=16)
-    chip_5070 = _chipset(name="RTX 5070", tdp=220, vram=12)
+    chip_5080 = _chipset(name="RTX 5080", tdp=300, vram=16, price=105000)
+    chip_5070 = _chipset(name="RTX 5070", tdp=220, vram=12, price=70000)
     rows_in = [
         _gpu("MSI 5080", 120000, chipset=chip_5080, used_market_viable=False),
         _gpu("Gigabyte 5080", 105000, chipset=chip_5080, used_market_viable=True),
@@ -293,7 +294,7 @@ def test_gpu_chipset_candidates_aggregates_one_row_per_chipset(monkeypatch):
     by = {r["chipset"]: r for r in out}
 
     assert set(by) == {"RTX 5080", "RTX 5070"}
-    assert by["RTX 5080"]["starting_price_usd"] == 1050.0   # cheapest board
+    assert by["RTX 5080"]["street_price_usd"] == 1050.0    # from the chipset (group)
     assert by["RTX 5080"]["vram_gb"] == 16
     assert by["RTX 5080"]["brand"] == "nvidia"              # from a representative exact
     assert by["RTX 5080"]["used_market_viable"] is True     # OR-ed across boards
@@ -302,7 +303,8 @@ def test_gpu_chipset_candidates_aggregates_one_row_per_chipset(monkeypatch):
 
 def test_ram_candidates_aggregates_one_row_per_group(monkeypatch):
     g = _group(id="g1", name="DDR5-6000 32GB (2x16)", ddr_generation="ddr5",
-               capacity_gb=32, speed_mhz=6000, modules=2, cas_latency=30)
+               capacity_gb=32, speed_mhz=6000, modules=2, cas_latency=30,
+               street_price_cents=8000)
     rows_in = [_exact("Corsair", 9000, g), _exact("G.Skill", 8000, g)]
     monkeypatch.setattr(q.crud, "get_ram_candidates", _async_return(rows_in))
 
@@ -311,7 +313,7 @@ def test_ram_candidates_aggregates_one_row_per_group(monkeypatch):
     assert len(out) == 1
     assert out[0]["ram_group"] == "DDR5-6000 32GB (2x16)"
     assert out[0]["capacity_gb"] == 32
-    assert out[0]["starting_price_usd"] == 80.0   # cheapest kit
+    assert out[0]["street_price_usd"] == 80.0   # from the group
 
 
 # ---------------------------------------------------------------------------

@@ -19,11 +19,12 @@ import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Checkbox } from '@/components/ui/checkbox';
-import { joinCommaList } from '@/lib/utils';
+import { joinCommaList, centsToUsd, formatUsd } from '@/lib/utils';
 import { createGpuChipset, updateGpuChipset, deleteGpuChipset, type GpuChipsetFormData } from './actions';
 
 const schema = z.object({
   name: z.string().min(1, 'Name is required'),
+  streetPriceUsd: z.coerce.number().nullable(),
   vramGb: z.coerce.number().int().nullable(),
   vramType: z.string(),
   tdpWatts: z.coerce.number().int().nullable(),
@@ -45,6 +46,7 @@ function ChipsetForm({ item, onSuccess }: { item: GpuChipset | null; onSuccess: 
     resolver: zodResolver(schema),
     defaultValues: item ? {
       name: item.name,
+      streetPriceUsd: centsToUsd(item.streetPriceCents),
       vramGb: item.vramGb,
       vramType: item.vramType ?? '',
       tdpWatts: item.tdpWatts,
@@ -60,7 +62,7 @@ function ChipsetForm({ item, onSuccess }: { item: GpuChipset | null; onSuccess: 
       supportedFeaturesInput: joinCommaList(item.supportedFeatures),
       benchmarkScoresInput: item.benchmarkScores ? JSON.stringify(item.benchmarkScores, null, 2) : '',
     } : {
-      name: '', vramGb: null, vramType: '', tdpWatts: null, recommendedPsuWatts: null,
+      name: '', streetPriceUsd: null, vramGb: null, vramType: '', tdpWatts: null, recommendedPsuWatts: null,
       pcieGeneration: null, baseClockMhz: null, boostClockMhz: null, hasRayTracing: false,
       cudaCores: null, tensorCores: null, streamProcessors: null, matrixCores: null,
       supportedFeaturesInput: '', benchmarkScoresInput: '',
@@ -120,6 +122,17 @@ function ChipsetForm({ item, onSuccess }: { item: GpuChipset | null; onSuccess: 
               )}
             />
           ))}
+          <FormField control={form.control} name="streetPriceUsd"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Street Price (USD)</FormLabel>
+                <FormControl>
+                  <Input {...numField(field as { value: number | null; onChange: (v: number | null) => void })} step="0.01" />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
         </div>
         <FormField control={form.control} name="supportedFeaturesInput"
           render={({ field }) => (
@@ -172,6 +185,10 @@ export function GpuChipsetTable({ data }: { data: GpuChipset[] }) {
     { accessorKey: 'vramGb', header: 'VRAM (GB)', enableSorting: true },
     { accessorKey: 'tdpWatts', header: 'TDP (W)', enableSorting: true },
     { accessorKey: 'recommendedPsuWatts', header: 'Rec. PSU (W)' },
+    {
+      id: 'streetPrice', accessorFn: (r) => r.streetPriceCents, header: 'Street Price',
+      cell: ({ getValue }) => formatUsd(getValue<number | null>()), enableSorting: true,
+    },
     {
       id: 'actions', header: '',
       cell: ({ row }) => (

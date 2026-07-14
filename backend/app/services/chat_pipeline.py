@@ -466,7 +466,7 @@ async def _assemble_dspy_build(state: Any, db) -> dict:
     renders `data.total_approx / 100` directly, same convention as every other
     *_cents column in this codebase (street_price_cents, etc).
     """
-    from app.crud.components import get_part_by_name
+    from app.crud.components import get_part_by_name, resolve_part_price_cents
     from app.crud.reference_builds import get_amazon_urls_by_part
 
     resolved: list[tuple[str, str, Any, int | None]] = []
@@ -476,7 +476,9 @@ async def _assemble_dspy_build(state: Any, db) -> dict:
         if not name:
             continue
         part = await get_part_by_name(db, name)
-        price_cents = part.street_price_cents if part is not None else None
+        # Grouped parts (GPU/PSU/RAM/Storage) carry price on their group, not the
+        # exact pc_parts row — resolve_part_price_cents handles both.
+        price_cents = await resolve_part_price_cents(db, part) if part is not None else None
         if price_cents is not None:
             total_cents += price_cents
         resolved.append((component, name, part, price_cents))

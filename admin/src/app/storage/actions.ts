@@ -2,7 +2,6 @@
 
 import { revalidatePath } from 'next/cache';
 import { db } from '@/lib/prisma';
-import { usdToCents } from '@/lib/utils';
 
 export interface StorageFormData {
   name: string;
@@ -10,14 +9,12 @@ export interface StorageFormData {
   modelNumber: string;
   yearReleased: number | null;
   isActive: boolean;
-  streetPriceUsd: number | null;
   storageGroupId: string;
 }
 
 const partData = (d: StorageFormData) => ({
   name: d.name, manufacturer: d.manufacturer || null,
   modelNumber: d.modelNumber || null, yearReleased: d.yearReleased, isActive: d.isActive,
-  streetPriceCents: usdToCents(d.streetPriceUsd),
 });
 
 export async function createStorage(data: StorageFormData) {

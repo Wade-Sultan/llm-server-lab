@@ -2,9 +2,11 @@
 
 import { revalidatePath } from 'next/cache';
 import { db } from '@/lib/prisma';
+import { usdToCents } from '@/lib/utils';
 
 export interface PsuGroupFormData {
   name: string;
+  streetPriceUsd: number | null;
   wattage: number | null;
   formFactor: string;
   efficiencyRating: string;
@@ -20,6 +22,7 @@ export interface PsuGroupFormData {
 function toData(d: PsuGroupFormData) {
   return {
     name: d.name,
+    streetPriceCents: usdToCents(d.streetPriceUsd),
     wattage: d.wattage ?? 0,
     formFactor: d.formFactor,
     efficiencyRating: d.efficiencyRating,

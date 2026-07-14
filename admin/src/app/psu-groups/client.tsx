@@ -18,10 +18,12 @@ import {
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
+import { centsToUsd, formatUsd } from '@/lib/utils';
 import { createPsuGroup, updatePsuGroup, deletePsuGroup, type PsuGroupFormData } from './actions';
 
 const schema = z.object({
   name: z.string().min(1, 'Name is required'),
+  streetPriceUsd: z.coerce.number().nullable(),
   wattage: z.coerce.number().int().nullable(),
   formFactor: z.string(),
   efficiencyRating: z.string(),
@@ -39,6 +41,7 @@ function PsuGroupForm({ item, onSuccess }: { item: PsuGroup | null; onSuccess: (
     resolver: zodResolver(schema),
     defaultValues: item ? {
       name: item.name,
+      streetPriceUsd: centsToUsd(item.streetPriceCents),
       wattage: item.wattage,
       formFactor: item.formFactor ?? '',
       efficiencyRating: item.efficiencyRating ?? '',
@@ -50,7 +53,7 @@ function PsuGroupForm({ item, onSuccess }: { item: PsuGroup | null; onSuccess: (
       pcie16pinConnectors: item.pcie16pinConnectors,
       epsConnectors: item.epsConnectors,
     } : {
-      name: '', wattage: null, formFactor: '', efficiencyRating: '', modular: '', isFanless: false,
+      name: '', streetPriceUsd: null, wattage: null, formFactor: '', efficiencyRating: '', modular: '', isFanless: false,
       fanSizeMm: null, pcie8pinConnectors: null, pcie12pinConnectors: null,
       pcie16pinConnectors: null, epsConnectors: null,
     },
@@ -110,6 +113,17 @@ function PsuGroupForm({ item, onSuccess }: { item: PsuGroup | null; onSuccess: (
               )}
             />
           ))}
+          <FormField control={form.control} name="streetPriceUsd"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Street Price (USD)</FormLabel>
+                <FormControl>
+                  <Input {...numField(field as { value: number | null; onChange: (v: number | null) => void })} step="0.01" />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
         </div>
         <FormField control={form.control} name="isFanless"
           render={({ field }) => (
@@ -144,6 +158,10 @@ export function PsuGroupTable({ data }: { data: PsuGroup[] }) {
     { accessorKey: 'wattage', header: 'Wattage', enableSorting: true },
     { accessorKey: 'efficiencyRating', header: 'Efficiency' },
     { accessorKey: 'formFactor', header: 'Form Factor' },
+    {
+      id: 'streetPrice', accessorFn: (r) => r.streetPriceCents, header: 'Street Price',
+      cell: ({ getValue }) => formatUsd(getValue<number | null>()), enableSorting: true,
+    },
     {
       id: 'actions', header: '',
       cell: ({ row }) => (

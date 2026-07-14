@@ -58,13 +58,13 @@ model Listing {
 }
 
 model AmazonListing {
-  id           String  @id @db.Uuid
-  listing      Listing @relation(fields: [id], references: [id], onDelete: Cascade)
+  id           String   @id @db.Uuid
+  listing      Listing  @relation(fields: [id], references: [id], onDelete: Cascade)
   asin         String
-  brand        String? @map("brand")
+  brand        String?  @map("brand")
   isPrime      Boolean? @map("is_prime")
-  sellerName   String? @map("seller_name")
-  affiliateTag String? @map("affiliate_tag")
+  sellerName   String?  @map("seller_name")
+  affiliateTag String?  @map("affiliate_tag")
 
   @@map("amazon_listings")
 }
@@ -76,6 +76,7 @@ model AmazonListing {
 model GpuChipset {
   id                  String   @id @default(uuid()) @db.Uuid
   name                String
+  streetPriceCents    Int?     @map("street_price_cents")
   vramGb              Int      @map("vram_gb")
   vramType            String?  @map("vram_type")
   tdpWatts            Int      @map("tdp_watts")
@@ -101,6 +102,7 @@ model GpuChipset {
 model PsuGroup {
   id                  String   @id @default(uuid()) @db.Uuid
   name                String
+  streetPriceCents    Int?     @map("street_price_cents")
   wattage             Int
   formFactor          String   @map("form_factor")
   efficiencyRating    String   @map("efficiency_rating")
@@ -122,6 +124,7 @@ model PsuGroup {
 model RamGroup {
   id               String   @id @default(uuid()) @db.Uuid
   name             String
+  streetPriceCents Int?     @map("street_price_cents")
   ddrGeneration    String   @map("ddr_generation")
   speedMhz         Int      @map("speed_mhz")
   capacityGb       Int      @map("capacity_gb")
@@ -139,19 +142,20 @@ model RamGroup {
 }
 
 model StorageGroup {
-  id             String   @id @default(uuid()) @db.Uuid
-  name           String
-  storageType    String   @map("storage_type")
-  formFactor     String   @map("form_factor")
-  interface      String
-  capacityGb     Int      @map("capacity_gb")
-  readSpeedMbps  Int?     @map("read_speed_mbps")
-  writeSpeedMbps Int?     @map("write_speed_mbps")
-  hasDramCache   Boolean  @default(false) @map("has_dram_cache")
-  enduranceTbw   Int?     @map("endurance_tbw")
-  rpm            Int?
-  createdAt      DateTime @default(now()) @map("created_at")
-  updatedAt      DateTime @updatedAt @map("updated_at")
+  id               String   @id @default(uuid()) @db.Uuid
+  name             String
+  streetPriceCents Int?     @map("street_price_cents")
+  storageType      String   @map("storage_type")
+  formFactor       String   @map("form_factor")
+  interface        String
+  capacityGb       Int      @map("capacity_gb")
+  readSpeedMbps    Int?     @map("read_speed_mbps")
+  writeSpeedMbps   Int?     @map("write_speed_mbps")
+  hasDramCache     Boolean  @default(false) @map("has_dram_cache")
+  enduranceTbw     Int?     @map("endurance_tbw")
+  rpm              Int?
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
 
   variants StorageDrive[]
 
@@ -420,8 +424,8 @@ model User {
 
 model Conversation {
   id                    String    @id @db.Uuid
-  userId                String?   @db.Uuid @map("user_id")
-  buildId               String?   @db.Uuid @map("build_id")
+  userId                String?   @map("user_id") @db.Uuid
+  buildId               String?   @map("build_id") @db.Uuid
   title                 String?
   summary               String?
   totalCostUsd          Decimal   @default(0) @map("total_cost_usd") @db.Decimal
@@ -439,7 +443,7 @@ model Conversation {
 
 model Message {
   id             String       @id @db.Uuid
-  conversationId String       @db.Uuid @map("conversation_id")
+  conversationId String       @map("conversation_id") @db.Uuid
   conversation   Conversation @relation(fields: [conversationId], references: [id])
   role           String
   content        String?
@@ -461,21 +465,21 @@ enum BuildSessionStatus {
 // DSPy recommender telemetry — one row per pipeline run (the GEPA cohort).
 // Populated once the component pipeline is wired to a live route.
 model BuildSession {
-  id                          String             @id @db.Uuid
-  userId                      String?            @db.Uuid @map("user_id")
-  pipelineVersion             String             @map("pipeline_version")
-  budgetCents                 Int?               @map("budget_cents")
-  priceSensitivity            String?            @map("price_sensitivity")
-  inputProfile                Json               @map("input_profile")
-  finalBuild                  Json?              @map("final_build")
-  totalCostUsd                Decimal?           @map("total_cost_usd") @db.Decimal
-  totalLatencyMs              Int?               @map("total_latency_ms")
-  budgetDeltaCents            Int?               @map("budget_delta_cents")
-  compatibilityOverrideCount  Int                @default(0) @map("compatibility_override_count")
-  status                      BuildSessionStatus @default(running)
-  createdAt                   DateTime           @default(now()) @map("created_at")
-  updatedAt                   DateTime           @updatedAt @map("updated_at")
-  decisions                   ModuleDecision[]
+  id                         String             @id @db.Uuid
+  userId                     String?            @map("user_id") @db.Uuid
+  pipelineVersion            String             @map("pipeline_version")
+  budgetCents                Int?               @map("budget_cents")
+  priceSensitivity           String?            @map("price_sensitivity")
+  inputProfile               Json               @map("input_profile")
+  finalBuild                 Json?              @map("final_build")
+  totalCostUsd               Decimal?           @map("total_cost_usd") @db.Decimal
+  totalLatencyMs             Int?               @map("total_latency_ms")
+  budgetDeltaCents           Int?               @map("budget_delta_cents")
+  compatibilityOverrideCount Int                @default(0) @map("compatibility_override_count")
+  status                     BuildSessionStatus @default(running)
+  createdAt                  DateTime           @default(now()) @map("created_at")
+  updatedAt                  DateTime           @updatedAt @map("updated_at")
+  decisions                  ModuleDecision[]
 
   @@map("build_sessions")
 }
@@ -483,7 +487,7 @@ model BuildSession {
 // One row per Decide* call — the GEPA training example.
 model ModuleDecision {
   id               String       @id @db.Uuid
-  sessionId        String       @db.Uuid @map("session_id")
+  sessionId        String       @map("session_id") @db.Uuid
   session          BuildSession @relation(fields: [sessionId], references: [id])
   pipelineVersion  String       @map("pipeline_version")
   category         String

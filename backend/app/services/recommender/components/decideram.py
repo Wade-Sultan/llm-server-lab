@@ -23,9 +23,9 @@ class RAMSelection(dspy.Signature):
     ddr_gen: str = dspy.InputField(desc="Required DDR generation (ddr4 or ddr5)")
     budget_ceiling: int = dspy.InputField(desc="Maximum to spend on RAM in USD")
     candidates: str = dspy.InputField(
-        desc="JSON list of RAM groups with the cheapest kit price per group. Fields: "
+        desc="JSON list of RAM groups with the group's street price. Fields: "
              "ram_group, ddr_gen, capacity_gb, speed_mhz, kit_count, cas_latency, "
-             "starting_price_usd"
+             "street_price_usd"
     )
 
     ram_group: str = dspy.OutputField(desc="Exact ram_group label of the chosen spec, matching a candidate")

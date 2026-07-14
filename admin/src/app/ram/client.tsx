@@ -18,7 +18,6 @@ import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ListingsDialog } from '@/components/listings-dialog';
-import { centsToUsd, formatUsd } from '@/lib/utils';
 import { createRam, updateRam, deleteRam, type RamFormData } from './actions';
 
 type RamWithPart = RamKit & {
@@ -30,7 +29,6 @@ type GroupOption = { id: string; name: string };
 const schema = z.object({
   name: z.string().min(1), manufacturer: z.string(), modelNumber: z.string(),
   yearReleased: z.coerce.number().int().nullable(), isActive: z.boolean(),
-  streetPriceUsd: z.coerce.number().nullable(),
   ramGroupId: z.string().min(1, 'Group is required'),
   heightMm: z.coerce.number().int().nullable(), hasRgb: z.boolean(),
 });
@@ -41,11 +39,11 @@ function RamForm({ item, groups, onSuccess }: { item: RamWithPart | null; groups
     defaultValues: item ? {
       name: item.pcPart.name, manufacturer: item.pcPart.manufacturer ?? '',
       modelNumber: item.pcPart.modelNumber ?? '', yearReleased: item.pcPart.yearReleased,
-      isActive: item.pcPart.isActive, streetPriceUsd: centsToUsd(item.pcPart.streetPriceCents),
+      isActive: item.pcPart.isActive,
       ramGroupId: item.ramGroupId, heightMm: item.heightMm, hasRgb: item.hasRgb,
     } : {
       name: '', manufacturer: '', modelNumber: '', yearReleased: null, isActive: true,
-      streetPriceUsd: null, ramGroupId: '', heightMm: null, hasRgb: false,
+      ramGroupId: '', heightMm: null, hasRgb: false,
     },
   });
 
@@ -99,16 +97,6 @@ function RamForm({ item, groups, onSuccess }: { item: RamWithPart | null; groups
               )}
             />
           ))}
-          <FormField control={form.control} name="streetPriceUsd"
-            render={({ field }) => (
-              <FormItem><FormLabel>Street Price (USD)</FormLabel>
-                <FormControl>
-                  <Input type="number" step="0.01" value={(field.value as number | null) ?? ''} onChange={numChange(field.onChange)} />
-                </FormControl>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
         </div>
         <div className="flex gap-6">
           {([ ['hasRgb','RGB'], ['isActive','Active'] ] as [keyof RamFormData, string][]).map(([name, label]) => (
@@ -149,8 +137,6 @@ export function RamTable({ data, groups }: { data: RamWithPart[]; groups: GroupO
     { id: 'name', accessorFn: (r) => r.pcPart.name, header: 'Name', enableSorting: true },
     { id: 'group', accessorFn: (r) => r.group.name, header: 'Group', enableSorting: true },
     { id: 'manufacturer', accessorFn: (r) => r.pcPart.manufacturer ?? '', header: 'Manufacturer' },
-    { id: 'streetPrice', accessorFn: (r) => r.pcPart.streetPriceCents, header: 'Street Price',
-      cell: ({ getValue }) => formatUsd(getValue<number | null>()), enableSorting: true },
     {
       id: 'listings', header: 'Listings',
       cell: ({ row }) => (

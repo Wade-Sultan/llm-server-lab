@@ -86,6 +86,7 @@ def _serialize_gpu_chipset(g) -> dict:  # g: GPUChipset
         "vram_gb": g.vram_gb,
         "tdp_w": g.tdp_watts,
         "has_ray_tracing": g.has_ray_tracing,
+        "street_price_usd": _price(g),
     }
 
 
@@ -97,6 +98,7 @@ def _serialize_ram_group(g) -> dict:  # g: RAMGroup
         "speed_mhz": g.speed_mhz,
         "kit_count": g.modules,
         "cas_latency": g.cas_latency,
+        "street_price_usd": _price(g),
     }
 
 
@@ -108,6 +110,7 @@ def _serialize_storage_group(g) -> dict:  # g: StorageGroup
         "capacity_gb": g.capacity_gb,
         "seq_read_mbs": g.read_speed_mbps,
         "seq_write_mbs": g.write_speed_mbps,
+        "street_price_usd": _price(g),
     }
 
 
@@ -118,36 +121,33 @@ def _serialize_psu_group(g) -> dict:  # g: PSUGroup
         "efficiency": g.efficiency_rating,
         "form_factor": g.form_factor,
         "modular": g.modular,
+        "street_price_usd": _price(g),
     }
 
 
 def _aggregate_groups(exacts: list, group_of, serialize_group, extra=None) -> list[dict]:
-    """Collapse affordable exacts into one candidate row per group: the group's
-    intrinsic spec + `starting_price_usd` (cheapest exact) + `used_market_viable`
-    (any exact). `extra(row, exact)` can surface an exact-level field on first
-    sight of a group (e.g. GPU brand, which now lives on the exact). Rows are
-    sorted cheapest-first."""
+    """Collapse affordable exacts into one candidate row per group. Price lives on
+    the group now (surfaced by serialize_group as street_price_usd), so this just
+    dedupes by group, ORs `used_market_viable` across the group's exacts, and
+    surfaces one exact-level field via `extra(row, exact)` (e.g. GPU brand, which
+    lives on the exact). Rows are sorted cheapest-first."""
     by_id: dict = {}
     for e in exacts:
         g = group_of(e)
         if g is None:
             continue
-        price = _price(e)
         row = by_id.get(g.id)
         if row is None:
             row = serialize_group(g)
-            row["starting_price_usd"] = price
             row["used_market_viable"] = bool(e.used_market_viable)
             if extra is not None:
                 extra(row, e)
             by_id[g.id] = row
             continue
-        if price is not None and (row["starting_price_usd"] is None or price < row["starting_price_usd"]):
-            row["starting_price_usd"] = price
         row["used_market_viable"] = row["used_market_viable"] or bool(e.used_market_viable)
     return sorted(
         by_id.values(),
-        key=lambda r: (r["starting_price_usd"] is None, r["starting_price_usd"] or 0),
+        key=lambda r: (r.get("street_price_usd") is None, r.get("street_price_usd") or 0),
     )
 
 

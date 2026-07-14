@@ -18,7 +18,6 @@ import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ListingsDialog } from '@/components/listings-dialog';
-import { centsToUsd, formatUsd } from '@/lib/utils';
 import { createPsu, updatePsu, deletePsu, type PsuFormData } from './actions';
 
 type PsuWithPart = Psu & {
@@ -30,7 +29,6 @@ type GroupOption = { id: string; name: string };
 const schema = z.object({
   name: z.string().min(1), manufacturer: z.string(), modelNumber: z.string(),
   yearReleased: z.coerce.number().int().nullable(), isActive: z.boolean(),
-  streetPriceUsd: z.coerce.number().nullable(),
   psuGroupId: z.string().min(1, 'Group is required'),
   depthMm: z.coerce.number().int().nullable(),
 });
@@ -41,11 +39,11 @@ function PsuForm({ item, groups, onSuccess }: { item: PsuWithPart | null; groups
     defaultValues: item ? {
       name: item.pcPart.name, manufacturer: item.pcPart.manufacturer ?? '',
       modelNumber: item.pcPart.modelNumber ?? '', yearReleased: item.pcPart.yearReleased,
-      isActive: item.pcPart.isActive, streetPriceUsd: centsToUsd(item.pcPart.streetPriceCents),
+      isActive: item.pcPart.isActive,
       psuGroupId: item.psuGroupId, depthMm: item.depthMm,
     } : {
       name: '', manufacturer: '', modelNumber: '', yearReleased: null, isActive: true,
-      streetPriceUsd: null, psuGroupId: '', depthMm: null,
+      psuGroupId: '', depthMm: null,
     },
   });
 
@@ -99,16 +97,6 @@ function PsuForm({ item, groups, onSuccess }: { item: PsuWithPart | null; groups
               )}
             />
           ))}
-          <FormField control={form.control} name="streetPriceUsd"
-            render={({ field }) => (
-              <FormItem><FormLabel>Street Price (USD)</FormLabel>
-                <FormControl>
-                  <Input type="number" step="0.01" value={(field.value as number | null) ?? ''} onChange={numChange(field.onChange)} />
-                </FormControl>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
         </div>
         <FormField control={form.control} name="isActive"
           render={({ field }) => (
@@ -145,8 +133,6 @@ export function PsuTable({ data, groups }: { data: PsuWithPart[]; groups: GroupO
     { id: 'name', accessorFn: (r) => r.pcPart.name, header: 'Name', enableSorting: true },
     { id: 'group', accessorFn: (r) => r.group.name, header: 'Group', enableSorting: true },
     { id: 'manufacturer', accessorFn: (r) => r.pcPart.manufacturer ?? '', header: 'Manufacturer' },
-    { id: 'streetPrice', accessorFn: (r) => r.pcPart.streetPriceCents, header: 'Street Price',
-      cell: ({ getValue }) => formatUsd(getValue<number | null>()), enableSorting: true },
     {
       id: 'listings', header: 'Listings',
       cell: ({ row }) => (

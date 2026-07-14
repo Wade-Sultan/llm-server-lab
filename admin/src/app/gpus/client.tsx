@@ -21,7 +21,6 @@ import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ListingsDialog } from '@/components/listings-dialog';
-import { centsToUsd, formatUsd } from '@/lib/utils';
 import { createGpu, updateGpu, deleteGpu, type GpuFormData } from './actions';
 
 type GpuWithPart = Gpu & {
@@ -36,7 +35,6 @@ const schema = z.object({
   modelNumber: z.string(),
   yearReleased: z.coerce.number().int().nullable(),
   isActive: z.boolean(),
-  streetPriceUsd: z.coerce.number().nullable(),
   gpuChipsetId: z.string().min(1, 'Chipset is required'),
   brand: z.string(),
   lengthMm: z.coerce.number().int().nullable(),
@@ -56,7 +54,6 @@ function GpuForm({ item, chipsets, onSuccess }: { item: GpuWithPart | null; chip
       modelNumber: item.pcPart.modelNumber ?? '',
       yearReleased: item.pcPart.yearReleased,
       isActive: item.pcPart.isActive,
-      streetPriceUsd: centsToUsd(item.pcPart.streetPriceCents),
       gpuChipsetId: item.gpuChipsetId,
       brand: item.brand ?? '',
       lengthMm: item.lengthMm,
@@ -66,7 +63,7 @@ function GpuForm({ item, chipsets, onSuccess }: { item: GpuWithPart | null; chip
       hdmiVersion: item.hdmiVersion ?? '',
       dpVersion: item.dpVersion ?? '',
     } : {
-      name: '', manufacturer: '', modelNumber: '', yearReleased: null, isActive: true, streetPriceUsd: null,
+      name: '', manufacturer: '', modelNumber: '', yearReleased: null, isActive: true,
       gpuChipsetId: '', brand: '', lengthMm: null, widthSlots: null, pciePowerPins: '',
       displayOutputs: '', hdmiVersion: '', dpVersion: '',
     },
@@ -140,17 +137,6 @@ function GpuForm({ item, chipsets, onSuccess }: { item: GpuWithPart | null; chip
               )}
             />
           ))}
-          <FormField control={form.control} name="streetPriceUsd"
-            render={({ field }) => (
-              <FormItem>
-                <FormLabel>Street Price (USD)</FormLabel>
-                <FormControl>
-                  <Input {...numField(field as { value: number | null; onChange: (v: number | null) => void })} step="0.01" />
-                </FormControl>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
         </div>
         <FormField control={form.control} name="isActive"
           render={({ field }) => (
@@ -185,10 +171,6 @@ export function GpuTable({ data, chipsets }: { data: GpuWithPart[]; chipsets: Ch
     { id: 'chipset', accessorFn: (r) => r.chipset.name, header: 'Chipset', enableSorting: true },
     { id: 'manufacturer', accessorFn: (r) => r.pcPart.manufacturer ?? '', header: 'Manufacturer' },
     { accessorKey: 'lengthMm', header: 'Length (mm)', enableSorting: true },
-    {
-      id: 'streetPrice', accessorFn: (r) => r.pcPart.streetPriceCents, header: 'Street Price',
-      cell: ({ getValue }) => formatUsd(getValue<number | null>()), enableSorting: true,
-    },
     {
       id: 'listings', header: 'Listings',
       cell: ({ row }) => (

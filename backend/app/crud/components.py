@@ -11,7 +11,7 @@ import re
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import selectinload, with_polymorphic
 
 from app.models.pcparts import (
     CPU,
@@ -36,14 +36,45 @@ from app.schemas.chat import UserPreferences
 # Generic (polymorphic base)
 # ---------------------------------------------------------------------------
 
+# Eager-load all subclass columns so a polymorphic lookup exposes group FKs
+# (gpu_chipset_id, ram_group_id, …) without triggering an async-unsafe lazy load.
+_PART_POLY = with_polymorphic(PCPart, "*")
+
+
 async def get_part_by_name(db: AsyncSession, name: str) -> PCPart | None:
-    """Case-insensitive lookup on the polymorphic base — any part type."""
-    stmt = select(PCPart).where(
-        func.lower(PCPart.name) == name.lower(),
-        PCPart.is_active == True,  # noqa: E712
+    """Case-insensitive lookup on the polymorphic base — any part type. Subclass
+    columns (incl. the group FKs) are eager-loaded for resolve_part_price_cents."""
+    stmt = select(_PART_POLY).where(
+        func.lower(_PART_POLY.name) == name.lower(),
+        _PART_POLY.is_active == True,  # noqa: E712
     ).limit(1)
     result = await db.execute(stmt)
     return result.scalars().first()
+
+
+# part_type -> (group FK attr on the exact, group model). Price for these types
+# lives on the group, not on the exact's pc_parts row.
+_GROUP_PRICE_LOOKUP = {
+    "gpu": ("gpu_chipset_id", GPUChipset),
+    "psu": ("psu_group_id", PSUGroup),
+    "ramkit": ("ram_group_id", RAMGroup),
+    "storagedrive": ("storage_group_id", StorageGroup),
+}
+
+
+async def resolve_part_price_cents(db: AsyncSession, part: PCPart) -> int | None:
+    """Effective street price for a resolved part: for grouped types (GPU/PSU/
+    RAMKit/StorageDrive) it lives on the group; everything else uses pc_parts.
+    `part` must have its subclass columns loaded (see get_part_by_name)."""
+    entry = _GROUP_PRICE_LOOKUP.get(getattr(part, "part_type", None))
+    if entry is None:
+        return part.street_price_cents
+    fk_attr, model = entry
+    gid = getattr(part, fk_attr, None)
+    if gid is None:
+        return None
+    grp = await db.get(model, gid)
+    return grp.street_price_cents if grp else None
 
 
 # Drop a leading "Socket " qualifier some sources prepend ("Socket AM5" → "am5").
@@ -163,9 +194,10 @@ async def get_gpu_candidates(
     these into one candidate per chipset for the main GPU step."""
     stmt = (
         select(GPU)
+        .join(GPUChipset, GPU.gpu_chipset_id == GPUChipset.id)
         .where(
             GPU.is_active == True,  # noqa: E712
-            GPU.street_price_cents <= budget_ceiling_usd * 100,
+            GPUChipset.street_price_cents <= budget_ceiling_usd * 100,
         )
         .options(selectinload(GPU.chipset))
     )
@@ -282,7 +314,7 @@ async def get_ram_candidates(
         .join(RAMGroup, RAMKit.ram_group_id == RAMGroup.id)
         .where(
             RAMKit.is_active == True,  # noqa: E712
-            RAMKit.street_price_cents <= budget_ceiling_usd * 100,
+            RAMGroup.street_price_cents <= budget_ceiling_usd * 100,
             func.lower(func.trim(RAMGroup.ddr_generation)) == _normalize(ddr_gen),
         )
         .options(selectinload(RAMKit.group))
@@ -332,7 +364,7 @@ async def get_storage_candidates(
         .join(StorageGroup, StorageDrive.storage_group_id == StorageGroup.id)
         .where(
             StorageDrive.is_active == True,  # noqa: E712
-            StorageDrive.street_price_cents <= budget_ceiling_usd * 100,
+            StorageGroup.street_price_cents <= budget_ceiling_usd * 100,
         )
         .options(selectinload(StorageDrive.group))
     )
@@ -376,7 +408,7 @@ async def get_psu_candidates(
         .join(PSUGroup, PSU.psu_group_id == PSUGroup.id)
         .where(
             PSU.is_active == True,  # noqa: E712
-            PSU.street_price_cents <= budget_ceiling_usd * 100,
+            PSUGroup.street_price_cents <= budget_ceiling_usd * 100,
             PSUGroup.wattage >= min_wattage,
             # form_factor is the same free-text admin field as
             # Motherboard.socket/ddr_generation — normalize it too.

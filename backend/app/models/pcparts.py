@@ -137,6 +137,9 @@ class GPUChipset(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
     name = Column(String(100), nullable=False)  # e.g. "RTX 5080"
 
+    # Street price lives on the group (shared by every board of this chipset).
+    street_price_cents = Column(Integer, nullable=True)
+
     vram_gb = Column(Integer, nullable=False)
     vram_type = Column(String(20), nullable=True)
     tdp_watts = Column(Integer, nullable=False)
@@ -165,6 +168,9 @@ class PSUGroup(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
     name = Column(String(150), nullable=False)  # e.g. "850W 80+ Gold ATX Fully-Modular"
 
+    # Street price lives on the group (shared by every unit in this spec).
+    street_price_cents = Column(Integer, nullable=True)
+
     wattage = Column(Integer, nullable=False)
     form_factor = Column(String(10), nullable=False)
     efficiency_rating = Column(String(30), nullable=False)
@@ -189,6 +195,9 @@ class RAMGroup(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
     name = Column(String(150), nullable=False)  # e.g. "DDR5-6000 CL30 32GB (2x16)"
 
+    # Street price lives on the group (shared by every kit in this spec).
+    street_price_cents = Column(Integer, nullable=True)
+
     ddr_generation = Column(String(10), nullable=False)
     speed_mhz = Column(Integer, nullable=False)
     capacity_gb = Column(Integer, nullable=False)
@@ -210,6 +219,9 @@ class StorageGroup(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
     name = Column(String(150), nullable=False)  # e.g. "2TB Gen4 NVMe (7000/6900 MB/s)"
+
+    # Street price lives on the group (shared by every drive in this spec).
+    street_price_cents = Column(Integer, nullable=True)
 
     storage_type = Column(String(20), nullable=False)
     form_factor = Column(String(20), nullable=False)

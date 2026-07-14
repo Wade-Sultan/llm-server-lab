@@ -517,20 +517,17 @@ async def _step_ram(state: DSPyBuildState, session: AsyncSession, budget: dict, 
     state.ram_group = result.ram_group
     state.thresholds["ram"] = result.reconsideration_threshold
     # Resolve the cheapest kit in the chosen group (deterministic; no LLM call).
-    kit = _cheapest_exact(await crud_components.get_ram_kits_for_group(session, result.ram_group))
+    kit = _pick_exact(await crud_components.get_ram_kits_for_group(session, result.ram_group))
     if kit is not None:
         state.ram_name = kit.name
 
 
-def _cheapest_exact(exacts: list):
-    """Cheapest active exact SKU by street price (None-priced last). Used by the
-    RAM/Storage/PSU group→exact resolution (GPU has its own fit-aware resolver)."""
-    if not exacts:
-        return None
-    return min(
-        exacts,
-        key=lambda e: e.street_price_cents if e.street_price_cents is not None else float("inf"),
-    )
+def _pick_exact(exacts: list):
+    """Pick the exact SKU for a chosen group. Street price now lives on the group
+    (every member is priced identically), so there's nothing to optimize on —
+    return the first active member deterministically. RAM/Storage/PSU use this;
+    GPU has its own fit-aware resolver (length/power still vary per board)."""
+    return exacts[0] if exacts else None
 
 
 async def _step_storage(state: DSPyBuildState, session: AsyncSession, budget: dict, program: DecideStorage, recorder: BuildRecorder | None) -> None:
@@ -549,7 +546,7 @@ async def _step_storage(state: DSPyBuildState, session: AsyncSession, budget: di
     )
     state.storage_group = result.storage_group
     state.thresholds["storage"] = result.reconsideration_threshold
-    drive = _cheapest_exact(await crud_components.get_storage_drives_for_group(session, result.storage_group))
+    drive = _pick_exact(await crud_components.get_storage_drives_for_group(session, result.storage_group))
     if drive is not None:
         state.storage_name = drive.name
 
@@ -585,11 +582,13 @@ async def _step_gpu(state: DSPyBuildState, session: AsyncSession, budget: dict, 
 
 async def _resolve_gpu_variant(state: DSPyBuildState, session: AsyncSession) -> None:
     """Deterministically pick the exact GPU board for the chosen chipset now that
-    the case length and PSU are known: the cheapest board that fits the case's
-    max GPU length and the PSU's wattage. Not a DSPy decision.
+    the case length and PSU are known: the first board that fits the case's max
+    GPU length and the PSU's wattage. Not a DSPy decision. Price is uniform across
+    a chipset's boards (it lives on the chipset), so there's nothing to optimize
+    on beyond fit.
 
     If no board fits (rare — e.g. every variant is too long for the picked case),
-    fall back to the cheapest variant and warn, so the build still completes; the
+    fall back to the first variant and warn, so the build still completes; the
     reference build remains the safety net for genuinely incompatible outcomes.
     """
     if not state.gpu_required or not state.gpu_chipset:
@@ -612,14 +611,10 @@ async def _resolve_gpu_variant(state: DSPyBuildState, session: AsyncSession) -> 
             return False
         return True
 
-    def _price_key(v) -> float:
-        return v.street_price_cents if v.street_price_cents is not None else float("inf")
-
-    fitting = [v for v in variants if _fits(v)]
-    chosen = min(fitting or variants, key=_price_key)
-    if not fitting:
+    chosen = next((v for v in variants if _fits(v)), None) or variants[0]
+    if not _fits(chosen):
         logger.warning(
-            "no %r board fits case length %smm / PSU %sW; using cheapest variant %r",
+            "no %r board fits case length %smm / PSU %sW; using variant %r",
             state.gpu_chipset, max_len, psu_watts, chosen.name,
         )
     state.gpu_name = chosen.name
@@ -646,7 +641,7 @@ async def _step_psu(state: DSPyBuildState, session: AsyncSession, budget: dict, 
         candidates=candidates,
     )
     state.psu_group = result.psu_group
-    unit = _cheapest_exact(await crud_components.get_psus_for_group(session, result.psu_group))
+    unit = _pick_exact(await crud_components.get_psus_for_group(session, result.psu_group))
     if unit is not None:
         state.psu_name = unit.name
 

@@ -10,18 +10,20 @@ export interface ReferenceBuildFormData {
   description: string;
   isActive: boolean;
   maxResolution: number | null;
+  // Non-grouped slots reference a specific part.
   cpuId: string | null;
   motherboardId: string | null;
-  ramId: string | null;
-  psuId: string | null;
   caseId: string | null;
   cpuCoolerId: string | null;
-  gpuIds: string[];
-  storageIds: string[];
   fanIds: string[];
+  // Grouped slots reference a group; a random member is frozen in at save.
+  ramGroupId: string | null;
+  psuGroupId: string | null;
+  gpuChipsetIds: string[];
+  storageGroupIds: string[];
 }
 
-type PartEntry = { partId: string; component: BuildComponentRole };
+type Entry = { partId: string; component: BuildComponentRole; priceCents: number };
 
 const REQUIRED: Record<BuildComponentRole, boolean> = {
   cpu: true, cpucooler: true, motherboard: true,
@@ -29,31 +31,59 @@ const REQUIRED: Record<BuildComponentRole, boolean> = {
   gpu: false, fan: false,
 };
 
-function collectEntries(data: ReferenceBuildFormData): PartEntry[] {
-  const entries: PartEntry[] = [];
-  if (data.cpuId)        entries.push({ partId: data.cpuId,        component: 'cpu' });
-  if (data.motherboardId) entries.push({ partId: data.motherboardId, component: 'motherboard' });
-  if (data.ramId)        entries.push({ partId: data.ramId,        component: 'ram' });
-  if (data.psuId)        entries.push({ partId: data.psuId,        component: 'psu' });
-  if (data.caseId)       entries.push({ partId: data.caseId,       component: 'case' });
-  if (data.cpuCoolerId)  entries.push({ partId: data.cpuCoolerId,  component: 'cpucooler' });
-  for (const id of data.gpuIds)     entries.push({ partId: id, component: 'gpu' });
-  for (const id of data.storageIds) entries.push({ partId: id, component: 'storage' });
-  for (const id of data.fanIds)     entries.push({ partId: id, component: 'fan' });
+// A group loaded with its active members + street price. Picking a member is
+// what "select a group, freeze a random one at save" means; price comes from
+// the group (every member is priced identically).
+type GroupWithMembers = { streetPriceCents: number | null; variants: { id: string }[] } | null;
+
+function pickMember(group: GroupWithMembers): { partId: string; priceCents: number } | null {
+  if (!group || group.variants.length === 0) return null;
+  const pick = group.variants[Math.floor(Math.random() * group.variants.length)];
+  return { partId: pick.id, priceCents: group.streetPriceCents ?? 0 };
+}
+
+const memberSelect = { streetPriceCents: true, variants: { where: { pcPart: { isActive: true } }, select: { id: true } } };
+
+async function resolveEntries(data: ReferenceBuildFormData): Promise<Entry[]> {
+  const entries: Entry[] = [];
+
+  // --- Non-grouped: price from pc_parts ---
+  const partIds = [data.cpuId, data.motherboardId, data.caseId, data.cpuCoolerId, ...data.fanIds]
+    .filter((x): x is string => !!x);
+  const priceRows = partIds.length
+    ? await db.pcPart.findMany({ where: { id: { in: partIds } }, select: { id: true, streetPriceCents: true } })
+    : [];
+  const partPrice = new Map(priceRows.map(p => [p.id, p.streetPriceCents ?? 0]));
+  const addPart = (id: string | null, component: BuildComponentRole) => {
+    if (id) entries.push({ partId: id, component, priceCents: partPrice.get(id) ?? 0 });
+  };
+  addPart(data.cpuId, 'cpu');
+  addPart(data.motherboardId, 'motherboard');
+  addPart(data.caseId, 'case');
+  addPart(data.cpuCoolerId, 'cpucooler');
+  for (const id of data.fanIds) addPart(id, 'fan');
+
+  // --- Grouped: freeze a random member, price from the group ---
+  const addGroup = (picked: { partId: string; priceCents: number } | null, component: BuildComponentRole) => {
+    if (picked) entries.push({ ...picked, component });
+  };
+  if (data.ramGroupId) {
+    addGroup(pickMember(await db.ramGroup.findUnique({ where: { id: data.ramGroupId }, select: memberSelect })), 'ram');
+  }
+  if (data.psuGroupId) {
+    addGroup(pickMember(await db.psuGroup.findUnique({ where: { id: data.psuGroupId }, select: memberSelect })), 'psu');
+  }
+  for (const gid of data.gpuChipsetIds) {
+    addGroup(pickMember(await db.gpuChipset.findUnique({ where: { id: gid }, select: memberSelect })), 'gpu');
+  }
+  for (const gid of data.storageGroupIds) {
+    addGroup(pickMember(await db.storageGroup.findUnique({ where: { id: gid }, select: memberSelect })), 'storage');
+  }
   return entries;
 }
 
-async function fetchPrices(partIds: string[]): Promise<Map<string, number>> {
-  if (!partIds.length) return new Map();
-  const parts = await db.pcPart.findMany({
-    where: { id: { in: partIds } },
-    select: { id: true, streetPriceCents: true },
-  });
-  return new Map(parts.map(p => [p.id, p.streetPriceCents ?? 0]));
-}
-
 // pc_build_parts requires one-per-role; take the first occurrence of each component.
-function buildPcBuildParts(entries: PartEntry[], prices: Map<string, number>) {
+function pcBuildParts(entries: Entry[]) {
   const seen = new Set<string>();
   return entries
     .filter(e => { if (seen.has(e.component)) return false; seen.add(e.component); return true; })
@@ -61,14 +91,22 @@ function buildPcBuildParts(entries: PartEntry[], prices: Map<string, number>) {
       partId: e.partId,
       role: e.component,
       requiredComponent: REQUIRED[e.component] ?? false,
-      priceAtBuild: prices.get(e.partId) ?? null,
+      priceAtBuild: e.priceCents,
     }));
 }
 
+function refBuildParts(entries: Entry[]) {
+  return entries.map((e, i) => ({
+    partId: e.partId,
+    component: e.component,
+    sortOrder: i,
+    approxPrice: e.priceCents,
+  }));
+}
+
 export async function createReferenceBuild(data: ReferenceBuildFormData) {
-  const entries = collectEntries(data);
-  const prices = await fetchPrices(entries.map(e => e.partId));
-  const totalApprox = [...prices.values()].reduce((s, p) => s + p, 0) || null;
+  const entries = await resolveEntries(data);
+  const totalApprox = entries.reduce((s, e) => s + e.priceCents, 0) || null;
 
   const pcBuild = await db.pCBuild.create({
     data: {
@@ -76,7 +114,7 @@ export async function createReferenceBuild(data: ReferenceBuildFormData) {
       description: data.description || null,
       status: 'finalized',
       totalPriceCents: totalApprox,
-      parts: { create: buildPcBuildParts(entries, prices) },
+      parts: { create: pcBuildParts(entries) },
     },
   });
 
@@ -89,14 +127,7 @@ export async function createReferenceBuild(data: ReferenceBuildFormData) {
       maxResolution: data.maxResolution,
       totalApprox,
       pcBuildId: pcBuild.id,
-      parts: {
-        create: entries.map((e, i) => ({
-          partId: e.partId,
-          component: e.component,
-          sortOrder: i,
-          approxPrice: prices.get(e.partId) ?? 0,
-        })),
-      },
+      parts: { create: refBuildParts(entries) },
     },
   });
 
@@ -104,14 +135,11 @@ export async function createReferenceBuild(data: ReferenceBuildFormData) {
 }
 
 export async function updateReferenceBuild(id: string, data: ReferenceBuildFormData) {
-  const entries = collectEntries(data);
-  const prices = await fetchPrices(entries.map(e => e.partId));
-  const totalApprox = [...prices.values()].reduce((s, p) => s + p, 0) || null;
+  // Every save re-resolves the grouped slots — i.e. re-rolls the frozen member.
+  const entries = await resolveEntries(data);
+  const totalApprox = entries.reduce((s, e) => s + e.priceCents, 0) || null;
 
-  const existing = await db.referenceBuild.findUniqueOrThrow({
-    where: { id },
-    select: { pcBuildId: true },
-  });
+  const existing = await db.referenceBuild.findUniqueOrThrow({ where: { id }, select: { pcBuildId: true } });
 
   await db.$transaction(async tx => {
     if (existing.pcBuildId) {
@@ -121,21 +149,17 @@ export async function updateReferenceBuild(id: string, data: ReferenceBuildFormD
           name: data.label,
           description: data.description || null,
           totalPriceCents: totalApprox,
-          parts: {
-            deleteMany: {},
-            create: buildPcBuildParts(entries, prices),
-          },
+          parts: { deleteMany: {}, create: pcBuildParts(entries) },
         },
       });
     } else {
-      // No linked PCBuild yet — create one now.
       const pcBuild = await tx.pCBuild.create({
         data: {
           name: data.label,
           description: data.description || null,
           status: 'finalized',
           totalPriceCents: totalApprox,
-          parts: { create: buildPcBuildParts(entries, prices) },
+          parts: { create: pcBuildParts(entries) },
         },
       });
       await tx.referenceBuild.update({ where: { id }, data: { pcBuildId: pcBuild.id } });
@@ -150,15 +174,7 @@ export async function updateReferenceBuild(id: string, data: ReferenceBuildFormD
         isActive: data.isActive,
         maxResolution: data.maxResolution,
         totalApprox,
-        parts: {
-          deleteMany: {},
-          create: entries.map((e, i) => ({
-            partId: e.partId,
-            component: e.component,
-            sortOrder: i,
-            approxPrice: prices.get(e.partId) ?? 0,
-          })),
-        },
+        parts: { deleteMany: {}, create: refBuildParts(entries) },
       },
     });
   });
@@ -167,16 +183,10 @@ export async function updateReferenceBuild(id: string, data: ReferenceBuildFormD
 }
 
 export async function deleteReferenceBuild(id: string) {
-  const build = await db.referenceBuild.findUniqueOrThrow({
-    where: { id },
-    select: { pcBuildId: true },
-  });
-
+  const build = await db.referenceBuild.findUniqueOrThrow({ where: { id }, select: { pcBuildId: true } });
   await db.referenceBuild.delete({ where: { id } });
-
   if (build.pcBuildId) {
     await db.pCBuild.delete({ where: { id: build.pcBuildId } });
   }
-
   revalidatePath('/reference-builds');
 }
