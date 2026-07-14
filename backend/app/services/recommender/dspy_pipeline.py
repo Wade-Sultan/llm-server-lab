@@ -16,10 +16,12 @@ Budget allocation:
     from picking a cheaper option (and it should, often).
 
 Status messages:
-    Each step emits two levels of progress via the optional progress_callback:
-      1. A step-start message (before the DB query) from _emit().
-      2. DSPy-native messages (module_start, lm_start) forwarded from
-         BuildStatusProvider through _call_streamified().
+    Each step emits one stable, user-facing progress message up front (before
+    the DB query) via _emit(). DSPy's own per-callback sub-messages
+    (module_start / lm_start) are intentionally swallowed (_noop_status) so the
+    frontend keeps showing that one message for the whole step instead of
+    flickering — e.g. "Building your PC…" stays put through the entire DDR step
+    and only changes when the next step begins.
     The pipeline is fully async — await run_pipeline() from an async context.
 """
 
@@ -379,18 +381,23 @@ def _emit(state: DSPyBuildState, step: str, message: str) -> None:
         state.progress_callback(step, message)
 
 
+def _noop_status(_msg: str) -> None:
+    """Swallow DSPy's per-callback status messages (module_start / lm_start)."""
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Pipeline steps
 # ---------------------------------------------------------------------------
 
 async def _step_ddr(state: DSPyBuildState, session: AsyncSession, budget: dict, program: DecideDDR, recorder: BuildRecorder | None) -> None:
-    _emit(state, "ddr", "Deciding memory generation…")
+    _emit(state, "ddr", "Building your PC…")
     candidates = await get_ddr_candidates(session, budget["cpu"])
     _ensure_candidates("ddr", candidates)
     result = await _run_step(
         recorder,
         program,
-        status_fn=lambda msg: _emit(state, "ddr", msg),
+        status_fn=_noop_status,
         use_cases=state.use_case_summary or str(state.request.use_cases),
         budget_total=state.request.budget_usd,
         candidates=candidates,
@@ -406,7 +413,7 @@ async def _step_cpu(state: DSPyBuildState, session: AsyncSession, budget: dict, 
     result = await _run_step(
         recorder,
         program,
-        status_fn=lambda msg: _emit(state, "cpu", msg),
+        status_fn=_noop_status,
         use_cases=state.use_case_summary or str(state.request.use_cases),
         budget_total=state.request.budget_usd,
         cpu_budget_ceiling=budget["cpu"],
@@ -443,7 +450,7 @@ async def _step_cooler(state: DSPyBuildState, session: AsyncSession, budget: dic
     result = await _run_step(
         recorder,
         program,
-        status_fn=lambda msg: _emit(state, "cooler", msg),
+        status_fn=_noop_status,
         use_cases=state.use_case_summary or str(state.request.use_cases),
         cpu_name=state.cpu_name,
         cpu_tdp_w=state.cpu_tdp_w,
@@ -468,7 +475,7 @@ async def _step_motherboard(state: DSPyBuildState, session: AsyncSession, budget
     result = await _run_step(
         recorder,
         program,
-        status_fn=lambda msg: _emit(state, "motherboard", msg),
+        status_fn=_noop_status,
         use_cases=state.use_case_summary or str(state.request.use_cases),
         cpu_name=state.cpu_name,
         ddr_gen=", ".join(state.cpu_ddr_gens),
@@ -496,7 +503,7 @@ async def _step_ram(state: DSPyBuildState, session: AsyncSession, budget: dict, 
     result = await _run_step(
         recorder,
         program,
-        status_fn=lambda msg: _emit(state, "ram", msg),
+        status_fn=_noop_status,
         use_cases=state.use_case_summary or str(state.request.use_cases),
         ddr_gen=ddr_for_ram,
         budget_ceiling=budget["ram"],
@@ -515,7 +522,7 @@ async def _step_storage(state: DSPyBuildState, session: AsyncSession, budget: di
     result = await _run_step(
         recorder,
         program,
-        status_fn=lambda msg: _emit(state, "storage", msg),
+        status_fn=_noop_status,
         use_cases=state.use_case_summary or str(state.request.use_cases),
         budget_ceiling=budget["storage"],
         candidates=candidates,
@@ -525,7 +532,7 @@ async def _step_storage(state: DSPyBuildState, session: AsyncSession, budget: di
 
 
 async def _step_gpu(state: DSPyBuildState, session: AsyncSession, budget: dict, program: DecideGPU, recorder: BuildRecorder | None) -> None:
-    _emit(state, "gpu", "Finding your GPU…")
+    _emit(state, "gpu", "Choosing GPU…")
     # The main step chooses a chipset; the exact board is resolved later, once
     # the case (length) and PSU (power) are known — see _resolve_gpu_variant.
     candidates = await get_gpu_chipset_candidates(
@@ -535,7 +542,7 @@ async def _step_gpu(state: DSPyBuildState, session: AsyncSession, budget: dict, 
     result = await _run_step(
         recorder,
         program,
-        status_fn=lambda msg: _emit(state, "gpu", msg),
+        status_fn=_noop_status,
         use_cases=state.use_case_summary or str(state.request.use_cases),
         budget_total=state.request.budget_usd,
         gpu_budget_ceiling=budget["gpu"],
@@ -607,7 +614,7 @@ async def _step_psu(state: DSPyBuildState, session: AsyncSession, budget: dict, 
     result = await _run_step(
         recorder,
         program,
-        status_fn=lambda msg: _emit(state, "psu", msg),
+        status_fn=_noop_status,
         required_wattage=min_wattage,
         budget_ceiling=budget["psu"],
         candidates=candidates,
@@ -624,7 +631,7 @@ async def _step_case(state: DSPyBuildState, session: AsyncSession, budget: dict,
     result = await _run_step(
         recorder,
         program,
-        status_fn=lambda msg: _emit(state, "case", msg),
+        status_fn=_noop_status,
         use_cases=state.use_case_summary or str(state.request.use_cases),
         mobo_form_factor=state.mobo_form_factor,
         budget_ceiling=budget["case"],
@@ -644,7 +651,7 @@ async def _step_fans(state: DSPyBuildState, session: AsyncSession, budget: dict,
     result = await _run_step(
         recorder,
         program,
-        status_fn=lambda msg: _emit(state, "fans", msg),
+        status_fn=_noop_status,
         cpu_tdp_w=state.cpu_tdp_w,
         gpu_tdp_w=state.gpu_tdp_w,
         case_included_fans=state.case_included_fans,

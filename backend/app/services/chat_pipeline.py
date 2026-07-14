@@ -648,7 +648,7 @@ async def run_chat_turn(
     # progress events stream through while it runs; if it fails or times out,
     # its result is discarded and the reference build is recommended instead.
 
-    yield {"type": "progress", "step": "resolving", "message": "Selecting your parts…"}
+    yield {"type": "progress", "step": "resolving", "message": "Building your PC…"}
 
     progress_queue: asyncio.Queue = asyncio.Queue()
     ref_task = asyncio.create_task(_resolve_reference_build(profile))
