@@ -117,18 +117,20 @@ def upgrade():
     # ------------------------------------------------------------------
 
     # --- GPU: one chipset per distinct chipset name ---
+    # DISTINCT ON picks one representative row per group key, so array/JSONB
+    # columns (supported_features, benchmark_scores) copy through unchanged —
+    # aggregating them (array_agg(...)[1]) collapses an array column to a scalar.
     op.execute(
         """
         INSERT INTO gpu_chipsets
             (id, name, vram_gb, vram_type, tdp_watts, recommended_psu_watts, pcie_generation,
              base_clock_mhz, boost_clock_mhz, has_ray_tracing, cuda_cores, tensor_cores,
              stream_processors, matrix_cores, supported_features, benchmark_scores)
-        SELECT gen_random_uuid(), chipset,
-               max(vram_gb), max(vram_type), max(tdp_watts), max(recommended_psu_watts),
-               max(pcie_generation), max(base_clock_mhz), max(boost_clock_mhz), bool_or(has_ray_tracing),
-               max(cuda_cores), max(tensor_cores), max(stream_processors), max(matrix_cores),
-               (array_agg(supported_features))[1], (array_agg(benchmark_scores))[1]
-        FROM gpus GROUP BY chipset
+        SELECT DISTINCT ON (chipset)
+               gen_random_uuid(), chipset, vram_gb, vram_type, tdp_watts, recommended_psu_watts,
+               pcie_generation, base_clock_mhz, boost_clock_mhz, has_ray_tracing, cuda_cores,
+               tensor_cores, stream_processors, matrix_cores, supported_features, benchmark_scores
+        FROM gpus ORDER BY chipset, id
         """
     )
     op.add_column("gpus", sa.Column("gpu_chipset_id", sa.UUID(), nullable=True))
@@ -151,13 +153,12 @@ def upgrade():
         INSERT INTO psu_groups
             (id, name, wattage, form_factor, efficiency_rating, modular, is_fanless, fan_size_mm,
              pcie_8pin_connectors, pcie_12pin_connectors, pcie_16pin_connectors, eps_connectors)
-        SELECT gen_random_uuid(),
+        SELECT DISTINCT ON (wattage, efficiency_rating, form_factor)
+               gen_random_uuid(),
                wattage || 'W ' || efficiency_rating || ' ' || form_factor,
-               wattage, form_factor, efficiency_rating,
-               max(modular), bool_or(is_fanless), max(fan_size_mm),
-               max(pcie_8pin_connectors), max(pcie_12pin_connectors), max(pcie_16pin_connectors),
-               max(eps_connectors)
-        FROM psus GROUP BY wattage, efficiency_rating, form_factor
+               wattage, form_factor, efficiency_rating, modular, is_fanless, fan_size_mm,
+               pcie_8pin_connectors, pcie_12pin_connectors, pcie_16pin_connectors, eps_connectors
+        FROM psus ORDER BY wattage, efficiency_rating, form_factor, id
         """
     )
     op.add_column("psus", sa.Column("psu_group_id", sa.UUID(), nullable=True))
@@ -186,12 +187,13 @@ def upgrade():
         INSERT INTO ram_groups
             (id, name, ddr_generation, speed_mhz, capacity_gb, modules, module_capacity_gb,
              cas_latency, voltage, is_ecc)
-        SELECT gen_random_uuid(),
+        SELECT DISTINCT ON (ddr_generation, speed_mhz, capacity_gb, modules)
+               gen_random_uuid(),
                upper(ddr_generation) || '-' || speed_mhz || ' ' || capacity_gb || 'GB (' ||
                    modules || 'x' || (capacity_gb / GREATEST(modules, 1)) || ')',
-               ddr_generation, speed_mhz, capacity_gb, modules,
-               max(module_capacity_gb), max(cas_latency), max(voltage), bool_or(is_ecc)
-        FROM ram GROUP BY ddr_generation, speed_mhz, capacity_gb, modules
+               ddr_generation, speed_mhz, capacity_gb, modules, module_capacity_gb,
+               cas_latency, voltage, is_ecc
+        FROM ram ORDER BY ddr_generation, speed_mhz, capacity_gb, modules, id
         """
     )
     op.rename_table("ram", "ram_kits")
@@ -221,12 +223,12 @@ def upgrade():
         INSERT INTO storage_groups
             (id, name, storage_type, form_factor, interface, capacity_gb, read_speed_mbps,
              write_speed_mbps, has_dram_cache, endurance_tbw, rpm)
-        SELECT gen_random_uuid(),
+        SELECT DISTINCT ON (storage_type, interface, capacity_gb)
+               gen_random_uuid(),
                capacity_gb || 'GB ' || interface || ' ' || storage_type,
-               storage_type, max(form_factor), interface, capacity_gb,
-               max(read_speed_mbps), max(write_speed_mbps), bool_or(has_dram_cache),
-               max(endurance_tbw), max(rpm)
-        FROM storage GROUP BY storage_type, interface, capacity_gb
+               storage_type, form_factor, interface, capacity_gb, read_speed_mbps,
+               write_speed_mbps, has_dram_cache, endurance_tbw, rpm
+        FROM storage ORDER BY storage_type, interface, capacity_gb, id
         """
     )
     op.rename_table("storage", "storage_drives")
