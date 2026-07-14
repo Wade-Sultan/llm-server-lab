@@ -2,9 +2,23 @@ from app.core.db import SessionLocal
 from app.data.refbuilds import BUILDS
 from app.models.pcbuild import BuildComponentRole, BuildPart, BuildStatus, PCBuild, REQUIRED_COMPONENT_BY_ROLE
 from app.models.pcparts import (
-    CPU, CPUCooler, Case, GPU, Motherboard, PCPart, PSU, RAM, Storage,
+    CPU, CPUCooler, Case, GPU, GPUChipset, Motherboard, PCPart, PSU, PSUGroup,
+    RAMGroup, RAMKit, StorageDrive, StorageGroup,
 )
 from app.models.reference_build import ReferenceBuild, ReferenceBuildPart
+
+
+def _get_or_create_group(db, model, name: str, defaults: dict):
+    """Dedupe a component group by its (spec-derived) name across builds — the
+    same chipset / RAM spec / drive spec / PSU spec used in multiple reference
+    builds resolves to one group row."""
+    existing = db.query(model).filter_by(name=name).first()
+    if existing:
+        return existing
+    obj = model(name=name, **defaults)
+    db.add(obj)
+    db.flush()
+    return obj
 
 
 _COMPONENT_TO_ROLE: dict[str, BuildComponentRole] = {
@@ -66,41 +80,62 @@ def _create_typed_part(db, part: dict) -> PCPart:
             chipset=part.get("chipset"),
         )
     elif component == "RAM":
-        obj = RAM(
-            **common,
-            ddr_generation=part["ddr_generation"],
-            speed_mhz=part["speed_mhz"],
-            modules=part["modules"],
-            capacity_gb=part["capacity_gb"],
+        per_module = part["capacity_gb"] // part["modules"] if part["modules"] else part["capacity_gb"]
+        grp = _get_or_create_group(
+            db, RAMGroup,
+            name=f'{part["ddr_generation"].upper()}-{part["speed_mhz"]} '
+                 f'{part["capacity_gb"]}GB ({part["modules"]}x{per_module})',
+            defaults={
+                "ddr_generation": part["ddr_generation"],
+                "speed_mhz": part["speed_mhz"],
+                "modules": part["modules"],
+                "capacity_gb": part["capacity_gb"],
+            },
         )
+        obj = RAMKit(**common, ram_group_id=grp.id)
     elif component == "Storage":
-        obj = Storage(
-            **common,
-            storage_type=part["storage_type"],
-            form_factor=part["form_factor"],
-            interface=part["interface"],
-            capacity_gb=part["capacity_gb"],
-            read_speed_mbps=part.get("read_speed_mbps"),
-            write_speed_mbps=part.get("write_speed_mbps"),
+        grp = _get_or_create_group(
+            db, StorageGroup,
+            name=f'{part["capacity_gb"]}GB {part["interface"]} {part["storage_type"]}',
+            defaults={
+                "storage_type": part["storage_type"],
+                "form_factor": part["form_factor"],
+                "interface": part["interface"],
+                "capacity_gb": part["capacity_gb"],
+                "read_speed_mbps": part.get("read_speed_mbps"),
+                "write_speed_mbps": part.get("write_speed_mbps"),
+            },
         )
+        obj = StorageDrive(**common, storage_group_id=grp.id)
     elif component == "GPU":
+        chip = _get_or_create_group(
+            db, GPUChipset,
+            name=part["chipset"],
+            defaults={
+                "vram_gb": part["vram_gb"],
+                "tdp_watts": part["tdp_watts"],
+                "recommended_psu_watts": part.get("recommended_psu_watts"),
+                "vram_type": part.get("vram_type"),
+                "pcie_generation": part.get("pcie_generation"),
+            },
+        )
         obj = GPU(
             **common,
-            chipset=part["chipset"],
+            gpu_chipset_id=chip.id,
             brand=part["gpu_brand"],
-            vram_gb=part["vram_gb"],
-            tdp_watts=part["tdp_watts"],
             length_mm=part["length_mm"],
-            vram_type=part.get("vram_type"),
-            pcie_generation=part.get("pcie_generation"),
         )
     elif component == "PSU":
-        obj = PSU(
-            **common,
-            wattage=part["wattage"],
-            form_factor=part["form_factor"],
-            efficiency_rating=part["efficiency_rating"],
+        grp = _get_or_create_group(
+            db, PSUGroup,
+            name=f'{part["wattage"]}W {part["efficiency_rating"]} {part["form_factor"]}',
+            defaults={
+                "wattage": part["wattage"],
+                "form_factor": part["form_factor"],
+                "efficiency_rating": part["efficiency_rating"],
+            },
         )
+        obj = PSU(**common, psu_group_id=grp.id)
     elif component == "Case":
         obj = Case(
             **common,

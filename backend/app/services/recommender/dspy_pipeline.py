@@ -348,8 +348,12 @@ class DSPyBuildState:
     mobo_m2_slots: int = 2
     mobo_sata_ports: int = 4
 
+    # For RAM/Storage/PSU/GPU the DSPy step picks a *group*; a deterministic step
+    # then resolves the cheapest exact SKU (*_name, used for build assembly).
+    ram_group: str = ""
     ram_name: str = ""
 
+    storage_group: str = ""
     storage_name: str = ""
 
     # gpu_chipset is chosen by the main DSPy step; gpu_name is the exact board,
@@ -359,6 +363,7 @@ class DSPyBuildState:
     gpu_tdp_w: int = 0
     gpu_required: bool = True
 
+    psu_group: str = ""
     psu_name: str = ""
     psu_form_factor: str = "atx"
 
@@ -509,8 +514,23 @@ async def _step_ram(state: DSPyBuildState, session: AsyncSession, budget: dict, 
         budget_ceiling=budget["ram"],
         candidates=candidates,
     )
-    state.ram_name = result.ram_name
+    state.ram_group = result.ram_group
     state.thresholds["ram"] = result.reconsideration_threshold
+    # Resolve the cheapest kit in the chosen group (deterministic; no LLM call).
+    kit = _cheapest_exact(await crud_components.get_ram_kits_for_group(session, result.ram_group))
+    if kit is not None:
+        state.ram_name = kit.name
+
+
+def _cheapest_exact(exacts: list):
+    """Cheapest active exact SKU by street price (None-priced last). Used by the
+    RAM/Storage/PSU group→exact resolution (GPU has its own fit-aware resolver)."""
+    if not exacts:
+        return None
+    return min(
+        exacts,
+        key=lambda e: e.street_price_cents if e.street_price_cents is not None else float("inf"),
+    )
 
 
 async def _step_storage(state: DSPyBuildState, session: AsyncSession, budget: dict, program: DecideStorage, recorder: BuildRecorder | None) -> None:
@@ -527,8 +547,11 @@ async def _step_storage(state: DSPyBuildState, session: AsyncSession, budget: di
         budget_ceiling=budget["storage"],
         candidates=candidates,
     )
-    state.storage_name = result.storage_name
+    state.storage_group = result.storage_group
     state.thresholds["storage"] = result.reconsideration_threshold
+    drive = _cheapest_exact(await crud_components.get_storage_drives_for_group(session, result.storage_group))
+    if drive is not None:
+        state.storage_name = drive.name
 
 
 async def _step_gpu(state: DSPyBuildState, session: AsyncSession, budget: dict, program: DecideGPU, recorder: BuildRecorder | None) -> None:
@@ -552,10 +575,10 @@ async def _step_gpu(state: DSPyBuildState, session: AsyncSession, budget: dict, 
     if state.gpu_required:
         state.gpu_chipset = result.gpu_chipset
         state.thresholds["gpu"] = result.reconsideration_threshold
-        # Size the PSU against the chipset's highest-TDP board so there's headroom
-        # regardless of which specific board the resolver later picks.
+        # Size the PSU against the chipset's TDP (intrinsic to the chip, on the
+        # GPUChipset group) so there's headroom regardless of which board resolves.
         variants = await crud_components.get_gpus_for_chipset(session, result.gpu_chipset)
-        tdps = [v.tdp_watts for v in variants if v.tdp_watts]
+        tdps = [v.chipset.tdp_watts for v in variants if v.chipset and v.chipset.tdp_watts]
         if tdps:
             state.gpu_tdp_w = max(tdps)
 
@@ -577,13 +600,15 @@ async def _resolve_gpu_variant(state: DSPyBuildState, session: AsyncSession) -> 
         return
 
     psu = await crud_components.get_psu_by_name(session, state.psu_name) if state.psu_name else None
-    psu_watts = psu.wattage if psu else None
+    psu_watts = psu.group.wattage if (psu and psu.group) else None
     max_len = state.case_max_gpu_length_mm
 
     def _fits(v) -> bool:
+        # length_mm is per-board (exact); recommended_psu_watts is chip-intrinsic (group).
         if max_len is not None and v.length_mm and v.length_mm > max_len:
             return False
-        if psu_watts is not None and v.recommended_psu_watts and psu_watts < v.recommended_psu_watts:
+        rec = v.chipset.recommended_psu_watts if v.chipset else None
+        if psu_watts is not None and rec and psu_watts < rec:
             return False
         return True
 
@@ -598,8 +623,9 @@ async def _resolve_gpu_variant(state: DSPyBuildState, session: AsyncSession) -> 
             state.gpu_chipset, max_len, psu_watts, chosen.name,
         )
     state.gpu_name = chosen.name
-    if chosen.tdp_watts:
-        state.gpu_tdp_w = chosen.tdp_watts
+    tdp = chosen.chipset.tdp_watts if chosen.chipset else None
+    if tdp:
+        state.gpu_tdp_w = tdp
 
 
 async def _step_psu(state: DSPyBuildState, session: AsyncSession, budget: dict, program: DecidePSU, recorder: BuildRecorder | None) -> None:
@@ -619,7 +645,10 @@ async def _step_psu(state: DSPyBuildState, session: AsyncSession, budget: dict, 
         budget_ceiling=budget["psu"],
         candidates=candidates,
     )
-    state.psu_name = result.psu_name
+    state.psu_group = result.psu_group
+    unit = _cheapest_exact(await crud_components.get_psus_for_group(session, result.psu_group))
+    if unit is not None:
+        state.psu_name = unit.name
 
 
 async def _step_case(state: DSPyBuildState, session: AsyncSession, budget: dict, program: DecideCase, recorder: BuildRecorder | None) -> None:

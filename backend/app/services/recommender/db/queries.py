@@ -17,7 +17,7 @@ from collections import defaultdict
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.crud import components as crud
-from app.models.pcparts import CPU, GPU, Case, CPUCooler, Fan, Motherboard, PSU, RAM, Storage
+from app.models.pcparts import CPU, Case, CPUCooler, Fan, Motherboard
 from app.schemas.chat import UserPreferences
 
 
@@ -73,50 +73,82 @@ def _serialize_motherboard(p: Motherboard) -> dict:
     }
 
 
-def _serialize_ram(p: RAM) -> dict:
+# --- Group serializers (GPU/RAM/Storage/PSU) ------------------------------
+# For these four types the main DSPy step chooses a *group* (deduped intrinsic
+# spec); the exact SKU is resolved deterministically afterwards. Each serializer
+# takes the group object and emits its intrinsic spec; _aggregate_groups folds
+# the affordable exacts into one row per group, adding the cheapest board's price
+# as `starting_price_usd` (what the resolver will actually buy).
+
+def _serialize_gpu_chipset(g) -> dict:  # g: GPUChipset
     return {
-        "name": p.name,
-        "ddr_gen": p.ddr_generation,
-        "capacity_gb": p.capacity_gb,
-        "speed_mhz": p.speed_mhz,
-        "kit_count": p.modules,
-        "street_price_usd": _price(p),
+        "chipset": g.name,
+        "vram_gb": g.vram_gb,
+        "tdp_w": g.tdp_watts,
+        "has_ray_tracing": g.has_ray_tracing,
     }
 
 
-def _serialize_storage(p: Storage) -> dict:
+def _serialize_ram_group(g) -> dict:  # g: RAMGroup
     return {
-        "name": p.name,
-        "interface": p.interface,
-        "capacity_gb": p.capacity_gb,
-        "seq_read_mbs": p.read_speed_mbps,
-        "seq_write_mbs": p.write_speed_mbps,
-        "street_price_usd": _price(p),
+        "ram_group": g.name,
+        "ddr_gen": g.ddr_generation,
+        "capacity_gb": g.capacity_gb,
+        "speed_mhz": g.speed_mhz,
+        "kit_count": g.modules,
+        "cas_latency": g.cas_latency,
     }
 
 
-def _serialize_gpu(p: GPU) -> dict:
+def _serialize_storage_group(g) -> dict:  # g: StorageGroup
     return {
-        "name": p.name,
-        "brand": p.brand,
-        "vram_gb": p.vram_gb,
-        "tdp_w": p.tdp_watts,
-        "length_mm": p.length_mm,
-        "pcie_slots": p.width_slots,
-        "street_price_usd": _price(p),
-        "used_market_viable": p.used_market_viable,
+        "storage_group": g.name,
+        "type": g.storage_type,
+        "interface": g.interface,
+        "capacity_gb": g.capacity_gb,
+        "seq_read_mbs": g.read_speed_mbps,
+        "seq_write_mbs": g.write_speed_mbps,
     }
 
 
-def _serialize_psu(p: PSU) -> dict:
+def _serialize_psu_group(g) -> dict:  # g: PSUGroup
     return {
-        "name": p.name,
-        "wattage": p.wattage,
-        "efficiency": p.efficiency_rating,
-        "modular": p.modular,
-        "form_factor": p.form_factor,
-        "street_price_usd": _price(p),
+        "psu_group": g.name,
+        "wattage": g.wattage,
+        "efficiency": g.efficiency_rating,
+        "form_factor": g.form_factor,
+        "modular": g.modular,
     }
+
+
+def _aggregate_groups(exacts: list, group_of, serialize_group, extra=None) -> list[dict]:
+    """Collapse affordable exacts into one candidate row per group: the group's
+    intrinsic spec + `starting_price_usd` (cheapest exact) + `used_market_viable`
+    (any exact). `extra(row, exact)` can surface an exact-level field on first
+    sight of a group (e.g. GPU brand, which now lives on the exact). Rows are
+    sorted cheapest-first."""
+    by_id: dict = {}
+    for e in exacts:
+        g = group_of(e)
+        if g is None:
+            continue
+        price = _price(e)
+        row = by_id.get(g.id)
+        if row is None:
+            row = serialize_group(g)
+            row["starting_price_usd"] = price
+            row["used_market_viable"] = bool(e.used_market_viable)
+            if extra is not None:
+                extra(row, e)
+            by_id[g.id] = row
+            continue
+        if price is not None and (row["starting_price_usd"] is None or price < row["starting_price_usd"]):
+            row["starting_price_usd"] = price
+        row["used_market_viable"] = row["used_market_viable"] or bool(e.used_market_viable)
+    return sorted(
+        by_id.values(),
+        key=lambda r: (r["starting_price_usd"] is None, r["starting_price_usd"] or 0),
+    )
 
 
 def _serialize_case(p: Case) -> dict:
@@ -190,8 +222,11 @@ async def get_ram_candidates(
     ddr_gen: str,
     budget_ceiling_usd: int,
 ) -> str:
-    parts = await crud.get_ram_candidates(session, ddr_gen, budget_ceiling_usd)
-    return _to_json(parts, _serialize_ram)
+    """One candidate per RAM group (deduped intrinsic spec); the exact kit is
+    resolved deterministically after the group is chosen."""
+    exacts = await crud.get_ram_candidates(session, ddr_gen, budget_ceiling_usd)
+    rows = _aggregate_groups(exacts, lambda e: e.group, _serialize_ram_group)
+    return json.dumps(rows, indent=None)
 
 
 async def get_storage_candidates(
@@ -200,18 +235,10 @@ async def get_storage_candidates(
     mobo_m2_slots: int,
     mobo_sata_ports: int,
 ) -> str:
-    parts = await crud.get_storage_candidates(session, budget_ceiling_usd, mobo_m2_slots, mobo_sata_ports)
-    return _to_json(parts, _serialize_storage)
-
-
-async def get_gpu_candidates(
-    session: AsyncSession,
-    budget_ceiling_usd: int,
-    case_max_gpu_length_mm: int | None,
-    preferences: UserPreferences,
-) -> str:
-    parts = await crud.get_gpu_candidates(session, budget_ceiling_usd, case_max_gpu_length_mm, preferences)
-    return _to_json(parts, _serialize_gpu)
+    """One candidate per storage group (deduped); exact drive resolved after."""
+    exacts = await crud.get_storage_candidates(session, budget_ceiling_usd, mobo_m2_slots, mobo_sata_ports)
+    rows = _aggregate_groups(exacts, lambda e: e.group, _serialize_storage_group)
+    return json.dumps(rows, indent=None)
 
 
 async def get_gpu_chipset_candidates(
@@ -219,41 +246,18 @@ async def get_gpu_chipset_candidates(
     budget_ceiling_usd: int,
     preferences: UserPreferences,
 ) -> str:
-    """Aggregate affordable GPU boards into one entry per chipset for the main
-    GPU step, which chooses at the chipset level. Board-specific attributes
-    (length, exact price) aren't surfaced here — the exact board is resolved
-    deterministically later. Intrinsic stats (vram, tdp) are shared across a
-    chipset's boards; tdp_w takes the max so PSU sizing has headroom, and
+    """One candidate per GPU chipset (group) for the main GPU step, which chooses
+    at the chipset level; the exact board is resolved deterministically later
+    (once case length + PSU are known). Intrinsic spec (vram, tdp) comes from the
+    chipset; `brand` from a representative board (it lives on the exact); and
     starting_price_usd is the cheapest board (what the resolver will buy)."""
     # Length can't be constrained yet (the case isn't chosen), so pass None.
-    parts = await crud.get_gpu_candidates(session, budget_ceiling_usd, None, preferences)
-
-    by_chipset: dict[str, dict] = {}
-    for p in parts:
-        key = p.chipset or p.name
-        price = _price(p)
-        entry = by_chipset.get(key)
-        if entry is None:
-            by_chipset[key] = {
-                "chipset": key,
-                "brand": p.brand,
-                "vram_gb": p.vram_gb,
-                "tdp_w": p.tdp_watts,
-                "starting_price_usd": price,
-                "used_market_viable": bool(p.used_market_viable),
-            }
-            continue
-        if p.vram_gb and (entry["vram_gb"] is None or p.vram_gb > entry["vram_gb"]):
-            entry["vram_gb"] = p.vram_gb
-        if p.tdp_watts and (entry["tdp_w"] is None or p.tdp_watts > entry["tdp_w"]):
-            entry["tdp_w"] = p.tdp_watts
-        if price is not None and (entry["starting_price_usd"] is None or price < entry["starting_price_usd"]):
-            entry["starting_price_usd"] = price
-        entry["used_market_viable"] = entry["used_market_viable"] or bool(p.used_market_viable)
-
-    rows = sorted(
-        by_chipset.values(),
-        key=lambda r: (r["starting_price_usd"] is None, r["starting_price_usd"] or 0),
+    exacts = await crud.get_gpu_candidates(session, budget_ceiling_usd, None, preferences)
+    rows = _aggregate_groups(
+        exacts,
+        lambda e: e.chipset,
+        _serialize_gpu_chipset,
+        extra=lambda row, e: row.setdefault("brand", e.brand),
     )
     return json.dumps(rows, indent=None)
 
@@ -264,8 +268,10 @@ async def get_psu_candidates(
     budget_ceiling_usd: int,
     psu_form_factor: str,
 ) -> str:
-    parts = await crud.get_psu_candidates(session, min_wattage, budget_ceiling_usd, psu_form_factor)
-    return _to_json(parts, _serialize_psu)
+    """One candidate per PSU group (deduped); exact unit resolved after."""
+    exacts = await crud.get_psu_candidates(session, min_wattage, budget_ceiling_usd, psu_form_factor)
+    rows = _aggregate_groups(exacts, lambda e: e.group, _serialize_psu_group)
+    return json.dumps(rows, indent=None)
 
 
 async def get_case_candidates(
@@ -319,7 +325,8 @@ async def get_ddr_candidates(session: AsyncSession, budget_ceiling_usd: int) -> 
 
     for p in all_ram:
         price = _price(p)
-        gen = p.ddr_generation
+        # ddr generation now lives on the RAM group (eager-loaded); price on the kit.
+        gen = p.group.ddr_generation if p.group else None
         if gen and price:
             ram_prices[gen].append(price)
 

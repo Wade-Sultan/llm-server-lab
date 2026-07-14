@@ -122,6 +122,112 @@ class PCPart(Base):
     }
 
 
+# ---------------------------------------------------------------------------
+# Component groups
+# ---------------------------------------------------------------------------
+# A "group" holds the intrinsic spec shared across every purchasable variant of
+# the same part (e.g. one GPUChipset row per "RTX 5080", shared by every MSI /
+# Gigabyte / PNY board). Groups are NOT pc_parts rows — they carry no price and
+# no listings; those live on the exact (the PCPart subclass) that FKs the group.
+
+
+class GPUChipset(Base):
+    __tablename__ = "gpu_chipsets"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
+    name = Column(String(100), nullable=False)  # e.g. "RTX 5080"
+
+    vram_gb = Column(Integer, nullable=False)
+    vram_type = Column(String(20), nullable=True)
+    tdp_watts = Column(Integer, nullable=False)
+    recommended_psu_watts = Column(Integer, nullable=True)
+    pcie_generation = Column(Integer, nullable=True)
+    base_clock_mhz = Column(Integer, nullable=True)
+    boost_clock_mhz = Column(Integer, nullable=True)
+    has_ray_tracing = Column(Boolean, nullable=True)
+    cuda_cores = Column(Integer, nullable=True)      # Nvidia
+    tensor_cores = Column(Integer, nullable=True)    # Nvidia
+    stream_processors = Column(Integer, nullable=True)  # AMD
+    matrix_cores = Column(Integer, nullable=True)    # AMD
+    supported_features = Column(ARRAY(String), nullable=True)
+    benchmark_scores = Column(JSONB, nullable=True)
+
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), nullable=False,
+                        server_default=func.now(), onupdate=func.now())
+
+    variants = relationship("GPU", back_populates="chipset")
+
+
+class PSUGroup(Base):
+    __tablename__ = "psu_groups"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
+    name = Column(String(150), nullable=False)  # e.g. "850W 80+ Gold ATX Fully-Modular"
+
+    wattage = Column(Integer, nullable=False)
+    form_factor = Column(String(10), nullable=False)
+    efficiency_rating = Column(String(30), nullable=False)
+    modular = Column(String(10), nullable=True)
+    is_fanless = Column(Boolean, nullable=True)
+    fan_size_mm = Column(Integer, nullable=True)
+    pcie_8pin_connectors = Column(Integer, nullable=True)
+    pcie_12pin_connectors = Column(Integer, nullable=True)
+    pcie_16pin_connectors = Column(Integer, nullable=True)
+    eps_connectors = Column(Integer, nullable=True)
+
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), nullable=False,
+                        server_default=func.now(), onupdate=func.now())
+
+    variants = relationship("PSU", back_populates="group")
+
+
+class RAMGroup(Base):
+    __tablename__ = "ram_groups"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
+    name = Column(String(150), nullable=False)  # e.g. "DDR5-6000 CL30 32GB (2x16)"
+
+    ddr_generation = Column(String(10), nullable=False)
+    speed_mhz = Column(Integer, nullable=False)
+    capacity_gb = Column(Integer, nullable=False)
+    modules = Column(Integer, nullable=False)
+    module_capacity_gb = Column(Integer, nullable=True)
+    cas_latency = Column(Integer, nullable=True)
+    voltage = Column(Float, nullable=True)
+    is_ecc = Column(Boolean, nullable=True)
+
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), nullable=False,
+                        server_default=func.now(), onupdate=func.now())
+
+    variants = relationship("RAMKit", back_populates="group")
+
+
+class StorageGroup(Base):
+    __tablename__ = "storage_groups"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
+    name = Column(String(150), nullable=False)  # e.g. "2TB Gen4 NVMe (7000/6900 MB/s)"
+
+    storage_type = Column(String(20), nullable=False)
+    form_factor = Column(String(20), nullable=False)
+    interface = Column(String(20), nullable=False)
+    capacity_gb = Column(Integer, nullable=False)
+    read_speed_mbps = Column(Integer, nullable=True)
+    write_speed_mbps = Column(Integer, nullable=True)
+    has_dram_cache = Column(Boolean, nullable=True)
+    endurance_tbw = Column(Integer, nullable=True)
+    rpm = Column(Integer, nullable=True)
+
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), nullable=False,
+                        server_default=func.now(), onupdate=func.now())
+
+    variants = relationship("StorageDrive", back_populates="group")
+
+
 class CPU(PCPart):
     __tablename__ = "cpus"
 
@@ -254,73 +360,70 @@ class Motherboard(PCPart):
     __mapper_args__ = {"polymorphic_identity": "motherboard"}
 
 
-class RAM(PCPart):
-    __tablename__ = "ram"
+class RAMKit(PCPart):
+    __tablename__ = "ram_kits"
 
     id = Column(
         UUID(as_uuid=True),
         ForeignKey("pc_parts.id", ondelete="CASCADE"),
         primary_key=True,
     )
+    ram_group_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("ram_groups.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
 
-    # Compatability Requirements
-    ddr_generation = Column(String(10), nullable=False)
-    speed_mhz = Column(Integer, nullable=False)
-    modules = Column(Integer, nullable=False)
-    capacity_gb = Column(Integer, nullable=False)
-    height_mm = Column(Integer, nullable=True)  
-
-    # Other
-    module_capacity_gb = Column(Integer, nullable=True)
-    cas_latency = Column(Integer, nullable=True)
-    voltage = Column(Float, nullable=True)
+    # Per-SKU variant fields (intrinsic spec lives on RAMGroup)
+    height_mm = Column(Integer, nullable=True)
     has_rgb = Column(Boolean, nullable=True)
-    is_ecc = Column(Boolean, nullable=True)
+
+    group = relationship("RAMGroup", back_populates="variants")
 
     @property
     def specs(self) -> dict:
+        g = self.group
         return {
-            "ddr_gen": self.ddr_generation,
-            "capacity_gb": self.capacity_gb,
-            "speed_mhz": self.speed_mhz,
-            "kit_count": self.modules,
+            "ddr_gen": g.ddr_generation if g else None,
+            "capacity_gb": g.capacity_gb if g else None,
+            "speed_mhz": g.speed_mhz if g else None,
+            "kit_count": g.modules if g else None,
         }
 
-    __mapper_args__ = {"polymorphic_identity": "ram"}
+    __mapper_args__ = {"polymorphic_identity": "ramkit"}
 
 
-class Storage(PCPart):
-    __tablename__ = "storage"
+class StorageDrive(PCPart):
+    __tablename__ = "storage_drives"
 
     id = Column(
         UUID(as_uuid=True),
         ForeignKey("pc_parts.id", ondelete="CASCADE"),
         primary_key=True,
     )
+    storage_group_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("storage_groups.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
 
-    # Compatability Requirements
-    storage_type = Column(String(20), nullable=False)
-    form_factor = Column(String(20), nullable=False)
-    interface = Column(String(20), nullable=False) 
-    capacity_gb = Column(Integer, nullable=False) 
-
-    # Other
-    read_speed_mbps = Column(Integer, nullable=True)
-    write_speed_mbps = Column(Integer, nullable=True)
-    has_dram_cache = Column(Boolean, nullable=True)
-    endurance_tbw = Column(Integer, nullable=True)
-    rpm = Column(Integer, nullable=True)  
+    # All intrinsic spec lives on StorageGroup; a drive differs only by
+    # product name / price / listings.
+    group = relationship("StorageGroup", back_populates="variants")
 
     @property
     def specs(self) -> dict:
+        g = self.group
         return {
-            "interface": self.interface,
-            "capacity_gb": self.capacity_gb,
-            "seq_read_mbs": self.read_speed_mbps,
-            "seq_write_mbs": self.write_speed_mbps,
+            "interface": g.interface if g else None,
+            "capacity_gb": g.capacity_gb if g else None,
+            "seq_read_mbs": g.read_speed_mbps if g else None,
+            "seq_write_mbs": g.write_speed_mbps if g else None,
         }
 
-    __mapper_args__ = {"polymorphic_identity": "storage"}
+    __mapper_args__ = {"polymorphic_identity": "storagedrive"}
 
 
 class GPU(PCPart):
@@ -332,48 +435,31 @@ class GPU(PCPart):
         primary_key=True,
     )
 
-    # Compatability Requirements
-    chipset = Column(String(50), nullable=False)
-    brand = Column(String(20), nullable=False)
-    vram_gb = Column(Integer, nullable=False)
-    tdp_watts = Column(Integer, nullable=False)
-    length_mm = Column(Integer, nullable=False)
-    pcie_power_pins = Column(String(50), nullable=True)
-    recommended_psu_watts = Column(Integer, nullable=True)
-    supported_features = Column(ARRAY(String), nullable=True) # e.g. ["dx12_ultimate", "vulkan_rt", "nvenc", "mesh_shaders"] (for certain games)
-
-    # Validated in benchmarks.py
-    benchmark_scores = Column(
-        JSONB, nullable=True,
-        doc='e.g. {"timespy": 22400, "port_royal": 14200, "speed_way": 5800, ...}',
+    gpu_chipset_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("gpu_chipsets.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
     )
 
-    # Other
-    vram_type = Column(String(20), nullable=True)
+    # Per-board variant fields (chip-intrinsic spec lives on GPUChipset)
+    brand = Column(String(20), nullable=False)
+    length_mm = Column(Integer, nullable=False)
     width_slots = Column(Float, nullable=True)
-    pcie_generation = Column(Integer, nullable=True)
-    base_clock_mhz = Column(Integer, nullable=True)
-    boost_clock_mhz = Column(Integer, nullable=True)
-    has_ray_tracing = Column(Boolean, nullable=True)
-
-    # Nvidia
-    cuda_cores = Column(Integer, nullable=True)
-    tensor_cores = Column(Integer, nullable=True)
-
-    # AMD
-    stream_processors = Column(Integer, nullable=True)
-    matrix_cores = Column(Integer, nullable=True)
-
+    pcie_power_pins = Column(String(50), nullable=True)
     display_outputs = Column(Text, nullable=True)
     hdmi_version = Column(Text, nullable=True)
     dp_version = Column(Text, nullable=True)
 
+    chipset = relationship("GPUChipset", back_populates="variants")
+
     @property
     def specs(self) -> dict:
+        c = self.chipset
         return {
             "brand": self.brand,
-            "vram_gb": self.vram_gb,
-            "tdp_w": self.tdp_watts,
+            "vram_gb": c.vram_gb if c else None,
+            "tdp_w": c.tdp_watts if c else None,
             "length_mm": self.length_mm,
             "pcie_slots": self.width_slots,
         }
@@ -390,28 +476,26 @@ class PSU(PCPart):
         primary_key=True,
     )
 
-    # Compatability Requirements
-    wattage = Column(Integer, nullable=False)
-    form_factor = Column(String(10), nullable=False)
-    efficiency_rating = Column(String(30), nullable=False)
-    pcie_8pin_connectors = Column(Integer, nullable=True) # Needed for GPU
-    pcie_12pin_connectors = Column(Integer, nullable=True) # For the latest GPUs
-    pcie_16pin_connectors = Column(Integer, nullable=True)
-    depth_mm = Column(Integer, nullable=True) 
+    psu_group_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("psu_groups.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
 
-    # Other
-    modular = Column(String(10), nullable=True)
-    eps_connectors = Column(Integer, nullable=True)
-    fan_size_mm = Column(Integer, nullable=True)
-    is_fanless = Column(Boolean, nullable=True)
+    # Per-SKU variant field (electrical spec lives on PSUGroup)
+    depth_mm = Column(Integer, nullable=True)
+
+    group = relationship("PSUGroup", back_populates="variants")
 
     @property
     def specs(self) -> dict:
+        g = self.group
         return {
-            "wattage": self.wattage,
-            "efficiency": self.efficiency_rating,
-            "modular": self.modular,
-            "form_factor": self.form_factor,
+            "wattage": g.wattage if g else None,
+            "efficiency": g.efficiency_rating if g else None,
+            "modular": g.modular if g else None,
+            "form_factor": g.form_factor if g else None,
         }
 
     __mapper_args__ = {"polymorphic_identity": "psu"}

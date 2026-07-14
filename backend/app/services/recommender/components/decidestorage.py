@@ -9,21 +9,25 @@ WEIGHTS_PATH = Path(__file__).parent / "weights" / "decidestorage.json"
  
 class StorageSelection(dspy.Signature):
     """
-    Select the best storage option for this build from the given candidates.
- 
-    Interface generation is a value question, not just a spec question: Gen5
-    costs more and runs hotter with minimal gaming benefit. Recommend based on
-    workload, not on what's newest. Capacity is often more valuable than speed.
+    Select the best storage *group* (spec) for this build from the candidates.
+
+    Each candidate is a storage spec (interface / capacity / speeds), not a
+    specific product — the exact branded drive is resolved deterministically
+    afterwards. Choose at the spec level here. Interface generation is a value
+    question, not just a spec question: Gen5 costs more and runs hotter with
+    minimal gaming benefit. Recommend based on workload, not on what's newest.
+    Capacity is often more valuable than speed.
     """
- 
+
     use_cases: str = dspy.InputField(desc="User's use cases and preferences summary")
     budget_ceiling: int = dspy.InputField(desc="Maximum to spend on storage in USD")
     candidates: str = dspy.InputField(
-        desc="JSON list of compatible storage options. Fields: name, interface, "
-             "capacity_gb, seq_read_mbs, seq_write_mbs, street_price_usd"
+        desc="JSON list of storage groups with the cheapest drive price per group. "
+             "Fields: storage_group, type, interface, capacity_gb, seq_read_mbs, "
+             "seq_write_mbs, starting_price_usd"
     )
- 
-    storage_name: str = dspy.OutputField(desc="Exact product name of the chosen storage")
+
+    storage_group: str = dspy.OutputField(desc="Exact storage_group label of the chosen spec, matching a candidate")
     reason: str = dspy.OutputField(
         desc="1-2 sentences. Address whether the interface tier is justified."
     )
@@ -36,9 +40,11 @@ class DecideStorage(dspy.Module):
     # Telemetry metadata — bump signature_version only when this signature's
     # input/output fields change shape (GEPA needs a consistent field shape).
     signature_name = "DecideStorage"
-    signature_version = 1
+    # v2: chooses a storage group (spec), not an exact drive name; the branded
+    # drive is resolved deterministically after.
+    signature_version = 2
     category = "storage"
-    output_name_field = "storage_name"
+    output_name_field = "storage_group"
 
     def __init__(self) -> None:
         self.chain = dspy.ChainOfThought(StorageSelection)
