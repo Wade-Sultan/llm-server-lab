@@ -186,11 +186,22 @@ async def extract_profile(
 
     games = [g.strip() for g in result.games.split(",") if g.strip()]
     workloads = [w.strip() for w in result.workloads.split(",") if w.strip()]
-    gaming_resolution = None if result.gaming_resolution == "none" else result.gaming_resolution
+
+    def _opt(value: str) -> str | None:
+        """Map the extraction model's 'none'/empty sentinel to a real None."""
+        v = (value or "").strip()
+        return None if not v or v.lower() == "none" else v
 
     return BuildProfile(
         primary_use=result.primary_use,
-        gaming_resolution=gaming_resolution,
+        gaming_resolution=_opt(result.gaming_resolution),
+        gaming_fps=_opt(result.gaming_fps),
+        streaming_style=_opt(result.streaming_style),
+        ai_workload=_opt(result.ai_workload),
+        ai_model_scale=_opt(result.ai_model_scale),
+        editing_resolution=_opt(result.editing_resolution),
+        rendering_software=_opt(result.rendering_software),
+        workload_intensity=_opt(result.workload_intensity),
         budget_tier=result.budget_tier,
         games=games,
         workloads=workloads,
@@ -217,6 +228,28 @@ short, warm lead-in message:
 """
 
 
+def _profile_details(profile: BuildProfile) -> str:
+    """Render the use-case-specific profile fields that were actually inferred."""
+    bits = []
+    if profile.gaming_resolution:
+        bits.append(f"resolution: {profile.gaming_resolution}")
+    if profile.gaming_fps:
+        bits.append(f"target fps: {profile.gaming_fps}")
+    if profile.streaming_style:
+        bits.append(f"streaming style: {profile.streaming_style}")
+    if profile.ai_workload:
+        bits.append(f"AI workload: {profile.ai_workload}")
+    if profile.ai_model_scale:
+        bits.append(f"model scale: {profile.ai_model_scale}")
+    if profile.editing_resolution:
+        bits.append(f"footage resolution: {profile.editing_resolution}")
+    if profile.rendering_software:
+        bits.append(f"rendering software: {profile.rendering_software}")
+    if profile.workload_intensity:
+        bits.append(f"workload intensity: {profile.workload_intensity}")
+    return "; ".join(bits) if bits else "N/A"
+
+
 def _format_build_context(
     profile: BuildProfile,
     build_key: str,
@@ -230,7 +263,7 @@ def _format_build_context(
     return f"""\
 USER PROFILE:
   Primary use: {profile.primary_use}
-  Gaming resolution: {profile.gaming_resolution or "N/A"}
+  Use-case details: {_profile_details(profile)}
   Budget tier: {profile.budget_tier}
   Games: {", ".join(profile.games) if profile.games else "N/A"}
   Workloads: {", ".join(profile.workloads) if profile.workloads else "N/A"}
@@ -303,9 +336,17 @@ _ELICIT_SYSTEM = """\
 You are Palladium's friendly intake assistant. Learn the user's needs to recommend a PC build.
 
 Determine:
-1. Primary use case (gaming, video editing, AI/ML, or general productivity)
-2. For gaming: target resolution and game types
-3. Budget expectations (even vague is fine)
+1. Primary use case (gaming, streaming, video editing, 3D rendering, AI/ML,
+   software development, music production, or general productivity)
+2. For gaming (or streaming gameplay): target resolution AND target frame rate, plus game types
+3. For streaming: whether they stream while gaming or camera/IRL content only
+4. For AI/ML: the workload (running models, training/fine-tuning, image generation)
+   and roughly how large the models are
+5. For video editing: the resolution of the footage they edit
+6. For 3D rendering: which software/renderer they work in
+7. For software development or music production: how heavy the workload is
+   (codebase size, VMs/containers; track and plugin counts)
+8. Budget expectations (even vague is fine)
 
 Ask ONE focused follow-up question at a time. Be conversational. Keep responses under 80 words.
 
@@ -364,14 +405,39 @@ async def stream_elicitation(
 def is_profile_complete(profile: BuildProfile) -> bool:
     """
     A profile is complete once primary_use and budget_tier have both been
-    inferred, and — for gaming specifically — a resolution has been inferred too.
+    inferred, plus the use-case-specific fields that meaningfully fork the
+    build: gaming needs resolution AND target frame rate; streaming needs a
+    style (and resolution + frame rate when streaming while gaming); AI needs
+    a workload (and a model scale for LLM workloads); video editing needs
+    footage resolution; 3D rendering needs the software used; software dev and
+    music production need a workload intensity.
     """
     if profile.primary_use == "unknown":
         return False
     if profile.budget_tier == "unknown":
         return False
-    if profile.primary_use == "gaming" and profile.gaming_resolution is None:
-        return False
+
+    use = profile.primary_use
+    if use == "gaming":
+        return profile.gaming_resolution is not None and profile.gaming_fps is not None
+    if use == "streaming":
+        if profile.streaming_style is None:
+            return False
+        if profile.streaming_style == "while_gaming":
+            return profile.gaming_resolution is not None and profile.gaming_fps is not None
+        return True
+    if use == "ai":
+        if profile.ai_workload is None:
+            return False
+        if profile.ai_workload in ("inference", "training") and profile.ai_model_scale is None:
+            return False
+        return True
+    if use == "video_editing":
+        return profile.editing_resolution is not None
+    if use == "3d_rendering":
+        return profile.rendering_software is not None
+    if use in ("software_dev", "music_production"):
+        return profile.workload_intensity is not None
     return True
 
 
@@ -413,11 +479,16 @@ _PIPELINE_DONE = object()
 _BUDGET_TIER_USD = {"entry": 1000, "mid": 1500, "high": 2500, "elite": 4000}
 
 # BuildProfile.primary_use → BuildRequest use-case key (must match the keys
-# _allocate_budget knows: gaming, aiml, creator, default-anything-else).
+# _allocate_budget knows: gaming, streaming, creator, rendering, aiml, dev,
+# audio, default-anything-else).
 _PRIMARY_USE_TO_USE_CASE = {
     "gaming": "gaming",
+    "streaming": "streaming",
     "video_editing": "creator",
-    "local_llm": "aiml",
+    "3d_rendering": "rendering",
+    "ai": "aiml",
+    "software_dev": "dev",
+    "music_production": "audio",
     "general": "productivity",
 }
 
@@ -440,6 +511,20 @@ def _profile_to_build_request(profile: BuildProfile) -> BuildRequest:
     answers: dict[str, str | list[str]] = {}
     if profile.gaming_resolution:
         answers["gaming.resolution"] = profile.gaming_resolution
+    if profile.gaming_fps:
+        answers["gaming.target_fps"] = profile.gaming_fps
+    if profile.streaming_style:
+        answers["streaming.style"] = profile.streaming_style
+    if profile.ai_workload:
+        answers["ai.workload"] = profile.ai_workload
+    if profile.ai_model_scale:
+        answers["ai.model_scale"] = profile.ai_model_scale
+    if profile.editing_resolution:
+        answers["editing.footage_resolution"] = profile.editing_resolution
+    if profile.rendering_software:
+        answers["rendering.software"] = profile.rendering_software
+    if profile.workload_intensity:
+        answers["general.workload_intensity"] = profile.workload_intensity
     if profile.games:
         answers["gaming.games"] = profile.games
     if profile.workloads:

@@ -8,4 +8,5 @@ from .benchmarks import BenchmarkType, CPUBenchmarkScores, GPUBenchmarkScores
 from app.models.reference_build import ReferenceBuild, ReferenceBuildPart
 from .software_catalog import Software, SoftwareCategory, SoftwareMinimumPart
 from .games_catalog import Game, GameMinimumPart
+from .ai_catalog import AIModel, AIWorkload, AIModelFamily, AITask
 from .build_session import BuildSession, ModuleDecision, BuildSessionStatus

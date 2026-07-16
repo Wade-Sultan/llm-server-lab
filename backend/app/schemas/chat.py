@@ -38,8 +38,17 @@ class ConversationDetail(BaseModel):
     messages: list[MessageOut]
 
 class BuildProfile(BaseModel):
-    primary_use: str        # "gaming" | "video_editing" | "local_llm" | "general"
-    gaming_resolution: str | None = None  # "1080p" | "1440p" | "4k"
+    # "gaming" | "streaming" | "video_editing" | "3d_rendering" | "ai"
+    # | "software_dev" | "music_production" | "general"
+    primary_use: str
+    gaming_resolution: str | None = None   # "1080p" | "1440p" | "4k"
+    gaming_fps: str | None = None          # "60" | "120" | "144" | "240"
+    streaming_style: str | None = None     # "while_gaming" | "camera_only"
+    ai_workload: str | None = None         # "inference" | "training" | "image_gen"
+    ai_model_scale: str | None = None      # "small" | "medium" | "large"
+    editing_resolution: str | None = None  # "1080p" | "4k" | "6k_plus"
+    rendering_software: str | None = None  # free text, e.g. "Blender"
+    workload_intensity: str | None = None  # "light" | "moderate" | "heavy"
     budget_tier: str        # "entry" | "mid" | "high" | "elite"
     games: list[str] = []
     workloads: list[str] = []
@@ -71,7 +80,8 @@ class BuildRequest(BaseModel):
     """
     use_cases: list[str] = Field(
         ...,
-        description="Selected use-case keys: gaming, productivity, creative, streaming, aiml, nas",
+        description="Selected use-case keys: gaming, streaming, creator, rendering, "
+                    "aiml, dev, audio, productivity, nas",
     )
     budget_usd: int = Field(..., description="Total build budget in USD")
     preferences: UserPreferences = Field(default_factory=UserPreferences)

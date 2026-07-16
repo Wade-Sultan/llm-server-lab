@@ -25,8 +25,8 @@ async def resolve_build(profile: BuildProfile, db: AsyncSession) -> tuple[str, B
         if build.get("max_resolution") is not None and build["max_resolution"] >= floor
     }
 
-    # Local LLM / AI workloads
-    if use == "local_llm":
+    # AI workloads (inference, training, image gen)
+    if use == "ai":
         if budget == "elite" and floor >= 2160:
             if any("localllmpro" in k for k in candidates):
                 return _pick(candidates, "2160_localllmpro")
@@ -35,14 +35,15 @@ async def resolve_build(profile: BuildProfile, db: AsyncSession) -> tuple[str, B
             return _pick(candidates, "2160_localllm")
         return _pick(candidates, "1440_localllm")
 
-    # Video editing / content creation
-    if use == "video_editing":
+    # Video editing / 3D rendering / content creation
+    if use in ("video_editing", "3d_rendering"):
         if floor >= 2160:
             return _pick(candidates, "2160_creator")
         return _pick(candidates, "1440_creator")
 
-    # Gaming
-    if use == "gaming":
+    # Gaming (streaming rides the gaming builds — the CPU-heavier balance is
+    # handled by the DSPy pipeline's budget split, not the reference catalog)
+    if use in ("gaming", "streaming"):
         if floor >= 2160:
             return _pick(candidates, "2160_cinematic")
         if floor >= 1440:

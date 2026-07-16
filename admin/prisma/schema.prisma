@@ -20,18 +20,20 @@ model PcPart {
   createdAt        DateTime @default(now()) @map("created_at")
   updatedAt        DateTime @updatedAt @map("updated_at")
 
-  cpu             Cpu?
-  gpu             Gpu?
-  motherboard     Motherboard?
-  ramKit          RamKit?
-  storageDrive    StorageDrive?
-  psu             Psu?
-  pcCase          PcCase?
-  cpuCooler       CpuCooler?
-  fan             Fan?
-  listings        Listing[]
-  referenceBuilds ReferenceBuildPart[]
-  buildParts      BuildPart[]
+  cpu              Cpu?
+  gpu              Gpu?
+  motherboard      Motherboard?
+  ramKit           RamKit?
+  storageDrive     StorageDrive?
+  psu              Psu?
+  pcCase           PcCase?
+  cpuCooler        CpuCooler?
+  fan              Fan?
+  listings         Listing[]
+  referenceBuilds  ReferenceBuildPart[]
+  buildParts       BuildPart[]
+  gameMinimums     GameMinimumPart[]
+  softwareMinimums SoftwareMinimumPart[]
 
   @@map("pc_parts")
 }
@@ -509,4 +511,160 @@ model ModuleDecision {
 
   @@index([category, pipelineVersion, createdAt], map: "ix_module_decisions_category_pipeline_created")
   @@map("module_decisions")
+}
+
+// --- Games catalog ---
+
+model Game {
+  id                String   @id @default(uuid()) @db.Uuid
+  title             String   @unique
+  slug              String   @unique
+  genre             String?
+  storeUrl          String?  @map("store_url")
+  imageUrl          String?  @map("image_url")
+  hardRequirements  String[] @map("hard_requirements")
+  minStorageGb      Int?     @map("min_storage_gb")
+  requirementsNotes String?  @map("requirements_notes")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  minimumParts GameMinimumPart[]
+
+  @@map("games")
+}
+
+model GameMinimumPart {
+  id            String   @id @default(uuid()) @db.Uuid
+  gameId        String   @map("game_id") @db.Uuid
+  tier          String // minimum | recommended | ultra
+  role          String // cpu | gpu
+  partId        String?  @map("part_id") @db.Uuid
+  publishedName String?  @map("published_name")
+  minRamGb      Int?     @map("min_ram_gb")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  game Game    @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  part PcPart? @relation(fields: [partId], references: [id])
+
+  @@unique([gameId, tier, role], map: "uq_game_min_parts_game_tier_role")
+  @@map("game_minimum_parts")
+}
+
+// --- Software catalog ---
+
+model Software {
+  id                   String   @id @default(uuid()) @db.Uuid
+  name                 String   @unique
+  slug                 String   @unique
+  category             String // creative | productivity | ai_ml | development | streaming
+  useCaseTags          String[] @map("use_case_tags")
+  developer            String?
+  currentVersion       String?  @map("current_version")
+  websiteUrl           String?  @map("website_url")
+  imageUrl             String?  @map("image_url")
+  isFree               Boolean? @map("is_free")
+  platformRequirements String[] @map("platform_requirements")
+  notes                String?
+  createdAt            DateTime @default(now()) @map("created_at")
+  updatedAt            DateTime @updatedAt @map("updated_at")
+
+  tiers SoftwareTier[]
+
+  @@map("software")
+}
+
+model SoftwareTier {
+  id                  String   @id @default(uuid()) @db.Uuid
+  softwareId          String   @map("software_id") @db.Uuid
+  name                String
+  slug                String
+  sortOrder           Int      @default(0) @map("sort_order")
+  gpuImportance       String   @default("optional") @map("gpu_importance") // required | accelerated | optional | irrelevant
+  minRamGb            Int?     @map("min_ram_gb")
+  recommendedRamGb    Int?     @map("recommended_ram_gb")
+  minVramGb           Int?     @map("min_vram_gb")
+  minStorageGb        Int?     @map("min_storage_gb")
+  minCores            Int?     @map("min_cores")
+  prefersSingleThread Boolean? @map("prefers_single_thread")
+  extraRequirements   Json?    @map("extra_requirements")
+  notes               String?
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+
+  software     Software              @relation(fields: [softwareId], references: [id], onDelete: Cascade)
+  minimumParts SoftwareMinimumPart[]
+
+  @@unique([softwareId, slug], map: "uq_software_tiers_software_slug")
+  @@map("software_tiers")
+}
+
+model SoftwareMinimumPart {
+  id            String   @id @default(uuid()) @db.Uuid
+  tierId        String   @map("tier_id") @db.Uuid
+  role          String // cpu | gpu
+  partId        String?  @map("part_id") @db.Uuid
+  publishedName String?  @map("published_name")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  tier SoftwareTier @relation(fields: [tierId], references: [id], onDelete: Cascade)
+  part PcPart?      @relation(fields: [partId], references: [id])
+
+  @@unique([tierId, role], map: "uq_software_min_parts_tier_role")
+  @@map("software_minimum_parts")
+}
+
+// --- AI catalog ---
+// One AiModel row per catalog model; one AiWorkload row per
+// (model x task x precision) cell — see backend app/models/ai_catalog.py.
+
+model AiModel {
+  id             String   @id @default(uuid()) @db.Uuid
+  name           String   @unique
+  slug           String   @unique
+  family         String // llm | multimodal | image_gen | video_gen | speech | audio_gen | vision | embedding | classical | rl
+  paramsBillions Float?   @map("params_billions")
+  contextLength  Int?     @map("context_length")
+  developer      String?
+  license        String?
+  huggingfaceId  String?  @map("huggingface_id")
+  websiteUrl     String?  @map("website_url")
+  imageUrl       String?  @map("image_url")
+  spec           Json?
+  notes          String?
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  workloads AiWorkload[]
+
+  @@map("ai_models")
+}
+
+model AiWorkload {
+  id                  String   @id @default(uuid()) @db.Uuid
+  modelId             String   @map("model_id") @db.Uuid
+  task                String // inference | fine_tune_full | fine_tune_lora | fine_tune_qlora | post_train | train_scratch
+  precision           String // fp32 | bf16 | fp16 | fp8 | int8 | q8..q3 | ...
+  gpuImportance       String   @default("required") @map("gpu_importance")
+  minVramGb           Int?     @map("min_vram_gb") // total across GPUs; NULL = no GPU needed
+  recommendedVramGb   Int?     @map("recommended_vram_gb")
+  supportsMultiGpu    Boolean  @default(false) @map("supports_multi_gpu")
+  cpuOffloadCapable   Boolean  @default(false) @map("cpu_offload_capable")
+  minRamGb            Int?     @map("min_ram_gb")
+  recommendedRamGb    Int?     @map("recommended_ram_gb")
+  minStorageGb        Int?     @map("min_storage_gb")
+  gpuBackends         String[] @default(["cuda"]) @map("gpu_backends")
+  requiredGpuFeatures String[] @map("required_gpu_features")
+  assumptions         Json?
+  extraRequirements   Json?    @map("extra_requirements")
+  sortOrder           Int      @default(0) @map("sort_order")
+  notes               String?
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+
+  model AiModel @relation(fields: [modelId], references: [id], onDelete: Cascade)
+
+  @@unique([modelId, task, precision], map: "uq_ai_workloads_model_task_precision")
+  @@map("ai_workloads")
 }

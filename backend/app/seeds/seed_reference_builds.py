@@ -35,9 +35,9 @@ _COMPONENT_TO_ROLE: dict[str, BuildComponentRole] = {
 
 def _build_key_to_use_cases(build_key: str) -> list[str]:
     if "localllm" in build_key:
-        return ["local_llm", "gaming"]
+        return ["ai", "gaming"]
     if "creator" in build_key:
-        return ["gaming", "video_editing", "streaming"]
+        return ["gaming", "video_editing", "3d_rendering", "streaming"]
     return ["gaming"]
 
 

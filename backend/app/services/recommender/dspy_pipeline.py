@@ -11,9 +11,12 @@ Dependency order:
     DDR → CPU → Cooler → Motherboard → RAM → Storage → GPU → PSU → Case → Fans
 
 Budget allocation:
-    _allocate_budget() splits the total into per-slot ceilings.  These are
-    soft maximums passed to the DB query layer — they don't prevent the LLM
-    from picking a cheaper option (and it should, often).
+    _allocate_budget() derives per-slot ceilings from the total budget.
+    These are independent soft maximums passed to the DB query layer — they
+    don't have to sum to the total budget (ram/storage in particular are
+    sized generously since not every slot maxes out at once), and they
+    don't prevent the LLM from picking a cheaper option (and it should,
+    often).
 
 Status messages:
     Each step emits one stable, user-facing progress message up front (before
@@ -250,36 +253,62 @@ async def _run_step(
 # Budget allocation
 # ---------------------------------------------------------------------------
 
-# Rough percentage splits by use case.  These are starting points — the LLM
-# can and should go lower within each slot when value calls for it.
-_BUDGET_SPLITS: dict[str, dict[str, float]] = {
+# Per-slot budget ceilings by use case, as a fraction of the total budget.
+# These are independent soft maximums, not a partition — they are not
+# required to sum to 1.0 and, for slots like ram/storage where a generous
+# ceiling matters more than strict proportionality, deliberately don't. The
+# LLM can and should go lower within each slot when value calls for it.
+_BUDGET_CEILINGS: dict[str, dict[str, float]] = {
     "gaming": {
-        "cpu": 0.15, "cooler": 0.05, "mobo": 0.10, "ram": 0.07,
-        "storage": 0.07, "gpu": 0.35, "psu": 0.07, "case": 0.10, "fans": 0.04,
+        "cpu": 0.15, "cooler": 0.05, "mobo": 0.10, "ram": 0.14,
+        "storage": 0.14, "gpu": 0.35, "psu": 0.07, "case": 0.10, "fans": 0.04,
+    },
+    "streaming": {
+        # Game + encode simultaneously: more CPU headroom than pure gaming,
+        # GPU still carries the render load (and NVENC).
+        "cpu": 0.20, "cooler": 0.06, "mobo": 0.10, "ram": 0.16,
+        "storage": 0.14, "gpu": 0.28, "psu": 0.07, "case": 0.10, "fans": 0.04,
     },
     "aiml": {
-        "cpu": 0.18, "cooler": 0.06, "mobo": 0.10, "ram": 0.12,
-        "storage": 0.10, "gpu": 0.28, "psu": 0.08, "case": 0.05, "fans": 0.03,
+        "cpu": 0.18, "cooler": 0.06, "mobo": 0.10, "ram": 0.24,
+        "storage": 0.20, "gpu": 0.28, "psu": 0.08, "case": 0.05, "fans": 0.03,
     },
     "creator": {
-        "cpu": 0.20, "cooler": 0.07, "mobo": 0.10, "ram": 0.12,
-        "storage": 0.12, "gpu": 0.20, "psu": 0.08, "case": 0.07, "fans": 0.04,
+        "cpu": 0.20, "cooler": 0.07, "mobo": 0.10, "ram": 0.24,
+        "storage": 0.24, "gpu": 0.20, "psu": 0.08, "case": 0.07, "fans": 0.04,
+    },
+    "rendering": {
+        # 3D rendering: strong CPU and plenty of RAM, GPU sized for the
+        # renderer (Cycles/OptiX etc.) rather than display output.
+        "cpu": 0.22, "cooler": 0.07, "mobo": 0.10, "ram": 0.24,
+        "storage": 0.16, "gpu": 0.25, "psu": 0.08, "case": 0.05, "fans": 0.03,
+    },
+    "dev": {
+        # Compile-heavy: cores, RAM, and fast storage; GPU nearly irrelevant.
+        "cpu": 0.25, "cooler": 0.07, "mobo": 0.12, "ram": 0.30,
+        "storage": 0.24, "gpu": 0.10, "psu": 0.07, "case": 0.09, "fans": 0.03,
+    },
+    "audio": {
+        # Music production: single-core speed, RAM for sample libraries,
+        # quiet build; discrete GPU barely matters.
+        "cpu": 0.28, "cooler": 0.08, "mobo": 0.13, "ram": 0.28,
+        "storage": 0.20, "gpu": 0.05, "psu": 0.08, "case": 0.10, "fans": 0.04,
     },
     "default": {
-        "cpu": 0.17, "cooler": 0.05, "mobo": 0.10, "ram": 0.08,
-        "storage": 0.08, "gpu": 0.30, "psu": 0.08, "case": 0.10, "fans": 0.04,
+        "cpu": 0.17, "cooler": 0.05, "mobo": 0.10, "ram": 0.16,
+        "storage": 0.16, "gpu": 0.30, "psu": 0.08, "case": 0.10, "fans": 0.04,
     },
 }
 
 def _allocate_budget(budget_usd: int, use_cases: list[str]) -> dict[str, int]:
     """Return per-slot budget ceilings in USD."""
-    # Use the first recognized use case to pick a split profile
+    # Use the first recognized use case to pick a ceiling profile
     profile_key = next(
-        (uc for uc in use_cases if uc in _BUDGET_SPLITS),
+        (uc for uc in use_cases if uc in _BUDGET_CEILINGS),
         "default",
     )
-    splits = _BUDGET_SPLITS[profile_key]
-    return {slot: int(budget_usd * pct) for slot, pct in splits.items()}
+    ceilings = _BUDGET_CEILINGS[profile_key]
+    return {slot: int(budget_usd * pct) for slot, pct in ceilings.items()}
 
 
 def _request_summary(request: BuildRequest) -> str:

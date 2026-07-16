@@ -17,6 +17,9 @@ import {
   BookMarked,
   Users,
   Layers,
+  Gamepad2,
+  AppWindow,
+  BrainCircuit,
 } from 'lucide-react';
 
 type NavItem =
@@ -42,6 +45,9 @@ const navItems: NavItem[] = [
   { label: 'Storage Groups', href: '/storage-groups', icon: Layers },
   { type: 'separator', label: 'Catalog' },
   { label: 'Reference Builds', href: '/reference-builds', icon: BookMarked },
+  { label: 'Games', href: '/games', icon: Gamepad2 },
+  { label: 'Software', href: '/software', icon: AppWindow },
+  { label: 'AI Models', href: '/ai-models', icon: BrainCircuit },
   { type: 'separator', label: 'Users' },
   { label: 'Users', href: '/users', icon: Users },
 ];

@@ -39,6 +39,13 @@ export function formatUsd(cents: number | null): string {
     : (cents / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
 }
 
+export function slugify(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
 export const asinSchema = z
   .string()
   .min(1, 'ASIN is required')
