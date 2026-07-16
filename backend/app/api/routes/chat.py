@@ -29,6 +29,8 @@ def _save_turn(
     reached_recommendation: bool = False,
     build_data: dict | None = None,
     build_key: str | None = None,
+    ref_estimate_data: dict | None = None,
+    ref_estimate_key: str | None = None,
 ) -> None:
     """Persist this chat turn to the DB. Runs in a thread executor (sync SQLAlchemy)."""
     from decimal import Decimal
@@ -130,6 +132,15 @@ def _save_turn(
             conversation.reached_recommendation = True
             db.add(conversation)
 
+        # Cache the reference build resolved for this conversation (the
+        # budget-still-unknown estimate, or the one resolved alongside a
+        # completed turn) so it's never re-resolved — the guaranteed,
+        # free-to-fetch fallback for the rest of the conversation.
+        if ref_estimate_key and not conversation.reference_build_key:
+            conversation.reference_build_key = ref_estimate_key
+            conversation.reference_build = ref_estimate_data
+            db.add(conversation)
+
         # Link the conversation to the concrete PCBuild row backing this
         # reference build template, so pc_builds reflects what was actually
         # recommended (not just the abstract build_key).
@@ -156,6 +167,8 @@ async def _event_stream(messages: list[ChatMessage], user: dict | None, conversa
     reached_recommendation = False
     build_data: dict | None = None
     build_key: str | None = None
+    ref_estimate_data: dict | None = None
+    ref_estimate_key: str | None = None
     try:
         async for event in run_chat_turn(messages, conversation_id=conversation_id):
             etype = event.get("type")
@@ -166,6 +179,11 @@ async def _event_stream(messages: list[ChatMessage], user: dict | None, conversa
                 reached_recommendation = True
                 build_data = event.get("data")
                 build_key = event.get("key")
+            elif etype == "reference_estimate":
+                # Internal caching signal — capture it for persistence, don't forward to the client.
+                ref_estimate_data = event.get("data")
+                ref_estimate_key = event.get("key")
+                continue
             elif etype == "usage":
                 # Internal cost accounting — capture it, don't leak cost to the client.
                 turn_usage = event
@@ -195,6 +213,8 @@ async def _event_stream(messages: list[ChatMessage], user: dict | None, conversa
             reached_recommendation,
             build_data,
             build_key,
+            ref_estimate_data,
+            ref_estimate_key,
         )
         await asyncio.get_running_loop().run_in_executor(None, save_fn)
 

@@ -255,9 +255,15 @@ def _format_build_context(
     build_key: str,
     build: Build,
 ) -> str:
-    """Format the resolved build into a context block for the recommendation LLM."""
+    """Format the resolved build into a context block for the recommendation LLM.
+
+    approx_price/total_approx are in cents (see _assemble_dspy_build's docstring
+    for the convention); divide by 100 to show the LLM real dollar figures.
+    """
     parts_text = "\n".join(
-        f"  - {p['component']}: {p['brand']} {p['model']} (~${p['approx_price']})"
+        f"  - {p['component']}: {p['brand']} {p['model']} "
+        f"(~${p['approx_price'] / 100:.0f})" if p.get("approx_price") is not None else
+        f"  - {p['component']}: {p['brand']} {p['model']}"
         for p in build["parts"]
     )
     return f"""\
@@ -272,7 +278,7 @@ USER PROFILE:
 RESOLVED BUILD: {build_key}
   Label: {build["label"]}
   Description: {build["description"]}
-  Approximate Total: ~${build["total_approx"]}
+  Approximate Total: ~${build["total_approx"] / 100:.0f}
 
 PARTS:
 {parts_text}
@@ -350,13 +356,63 @@ Determine:
 
 Ask ONE focused follow-up question at a time. Be conversational. Keep responses under 80 words.
 
-Do not describe or recommend a build yourself; a separate step handles that once enough
-information has been gathered.
+Do not describe or recommend a build yourself. Do not say the build is ready, that you have
+enough information, or that a recommendation is coming — the handoff to the build recommender
+happens automatically and silently once every required item is filled in; you will be told
+exactly what's still missing below, so just ask about that.
 """
+
+
+# Mirrors is_profile_complete()'s branches so the elicitation model is told
+# exactly which field it's blocked on, instead of judging "enough info" for
+# itself from the raw conversation (which is what let it drift into saying
+# things like "the build recommender will be back with your build").
+def _missing_fields(profile: BuildProfile) -> list[str]:
+    if profile.primary_use == "unknown":
+        return ["their primary use case (gaming, streaming, video editing, "
+                "3D rendering, AI/ML, software development, music production, "
+                "or general productivity)"]
+
+    missing: list[str] = []
+    use = profile.primary_use
+    if use == "gaming":
+        if profile.gaming_resolution is None:
+            missing.append("target gaming resolution")
+        if profile.gaming_fps is None:
+            missing.append("target frame rate")
+    elif use == "streaming":
+        if profile.streaming_style is None:
+            missing.append("whether they stream while gaming or camera/IRL content only")
+        elif profile.streaming_style == "while_gaming":
+            if profile.gaming_resolution is None:
+                missing.append("target gaming resolution")
+            if profile.gaming_fps is None:
+                missing.append("target frame rate")
+    elif use == "ai":
+        if profile.ai_workload is None:
+            missing.append("the AI workload (running models, training/fine-tuning, or image generation)")
+        elif profile.ai_workload in ("inference", "training") and profile.ai_model_scale is None:
+            missing.append("roughly how large the models are")
+    elif use == "video_editing":
+        if profile.editing_resolution is None:
+            missing.append("the resolution of the footage they edit")
+    elif use == "3d_rendering":
+        if profile.rendering_software is None:
+            missing.append("which 3D software/renderer they work in")
+    elif use in ("software_dev", "music_production"):
+        if profile.workload_intensity is None:
+            missing.append("how heavy the workload is (codebase size/VMs, or track/plugin counts)")
+
+    if profile.budget_tier == "unknown":
+        missing.append("budget expectations")
+
+    return missing
 
 
 async def stream_elicitation(
     messages: list[ChatMessage],
+    missing_fields: list[str] | None = None,
+    price_estimate: int | None = None,
     usage_sink: dict | None = None,
     session_id: str | None = None,
 ) -> AsyncIterator[str]:
@@ -365,13 +421,35 @@ async def stream_elicitation(
     Readiness to recommend is decided deterministically by `is_profile_complete()`,
     not by the model — this function only ever asks follow-up questions.
 
+    missing_fields (from _missing_fields(), computed off the same profile
+    is_profile_complete() just checked) tells the model exactly what's still
+    blocking, so it doesn't have to re-judge "enough info" from raw text.
+
+    price_estimate, when given (budget is the only missing field), is a
+    reference build's total already rounded to the nearest $100 — the model
+    is told to mention this figure, not invent its own.
+
     If usage_sink is provided, it's filled with this call's tokens + cost from
     OpenRouter's final usage chunk. session_id groups this call with the rest
     of the turn's calls in OpenRouter's dashboard.
     """
     client = _get_client()
 
-    api_messages: list[dict] = [{"role": "system", "content": _ELICIT_SYSTEM}]
+    system_content = _ELICIT_SYSTEM
+    if missing_fields:
+        system_content += (
+            "\n\nStill missing, in priority order: "
+            + "; ".join(missing_fields)
+            + ".\nAsk about the FIRST missing item only."
+        )
+    if price_estimate is not None:
+        system_content += (
+            f"\n\nBased on everything they've described so far, a build like this would run "
+            f"about ${price_estimate:,}. Mention that figure naturally while asking about "
+            f"their budget — don't invent a different number."
+        )
+
+    api_messages: list[dict] = [{"role": "system", "content": system_content}]
     for msg in messages:
         api_messages.append({
             "role": msg.role if msg.role in ("user", "assistant") else "user",
@@ -598,7 +676,7 @@ async def _attach_reference_build(recorder: Any, ref_task: asyncio.Task) -> None
     being recorded (it's simply recorded without a reference build).
     """
     try:
-        ref_key, ref_build = await ref_task
+        ref_key, ref_build, _ = await ref_task
         recorder.set_reference_build(ref_key, ref_build)
     except Exception:
         logger.warning(
@@ -675,10 +753,72 @@ async def _run_dspy_build(
         progress_queue.put_nowait(_PIPELINE_DONE)
 
 
-async def _resolve_reference_build(profile: BuildProfile) -> tuple[str, Build]:
-    """Resolve the reference build on its own DB session (cached)."""
+async def _load_cached_reference_build(conversation_id: str | None) -> tuple[str, Build] | None:
+    """Load the reference build already cached on this conversation, if any.
+
+    Returns None when there's no conversation_id, it's not a real UUID (guest
+    turns pass a fresh scratch id — see run_chat_turn), no Conversation row
+    exists yet (first turn, before _save_turn has created it), or nothing has
+    been cached onto it yet.
+    """
+    if not conversation_id:
+        return None
+    try:
+        conv_uuid = uuid.UUID(conversation_id)
+    except ValueError:
+        return None
+
+    from app.models.conversation import Conversation
+
     async with AsyncSessionLocal() as db:
-        return await _resolve_build_cached(profile, db)
+        conversation = await db.get(Conversation, conv_uuid)
+    if conversation and conversation.reference_build_key and conversation.reference_build:
+        return conversation.reference_build_key, conversation.reference_build
+    return None
+
+
+async def _get_reference_build(
+    profile: BuildProfile,
+    conversation_id: str | None,
+    assumed_budget_tier: str | None = None,
+) -> tuple[str, Build, bool]:
+    """
+    Resolve the reference build for this conversation, reusing whatever was
+    already cached on it from an earlier turn instead of re-resolving.
+
+    Once a conversation has a cached reference build it's frozen for the rest
+    of the conversation — including if it was first resolved as a rough
+    estimate under assumed_budget_tier before the user's real budget was
+    known — so it stays the exact build the user was already told about.
+
+    Returns (build_key, build, was_cached).
+    """
+    cached = await _load_cached_reference_build(conversation_id)
+    if cached is not None:
+        return cached[0], cached[1], True
+
+    resolve_profile = profile
+    if assumed_budget_tier is not None:
+        resolve_profile = profile.model_copy(update={"budget_tier": assumed_budget_tier})
+
+    async with AsyncSessionLocal() as db:
+        build_key, build = await _resolve_build_cached(resolve_profile, db)
+    return build_key, build, False
+
+
+def _round_to_nearest_hundred_usd(total_approx_cents: int) -> int:
+    dollars = total_approx_cents / 100
+    return int(round(dollars / 100) * 100)
+
+
+def _build_payload(build: Build, profile: BuildProfile) -> dict:
+    return {
+        "label": build["label"],
+        "description": build["description"],
+        "total_approx": build["total_approx"],
+        "parts": build["parts"],
+        "profile": profile.model_dump(),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -693,9 +833,16 @@ async def run_chat_turn(
     Main entry point. Yields SSE-ready dicts:
       {"type": "progress", "step": "...", "message": "..."}
       {"type": "token",    "text": "..."}
+      {"type": "reference_estimate", "key": "...", "data": {...}}
       {"type": "build",    "key": "...", "data": {...}}
       {"type": "usage",    "cost_usd": ..., "tokens_in": ..., "tokens_out": ..., "models": [...]}
       {"type": "done"}
+
+    "reference_estimate" fires at most once per conversation, the first time
+    a reference build is resolved for it (whether that's the budget-still-
+    unknown estimate or the one resolved alongside a completed turn) — the
+    route consumes it internally to cache the build onto the conversation
+    row; it is not meant to replace the "build" event on the client.
 
     The "usage" event totals every OpenRouter call made this turn; the route
     consumes it internally (it is not forwarded to the client) to increment the
@@ -721,8 +868,33 @@ async def run_chat_turn(
 
     if not is_profile_complete(profile):
         # Elicitation mode — gather more info, then end the turn.
+        missing_fields = _missing_fields(profile)
+
+        # Budget is the only thing left: resolve a reference build now (a
+        # "mid" tier guess, since the real budget isn't known yet) so this
+        # turn can tell the user what to expect to pay while it asks. Once
+        # resolved, it's cached on the conversation and never re-resolved.
+        price_estimate: int | None = None
+        if missing_fields == ["budget expectations"]:
+            est_key, est_build, est_cached = await _get_reference_build(
+                profile, conversation_id, assumed_budget_tier="mid"
+            )
+            price_estimate = _round_to_nearest_hundred_usd(est_build["total_approx"])
+            if not est_cached:
+                yield {
+                    "type": "reference_estimate",
+                    "key": est_key,
+                    "data": _build_payload(est_build, profile),
+                }
+
         elicit_usage_sink: dict = {}
-        async for chunk in stream_elicitation(messages, usage_sink=elicit_usage_sink, session_id=session_id):
+        async for chunk in stream_elicitation(
+            messages,
+            missing_fields=missing_fields,
+            price_estimate=price_estimate,
+            usage_sink=elicit_usage_sink,
+            session_id=session_id,
+        ):
             yield {"type": "token", "text": chunk}
         _merge_usage(turn_usage, elicit_usage_sink)
 
@@ -738,7 +910,7 @@ async def run_chat_turn(
     yield {"type": "progress", "step": "resolving", "message": "Building your PC…"}
 
     progress_queue: asyncio.Queue = asyncio.Queue()
-    ref_task = asyncio.create_task(_resolve_reference_build(profile))
+    ref_task = asyncio.create_task(_get_reference_build(profile, conversation_id))
     dspy_task = asyncio.create_task(_run_dspy_build(profile, progress_queue, ref_task))
 
     deadline = time.monotonic() + _DSPY_CHAT_TIMEOUT_S
@@ -777,22 +949,28 @@ async def run_chat_turn(
         # cancel it (it's the recorded comparison), just make sure it's reaped.
         build_key, build = "custom_dspy", dspy_build
         try:
-            await ref_task
+            ref_key, ref_build, ref_cached = await ref_task
+            if not ref_cached:
+                yield {
+                    "type": "reference_estimate",
+                    "key": ref_key,
+                    "data": _build_payload(ref_build, profile),
+                }
         except Exception:
             logger.debug("reference build task errored (already recorded/ignored)", exc_info=True)
     else:
-        build_key, build = await ref_task
+        build_key, build, ref_cached = await ref_task
+        if not ref_cached:
+            yield {
+                "type": "reference_estimate",
+                "key": build_key,
+                "data": _build_payload(build, profile),
+            }
 
     yield {
         "type": "build",
         "key": build_key,
-        "data": {
-            "label": build["label"],
-            "description": build["description"],
-            "total_approx": build["total_approx"],
-            "parts": build["parts"],
-            "profile": profile.model_dump(),
-        },
+        "data": _build_payload(build, profile),
     }
 
     yield {"type": "progress", "step": "presenting", "message": "Preparing your recommendation…"}

@@ -13,7 +13,7 @@ class ReferenceBuild(Base):
     build_key   = Column(String(64), nullable=False, unique=True, index=True)
     label       = Column(String(255), nullable=False)
     description = Column(Text, nullable=False)
-    total_approx = Column(Integer, nullable=False)
+    total_approx = Column(Integer, nullable=False, comment="Total price in cents")
     is_active   = Column(Boolean, nullable=False, server_default="true")
     max_resolution = Column(Integer, nullable=True)
     created_at  = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
@@ -43,7 +43,7 @@ class ReferenceBuildPart(Base):
                           nullable=False, index=True)
     component = Column(String(50), nullable=False)
     sort_order = Column(Integer, nullable=False, default=0)
-    approx_price = Column(Integer, nullable=False)
+    approx_price = Column(Integer, nullable=False, comment="Part price in cents")
     approx_price_updated_at = Column(DateTime(timezone=True), nullable=True,
     comment="When approx_price was last manually reviewed or updated")
 

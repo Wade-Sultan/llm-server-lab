@@ -184,7 +184,7 @@ def seed():
                 build_key=build_key,
                 label=build["label"],
                 description=build["description"],
-                total_approx=build["total_approx"],
+                total_approx=build["total_approx"] * 100,
                 pc_build_id=pc_build.id,
             )
             db.add(ref)
@@ -206,7 +206,7 @@ def seed():
                     build_id=ref.id,
                     part_id=pc_part.id,
                     component=part_spec["component"],
-                    approx_price=part_spec["approx_price"],
+                    approx_price=part_spec["approx_price"] * 100,
                     sort_order=i,
                 ))
 
