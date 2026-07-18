@@ -260,43 +260,43 @@ async def _run_step(
 # LLM can and should go lower within each slot when value calls for it.
 _BUDGET_CEILINGS: dict[str, dict[str, float]] = {
     "gaming": {
-        "cpu": 0.15, "cooler": 0.05, "mobo": 0.10, "ram": 0.14,
-        "storage": 0.14, "gpu": 0.35, "psu": 0.07, "case": 0.10, "fans": 0.04,
+        "cpu": 0.17, "cooler": 0.05, "mobo": 0.10, "ram": 0.18,
+        "storage": 0.20, "gpu": 0.50, "psu": 0.07, "case": 0.10, "fans": 0.04,
     },
     "streaming": {
         # Game + encode simultaneously: more CPU headroom than pure gaming,
         # GPU still carries the render load (and NVENC).
-        "cpu": 0.20, "cooler": 0.06, "mobo": 0.10, "ram": 0.16,
-        "storage": 0.14, "gpu": 0.28, "psu": 0.07, "case": 0.10, "fans": 0.04,
+        "cpu": 0.23, "cooler": 0.06, "mobo": 0.10, "ram": 0.20,
+        "storage": 0.20, "gpu": 0.38, "psu": 0.07, "case": 0.10, "fans": 0.04,
     },
     "aiml": {
-        "cpu": 0.18, "cooler": 0.06, "mobo": 0.10, "ram": 0.24,
-        "storage": 0.20, "gpu": 0.28, "psu": 0.08, "case": 0.05, "fans": 0.03,
+        "cpu": 0.21, "cooler": 0.06, "mobo": 0.10, "ram": 0.30,
+        "storage": 0.28, "gpu": 0.80, "psu": 0.08, "case": 0.05, "fans": 0.03,
     },
     "creator": {
-        "cpu": 0.20, "cooler": 0.07, "mobo": 0.10, "ram": 0.24,
-        "storage": 0.24, "gpu": 0.20, "psu": 0.08, "case": 0.07, "fans": 0.04,
+        "cpu": 0.23, "cooler": 0.07, "mobo": 0.10, "ram": 0.30,
+        "storage": 0.32, "gpu": 0.28, "psu": 0.08, "case": 0.07, "fans": 0.04,
     },
     "rendering": {
         # 3D rendering: strong CPU and plenty of RAM, GPU sized for the
         # renderer (Cycles/OptiX etc.) rather than display output.
-        "cpu": 0.22, "cooler": 0.07, "mobo": 0.10, "ram": 0.24,
-        "storage": 0.16, "gpu": 0.25, "psu": 0.08, "case": 0.05, "fans": 0.03,
+        "cpu": 0.25, "cooler": 0.07, "mobo": 0.10, "ram": 0.30,
+        "storage": 0.22, "gpu": 0.35, "psu": 0.08, "case": 0.05, "fans": 0.03,
     },
     "dev": {
         # Compile-heavy: cores, RAM, and fast storage; GPU nearly irrelevant.
-        "cpu": 0.25, "cooler": 0.07, "mobo": 0.12, "ram": 0.30,
-        "storage": 0.24, "gpu": 0.10, "psu": 0.07, "case": 0.09, "fans": 0.03,
+        "cpu": 0.29, "cooler": 0.07, "mobo": 0.12, "ram": 0.36,
+        "storage": 0.32, "gpu": 0.13, "psu": 0.07, "case": 0.09, "fans": 0.03,
     },
     "audio": {
         # Music production: single-core speed, RAM for sample libraries,
         # quiet build; discrete GPU barely matters.
-        "cpu": 0.28, "cooler": 0.08, "mobo": 0.13, "ram": 0.28,
-        "storage": 0.20, "gpu": 0.05, "psu": 0.08, "case": 0.10, "fans": 0.04,
+        "cpu": 0.32, "cooler": 0.08, "mobo": 0.13, "ram": 0.34,
+        "storage": 0.26, "gpu": 0.06, "psu": 0.08, "case": 0.10, "fans": 0.04,
     },
     "default": {
-        "cpu": 0.17, "cooler": 0.05, "mobo": 0.10, "ram": 0.16,
-        "storage": 0.16, "gpu": 0.30, "psu": 0.08, "case": 0.10, "fans": 0.04,
+        "cpu": 0.20, "cooler": 0.05, "mobo": 0.10, "ram": 0.20,
+        "storage": 0.22, "gpu": 0.42, "psu": 0.08, "case": 0.10, "fans": 0.04,
     },
 }
 
