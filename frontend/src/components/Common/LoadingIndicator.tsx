@@ -12,7 +12,7 @@ export function LoadingIndicator({ message }: { message: string }) {
   }, [])
 
   // Strip trailing ellipsis so animated dots are the sole source of punctuation
-  const text = message.replace(/[…\.]+$/, "")
+  const text = message.replace(/[….]+$/, "")
 
   // If there's no message, just show the rotating logo
   if (!message) {
@@ -38,7 +38,10 @@ export function LoadingIndicator({ message }: { message: string }) {
         height={18}
         className="animate-[spin_8s_linear_infinite] shrink-0 opacity-70"
       />
-      <span className="text-sm text-muted-foreground">
+      <span
+        key={text}
+        className="fade-in animate-in text-sm text-muted-foreground duration-300"
+      >
         {text}
         <span className="inline-block w-[1.5ch]">{"...".slice(0, dots)}</span>
       </span>

@@ -46,71 +46,76 @@ export const BuildCard: DataMessagePartComponent<BuildData> = (props) => {
   const listings = usePartListings(data.parts)
 
   return (
-    <Card className="aui-build-card my-2 w-full max-w-(--thread-max-width)">
-      <CardHeader>
-        <div className="flex items-center justify-between gap-2">
-          <CardTitle className="text-base">{data.label}</CardTitle>
-          <Badge variant="secondary">
-            ~{formatPrice(data.total_approx / 100)}
-          </Badge>
-        </div>
-        <CardDescription>{data.description}</CardDescription>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-2">
-        {data.parts.map((part) => {
-          const listing = listings[part.part_id]
-          const amazonUrl = listing?.url ?? part.amazon_url
-          return (
-            <div
-              key={part.part_id}
-              className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2"
-            >
-              <div className="min-w-0">
-                <p className="text-muted-foreground text-xs uppercase tracking-wide">
-                  {part.component}
-                </p>
-                <p className="truncate text-sm font-medium">
-                  {part.brand} {part.model}
-                </p>
-              </div>
-              <div className="flex shrink-0 items-center gap-2">
-                {listing?.price_amount != null && (
-                  <span className="text-sm text-muted-foreground">
-                    {formatPrice(
-                      listing.price_amount / 100,
-                      listing.currency ?? "USD",
-                    )}
-                  </span>
-                )}
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  disabled={!amazonUrl}
-                  aria-label={`Buy ${part.brand} ${part.model} on Amazon`}
-                  asChild={!!amazonUrl}
-                >
-                  {amazonUrl ? (
-                    <a
-                      href={amazonUrl}
-                      target="_blank"
-                      rel="noopener noreferrer sponsored"
-                    >
-                      <ShoppingCartIcon className="size-4" />
-                      Amazon
-                    </a>
-                  ) : (
-                    <>
-                      <ShoppingCartIcon className="size-4" />
-                      Amazon
-                    </>
+    <div className="my-2 flex w-full max-w-(--thread-max-width) flex-col gap-1">
+      <Card className="aui-build-card w-full">
+        <CardHeader>
+          <div className="flex items-center justify-between gap-2">
+            <CardTitle className="text-base">{data.label}</CardTitle>
+            <Badge variant="secondary">
+              ~{formatPrice(data.total_approx / 100)}*
+            </Badge>
+          </div>
+          <CardDescription>{data.description}</CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-2">
+          {data.parts.map((part) => {
+            const listing = listings[part.part_id]
+            const amazonUrl = listing?.url ?? part.amazon_url
+            return (
+              <div
+                key={part.part_id}
+                className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2"
+              >
+                <div className="min-w-0">
+                  <p className="text-muted-foreground text-xs uppercase tracking-wide">
+                    {part.component}
+                  </p>
+                  <p className="truncate text-sm font-medium">
+                    {part.brand} {part.model}
+                  </p>
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  {listing?.price_amount != null && (
+                    <span className="text-sm text-muted-foreground">
+                      {formatPrice(
+                        listing.price_amount / 100,
+                        listing.currency ?? "USD",
+                      )}
+                    </span>
                   )}
-                </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={!amazonUrl}
+                    aria-label={`Buy ${part.brand} ${part.model} on Amazon`}
+                    asChild={!!amazonUrl}
+                  >
+                    {amazonUrl ? (
+                      <a
+                        href={amazonUrl}
+                        target="_blank"
+                        rel="noopener noreferrer sponsored"
+                      >
+                        <ShoppingCartIcon className="size-4" />
+                        Amazon
+                      </a>
+                    ) : (
+                      <>
+                        <ShoppingCartIcon className="size-4" />
+                        Amazon
+                      </>
+                    )}
+                  </Button>
+                </div>
               </div>
-            </div>
-          )
-        })}
-      </CardContent>
-    </Card>
+            )
+          })}
+        </CardContent>
+      </Card>
+      <p className="px-1 text-muted-foreground text-xs">
+        *Based on approximate prices derived from Google Shopping
+      </p>
+    </div>
   )
 }
