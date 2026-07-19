@@ -65,10 +65,15 @@ class Settings(BaseSettings):
 
     OPENROUTER_API_KEY: str
 
-    # Amazon Associates tracking ID, e.g. "yoursite-20". Appended to product
-    # links as the "tag" query param so purchases are attributed to us.
-    # Links work without it — it's just unpaid until this is set.
-    AMAZON_AFFILIATE_TAG: str | None = None
+    # Hugging Face Hub token for the AI-model discovery job. Public model
+    # listing works without it, but a token raises rate limits and returns
+    # metadata for gated models. Create at https://huggingface.co/settings/tokens
+    HF_TOKEN: str | None = None
+
+    # Tavily search API key for parts-discovery enrichment (finding spec pages
+    # for novel SKUs). Optional at boot; the discovery job fails fast with a
+    # clear error if it runs without one. https://app.tavily.com
+    TAVILY_API_KEY: str | None = None
 
 
 settings = Settings()  # type: ignore

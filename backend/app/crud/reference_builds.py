@@ -71,8 +71,6 @@ def _amazon_product_url(listing: AmazonListing) -> str:
     if listing.url:
         return listing.url
     url = f"https://www.amazon.com/dp/{listing.asin}"
-    if settings.AMAZON_AFFILIATE_TAG:
-        url += f"?tag={settings.AMAZON_AFFILIATE_TAG}"
     return url
 
 
