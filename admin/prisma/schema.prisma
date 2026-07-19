@@ -16,6 +16,7 @@ model PcPart {
   yearReleased     Int?     @map("year_released")
   partType         String   @map("part_type")
   isActive         Boolean  @default(true) @map("is_active")
+  msrpCents        Int?     @map("msrp_cents")
   streetPriceCents Int?     @map("street_price_cents")
   createdAt        DateTime @default(now()) @map("created_at")
   updatedAt        DateTime @updatedAt @map("updated_at")
@@ -667,4 +668,69 @@ model AiWorkload {
 
   @@unique([modelId, task, precision], map: "uq_ai_workloads_model_task_precision")
   @@map("ai_workloads")
+}
+
+// Parts-discovery staging — managed by the backend (Alembic); mirror only,
+// never prisma migrate. The partial unique index on discovered_items
+// (category, name_normalized) WHERE review_status='pending' is not
+// expressible in Prisma and lives only in the DB.
+
+model DiscoveryRun {
+  id              String    @id @default(uuid()) @db.Uuid
+  runType         String    @map("run_type") // hardware | ai_models | on_demand
+  status          String    @default("running") // running | completed | error
+  pipelineVersion String    @map("pipeline_version")
+  modelName       String    @map("model_name")
+  sourcesChecked  Int       @default(0) @map("sources_checked")
+  itemsFound      Int       @default(0) @map("items_found")
+  itemsNew        Int       @default(0) @map("items_new")
+  errorDetail     String?   @map("error_detail")
+  totalCostUsd    Decimal?  @map("total_cost_usd") @db.Decimal(10, 6)
+  tokensIn        Int?      @map("tokens_in")
+  tokensOut       Int?      @map("tokens_out")
+  startedAt       DateTime  @default(now()) @map("started_at")
+  finishedAt      DateTime? @map("finished_at")
+
+  items DiscoveredItem[]
+
+  @@map("discovery_runs")
+}
+
+model DiscoverySource {
+  id              String    @id @default(uuid()) @db.Uuid
+  url             String
+  category        String
+  isActive        Boolean   @default(true) @map("is_active")
+  lastFetchedAt   DateTime? @map("last_fetched_at")
+  lastContentHash String?   @map("last_content_hash")
+
+  @@map("discovery_sources")
+}
+
+model DiscoveredItem {
+  id                   String       @id @default(uuid()) @db.Uuid
+  runId                String       @map("run_id") @db.Uuid
+  run                  DiscoveryRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  category             String // cpu | gpu_chipset | gpu_variant | ai_model
+  nameNormalized       String       @map("name_normalized")
+  modelNumber          String?      @map("model_number")
+  extractedFields      Json         @map("extracted_fields")
+  fieldProvenance      Json         @map("field_provenance")
+  extractionConfidence Json?        @map("extraction_confidence")
+  sourceUrls           String[]     @map("source_urls")
+  // Plain uuid fields, not relations — keeps PcPart/GpuChipset free of
+  // discovery back-relations; the queue page resolves names itself.
+  matchedPartId        String?      @map("matched_part_id") @db.Uuid
+  matchedChipsetId     String?      @map("matched_chipset_id") @db.Uuid
+  matchMethod          String?      @map("match_method") // exact | model_number | fuzzy | embedding
+  matchScore           Float?       @map("match_score")
+  validationStatus     String       @map("validation_status") // passed | failed
+  validationErrors     Json?        @map("validation_errors")
+  reviewStatus         String       @default("pending") @map("review_status") // pending | approved | rejected | duplicate
+  reviewedAt           DateTime?    @map("reviewed_at")
+  createdPartId        String?      @map("created_part_id") @db.Uuid
+  createdChipsetId     String?      @map("created_chipset_id") @db.Uuid
+  createdAt            DateTime     @default(now()) @map("created_at")
+
+  @@map("discovered_items")
 }
