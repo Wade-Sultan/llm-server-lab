@@ -75,6 +75,11 @@ class Settings(BaseSettings):
     # clear error if it runs without one. https://app.tavily.com
     TAVILY_API_KEY: str | None = None
 
+    # Shared secret for the admin-triggered discovery endpoints (X-Admin-Key
+    # header). The admin panel's server actions hold this key server-side.
+    # Unset = discovery endpoints return 503.
+    DISCOVERY_API_KEY: str | None = None
+
 
 settings = Settings()  # type: ignore
 

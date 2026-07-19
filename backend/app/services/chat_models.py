@@ -9,6 +9,11 @@ class ChatModelConfig:
     # Keep the larger model for the recommendation (needs nuance and personality)
     RECOMMEND_MODEL: str = os.getenv("CHAT_RECOMMEND_MODEL", "google/gemma-4-31b-it")
     ELICIT_MODEL: str = os.getenv("CHAT_ELICIT_MODEL", "google/gemma-4-31b-it")
+    # MiniMax M3 for parts-discovery spec extraction — multimodal (rasterized
+    # PDF spec sheets) and cheap enough for 2-3 extraction calls per SKU.
+    DISCOVERY_EXTRACT_MODEL: str = os.getenv(
+        "DISCOVERY_EXTRACT_MODEL", "minimax/minimax-m3"
+    )
 
     @classmethod
     def get_extract_model(cls) -> str:
@@ -21,3 +26,7 @@ class ChatModelConfig:
     @classmethod
     def get_elicit_model(cls) -> str:
         return cls.ELICIT_MODEL
+
+    @classmethod
+    def get_discovery_extract_model(cls) -> str:
+        return cls.DISCOVERY_EXTRACT_MODEL

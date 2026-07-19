@@ -24,6 +24,12 @@ dependencies = [
     "dspy-ai>=3.2.1",
     "psycopg2-binary>=2.9.12",
     "sqlalchemy>=2.0.35",
+    # Discovery pipeline — lazy-imported inside app/services/discovery/ only,
+    # so the API's startup path never pays for them.
+    "trafilatura>=1.12",
+    "pypdfium2>=4.30",
+    "Pillow>=10.0",
+    "rapidfuzz>=3.9",
 ]
 
 [dependency-groups]
