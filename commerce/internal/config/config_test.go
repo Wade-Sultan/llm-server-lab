@@ -10,8 +10,8 @@ import (
 func clearEnv(t *testing.T) {
 	t.Helper()
 	vars := []string{
-		"PORT", "ENV", "INSTANCE_CONNECTION_NAME", "DB_IAM_USER", "DB_NAME",
-		"DB_USE_PRIVATE_IP", "AMAZON_ASSOCIATE_TAG", "FIREBASE_PROJECT_ID",
+		"PORT", "ENV", "DATABASE_URL", "INSTANCE_CONNECTION_NAME", "DB_IAM_USER",
+		"DB_NAME", "DB_USE_PRIVATE_IP", "AMAZON_ASSOCIATE_TAG", "FIREBASE_PROJECT_ID",
 		"FRONTEND_HOST", "BACKEND_CORS_ORIGINS", "RESEND_API_KEY", "EMAIL_FROM",
 	}
 	for _, v := range vars {
@@ -26,6 +26,20 @@ func TestLoad_MissingRequiredVars(t *testing.T) {
 	_, err := Load()
 	if err == nil {
 		t.Fatal("expected error when required vars are unset, got nil")
+	}
+}
+
+func TestLoad_DatabaseURLBypassesConnectorVars(t *testing.T) {
+	clearEnv(t)
+	// No INSTANCE_CONNECTION_NAME/DB_IAM_USER/DB_NAME — DATABASE_URL supplies them.
+	t.Setenv("DATABASE_URL", "postgresql://palladium_app:pw@localhost:5433/palladium")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.DatabaseURL != "postgresql://palladium_app:pw@localhost:5433/palladium" {
+		t.Errorf("DatabaseURL = %q, want the DSN", cfg.DatabaseURL)
 	}
 }
 

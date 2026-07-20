@@ -19,6 +19,13 @@ type Config struct {
 	// Env identifies the deployment environment, e.g. "dev" or "prod".
 	Env string
 
+	// DatabaseURL, when set, is a plain Postgres DSN (e.g.
+	// "postgresql://user:pass@localhost:5433/palladium") used for local dev via
+	// the cloud-sql-proxy — mirroring admin's DATABASE_URL. It bypasses the
+	// Cloud SQL connector + IAM auth, so the connector-only vars below
+	// (InstanceConnectionName, DBIAMUser, DBName) aren't required when it's set.
+	DatabaseURL string
+
 	// InstanceConnectionName is the Cloud SQL instance "project:region:instance".
 	InstanceConnectionName string
 
@@ -60,6 +67,7 @@ func Load() (*Config, error) {
 	cfg := &Config{
 		Port:                   getenv("PORT", "8080"),
 		Env:                    getenv("ENV", "dev"),
+		DatabaseURL:            os.Getenv("DATABASE_URL"),
 		InstanceConnectionName: os.Getenv("INSTANCE_CONNECTION_NAME"),
 		DBIAMUser:              os.Getenv("DB_IAM_USER"),
 		DBName:                 os.Getenv("DB_NAME"),
@@ -73,13 +81,18 @@ func Load() (*Config, error) {
 	cfg.CORSOrigins = append(parseCORSOrigins(os.Getenv("BACKEND_CORS_ORIGINS")), strings.TrimRight(cfg.FrontendHost, "/"))
 
 	var missing []string
-	for k, v := range map[string]string{
-		"INSTANCE_CONNECTION_NAME": cfg.InstanceConnectionName,
-		"DB_IAM_USER":              cfg.DBIAMUser,
-		"DB_NAME":                  cfg.DBName,
-	} {
-		if v == "" {
-			missing = append(missing, k)
+	// The Cloud SQL connector vars are only needed when DATABASE_URL isn't
+	// set (i.e. prod / connector path). A plain DATABASE_URL supplies host,
+	// user, and dbname itself.
+	if cfg.DatabaseURL == "" {
+		for k, v := range map[string]string{
+			"INSTANCE_CONNECTION_NAME": cfg.InstanceConnectionName,
+			"DB_IAM_USER":              cfg.DBIAMUser,
+			"DB_NAME":                  cfg.DBName,
+		} {
+			if v == "" {
+				missing = append(missing, k)
+			}
 		}
 	}
 	if cfg.Env != "dev" && cfg.FirebaseProjectID == "" {

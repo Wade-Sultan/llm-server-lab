@@ -18,6 +18,7 @@ import (
 	"cloud.google.com/go/cloudsqlconn/postgres/pgxv5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
+	_ "github.com/jackc/pgx/v5/stdlib" // "pgx" database/sql driver for the dev DATABASE_URL path
 
 	"github.com/palladium/commerce/internal/config"
 )
@@ -36,28 +37,25 @@ type Store struct {
 	cleanup func() error
 }
 
-// New opens a connection pool to the shared Postgres instance via the Cloud
-// SQL connector, using IAM database authentication (cfg.DBIAMUser) rather
-// than a password.
+// New opens a connection pool to the shared Postgres instance. In prod it uses
+// the Cloud SQL connector with IAM database authentication (cfg.DBIAMUser, no
+// password); when cfg.DatabaseURL is set (local dev via the cloud-sql-proxy) it
+// connects with the plain pgx driver over that DSN instead.
 func New(ctx context.Context, cfg *config.Config) (*Store, error) {
-	opts := []cloudsqlconn.Option{cloudsqlconn.WithIAMAuthN()}
-	if cfg.DBUsePrivateIP {
-		opts = append(opts, cloudsqlconn.WithDefaultDialOptions(cloudsqlconn.WithPrivateIP()))
+	var (
+		db      *sql.DB
+		cleanup func() error
+		err     error
+	)
+	if cfg.DatabaseURL != "" {
+		db, cleanup, err = openDirect(cfg.DatabaseURL)
+	} else {
+		db, cleanup, err = openConnector(cfg)
 	}
-
-	cleanup, err := pgxv5.RegisterDriver(driverName, opts...)
 	if err != nil {
-		return nil, fmt.Errorf("register cloud sql driver: %w", err)
+		return nil, err
 	}
 
-	dsn := fmt.Sprintf("host=%s user=%s dbname=%s sslmode=disable",
-		cfg.InstanceConnectionName, cfg.DBIAMUser, cfg.DBName)
-
-	db, err := sql.Open(driverName, dsn)
-	if err != nil {
-		_ = cleanup()
-		return nil, fmt.Errorf("open db: %w", err)
-	}
 	db.SetMaxOpenConns(5)
 	db.SetMaxIdleConns(5)
 	db.SetConnMaxLifetime(30 * time.Minute)
@@ -71,6 +69,42 @@ func New(ctx context.Context, cfg *config.Config) (*Store, error) {
 	}
 
 	return &Store{db: db, cleanup: cleanup}, nil
+}
+
+// openDirect connects with the plain pgx database/sql driver over a standard
+// Postgres DSN — the local-dev path (cloud-sql-proxy on localhost:5433). It
+// registers no connector driver, so cleanup is a no-op.
+func openDirect(dsn string) (*sql.DB, func() error, error) {
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		return nil, nil, fmt.Errorf("open db: %w", err)
+	}
+	return db, func() error { return nil }, nil
+}
+
+// openConnector connects via the Cloud SQL Go connector using IAM database
+// authentication (cfg.DBIAMUser) rather than a password. The returned cleanup
+// deregisters the connector driver and must be called on shutdown.
+func openConnector(cfg *config.Config) (*sql.DB, func() error, error) {
+	opts := []cloudsqlconn.Option{cloudsqlconn.WithIAMAuthN()}
+	if cfg.DBUsePrivateIP {
+		opts = append(opts, cloudsqlconn.WithDefaultDialOptions(cloudsqlconn.WithPrivateIP()))
+	}
+
+	cleanup, err := pgxv5.RegisterDriver(driverName, opts...)
+	if err != nil {
+		return nil, nil, fmt.Errorf("register cloud sql driver: %w", err)
+	}
+
+	dsn := fmt.Sprintf("host=%s user=%s dbname=%s sslmode=disable",
+		cfg.InstanceConnectionName, cfg.DBIAMUser, cfg.DBName)
+
+	db, err := sql.Open(driverName, dsn)
+	if err != nil {
+		_ = cleanup()
+		return nil, nil, fmt.Errorf("open db: %w", err)
+	}
+	return db, cleanup, nil
 }
 
 func (s *Store) Close() error {
