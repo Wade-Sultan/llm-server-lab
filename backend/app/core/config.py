@@ -80,6 +80,8 @@ class Settings(BaseSettings):
     # Unset = discovery endpoints return 503.
     DISCOVERY_API_KEY: str | None = None
 
+    SERPAPI_KEY: str
+
 
 settings = Settings()  # type: ignore
 

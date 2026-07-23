@@ -95,6 +95,8 @@ class PCPart(Base):
     msrp_cents = Column(Integer, nullable=True)
     street_price_cents = Column(Integer, nullable=True)
     price_source = Column(String(20), nullable=True)
+    last_price_checked_at = Column(DateTime(timezone=True), nullable=True,
+                                   comment="When the pricing ETL last ran a SerpAPI check for this part")
     used_market_viable = Column(Boolean, nullable=True, server_default="false")
 
     is_active = Column(Boolean, nullable=False, default=True, server_default="true")
@@ -139,6 +141,8 @@ class GPUChipset(Base):
 
     # Street price lives on the group (shared by every board of this chipset).
     street_price_cents = Column(Integer, nullable=True)
+    price_source = Column(String(20), nullable=True)
+    last_price_checked_at = Column(DateTime(timezone=True), nullable=True)
 
     vram_gb = Column(Integer, nullable=False)
     vram_type = Column(String(20), nullable=True)
@@ -170,6 +174,8 @@ class PSUGroup(Base):
 
     # Street price lives on the group (shared by every unit in this spec).
     street_price_cents = Column(Integer, nullable=True)
+    price_source = Column(String(20), nullable=True)
+    last_price_checked_at = Column(DateTime(timezone=True), nullable=True)
 
     wattage = Column(Integer, nullable=False)
     form_factor = Column(String(10), nullable=False)
@@ -197,6 +203,8 @@ class RAMGroup(Base):
 
     # Street price lives on the group (shared by every kit in this spec).
     street_price_cents = Column(Integer, nullable=True)
+    price_source = Column(String(20), nullable=True)
+    last_price_checked_at = Column(DateTime(timezone=True), nullable=True)
 
     ddr_generation = Column(String(10), nullable=False)
     speed_mhz = Column(Integer, nullable=False)
@@ -222,6 +230,8 @@ class StorageGroup(Base):
 
     # Street price lives on the group (shared by every drive in this spec).
     street_price_cents = Column(Integer, nullable=True)
+    price_source = Column(String(20), nullable=True)
+    last_price_checked_at = Column(DateTime(timezone=True), nullable=True)
 
     storage_type = Column(String(20), nullable=False)
     form_factor = Column(String(20), nullable=False)

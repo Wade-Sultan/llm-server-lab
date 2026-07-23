@@ -30,7 +30,7 @@ steps:
       - '--allow-unauthenticated'
       - '--add-cloudsql-instances=$PROJECT_ID:us-central1:palladium-db'
       - '--service-account=palladium-backend@$PROJECT_ID.iam.gserviceaccount.com'
-      - '--set-secrets=POSTGRES_PASSWORD=palladium-db-password-prod:latest,OPENROUTER_API_KEY=openrouter-api-key:latest'
+      - '--set-secrets=POSTGRES_PASSWORD=palladium-db-password-prod:latest,OPENROUTER_API_KEY=openrouter-api-key:latest,SERPAPI_KEY=serpapi-key:latest'
       - '--set-env-vars=^|^ENVIRONMENT=production|PROJECT_NAME=Palladium|FRONTEND_HOST=https://palladiumtech.ai|BACKEND_CORS_ORIGINS=https://palladiumtech.ai,https://www.palladiumtech.ai|POSTGRES_USER=palladium_app|POSTGRES_DB=palladium|CLOUD_SQL_INSTANCE=$PROJECT_ID:us-central1:palladium-db|POSTGRES_SERVER=ignored|POSTGRES_PORT=5432'
       - '--min-instances=0'
       - '--max-instances=4'
@@ -41,6 +41,28 @@ steps:
       - '--concurrency=80'
       - '--cpu-throttling'
       - '--session-affinity'
+
+  # Pricing ETL: SerpAPI street-price checks, run daily by Cloud Scheduler
+  # against this Job (scheduler trigger is set up manually — see runbook,
+  # not tracked in this repo). Reuses the backend image built above; only the
+  # container command differs.
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: 'gcloud'
+    args:
+      - 'run'
+      - 'jobs'
+      - 'deploy'
+      - 'palladium-pricing-etl'
+      - '--image=us-central1-docker.pkg.dev/$PROJECT_ID/palladium/backend:$BUILD_ID'
+      - '--region=us-central1'
+      - '--command=python'
+      - '--args=-m,app.jobs.pricing_etl'
+      - '--set-cloudsql-instances=$PROJECT_ID:us-central1:palladium-db'
+      - '--service-account=palladium-backend@$PROJECT_ID.iam.gserviceaccount.com'
+      - '--set-secrets=POSTGRES_PASSWORD=palladium-db-password-prod:latest,OPENROUTER_API_KEY=openrouter-api-key:latest,SERPAPI_KEY=serpapi-key:latest'
+      - '--set-env-vars=^|^ENVIRONMENT=production|PROJECT_NAME=Palladium|POSTGRES_USER=palladium_app|POSTGRES_DB=palladium|CLOUD_SQL_INSTANCE=$PROJECT_ID:us-central1:palladium-db|POSTGRES_SERVER=ignored|POSTGRES_PORT=5432'
+      - '--max-retries=1'
+      - '--task-timeout=900'
 
 images:
   - 'us-central1-docker.pkg.dev/$PROJECT_ID/palladium/backend:$BUILD_ID'
