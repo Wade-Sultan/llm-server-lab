@@ -133,3 +133,36 @@ services:
       - SUPABASE_URL=${SUPABASE_URL}
       - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
       - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+
+  # ──────────────────────────────────────────────
+  # Commerce – Go service (port 8080). Handles account sync (Resend welcome
+  # emails) and listings. Frontend reaches it at localhost:8080 via
+  # NEXT_PUBLIC_COMMERCE_URL. Uses the DATABASE_URL dev path (plain pgx over the
+  # proxy) instead of the Cloud SQL connector.
+  # ──────────────────────────────────────────────
+  commerce:
+    build:
+      context: ./commerce
+    restart: unless-stopped
+    depends_on:
+      cloud-sql-proxy:
+        condition: service_started
+    ports:
+      - "8080:8080"
+    environment:
+      - ENV=dev
+      # Direct pgx connection through the proxy (no Cloud SQL connector / IAM).
+      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@cloud-sql-proxy:5432/${POSTGRES_DB}?sslmode=disable
+      # Must be the FRONTEND Firebase project (token audience), not the GCP one.
+      - FIREBASE_PROJECT_ID=${FIREBASE_PROJECT_ID}
+      # CORS: match the local frontend origin (npm run dev) + admin.
+      - FRONTEND_HOST=http://localhost:3000
+      - BACKEND_CORS_ORIGINS=http://localhost:3000,http://localhost:3001
+      # Resend welcome emails — empty disables sending (service still boots).
+      - RESEND_API_KEY=${RESEND_API_KEY}
+      - EMAIL_FROM=${EMAIL_FROM:-Palladium <noreply@palladiumtech.ai>}
+      - AMAZON_ASSOCIATE_TAG=${AMAZON_ASSOCIATE_TAG}
+      # Firebase Admin SDK needs Google creds to init; reuse the proxy's ADC.
+      - GOOGLE_APPLICATION_CREDENTIALS=/gcloud/application_default_credentials.json
+    volumes:
+      - ./.gcloud/application_default_credentials.json:/gcloud/application_default_credentials.json:ro
