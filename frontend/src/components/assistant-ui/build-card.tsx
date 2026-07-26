@@ -1,8 +1,9 @@
 "use client"
 
 import type { DataMessagePartComponent } from "@assistant-ui/react"
-import { type ComponentType, useEffect, useState } from "react"
-import { AmazonLogo, EbayLogo } from "@/components/assistant-ui/brand-logos"
+import { useEffect, useState } from "react"
+import { type IconType } from "react-icons"
+import { FaAmazon, FaEbay } from "react-icons/fa6"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -19,26 +20,30 @@ const formatPrice = (value: number, currency = "USD") =>
   value.toLocaleString("en-US", { style: "currency", currency })
 
 /**
- * A single marketplace buy button — the brand's wordmark logo as a link to the
+ * A single marketplace buy button — the brand's icon as a link to the
  * marketplace. Renders as a disabled button when no url is available so the
- * marketplace stays visible.
+ * marketplace stays visible. `className` carries the per-brand hover-border
+ * effect (see .mp-btn-* in index.css).
  */
 function MarketplaceButton({
   url,
   label,
-  logo: Logo,
+  icon: Icon,
+  className,
   partLabel,
 }: {
   url: string | null | undefined
   label: string
-  logo: ComponentType<{ className?: string }>
+  icon: IconType
+  className?: string
   partLabel: string
 }) {
   return (
     <Button
       type="button"
       variant="outline"
-      size="sm"
+      size="icon-sm"
+      className={className}
       disabled={!url}
       title={`Buy on ${label}`}
       aria-label={`Buy ${partLabel} on ${label}`}
@@ -46,10 +51,10 @@ function MarketplaceButton({
     >
       {url ? (
         <a href={url} target="_blank" rel="noopener noreferrer sponsored">
-          <Logo className="h-4 w-auto" />
+          <Icon className="size-4" />
         </a>
       ) : (
-        <Logo className="h-4 w-auto" />
+        <Icon className="size-4" />
       )}
     </Button>
   )
@@ -130,13 +135,15 @@ export const BuildCard: DataMessagePartComponent<BuildData> = (props) => {
                   <MarketplaceButton
                     url={amazonUrl}
                     label="Amazon"
-                    logo={AmazonLogo}
+                    icon={FaAmazon}
+                    className="mp-btn mp-btn-amazon"
                     partLabel={partLabel}
                   />
                   <MarketplaceButton
                     url={ebayUrl}
                     label="eBay"
-                    logo={EbayLogo}
+                    icon={FaEbay}
+                    className="mp-btn mp-btn-ebay"
                     partLabel={partLabel}
                   />
                 </div>

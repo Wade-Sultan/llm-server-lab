@@ -173,3 +173,67 @@
 .dark *:hover::-webkit-scrollbar-thumb:hover {
   background: oklch(0.708 0 0 / 45%);
 }
+
+/* ── Marketplace buy-button hover borders (see build-card.tsx) ──
+   A brand-colored ring fades in on hover and out on leave. eBay's four colors
+   rotate ("snake") around the border via an animated conic gradient; Amazon
+   gets a constant orange ring. Gated on `@media (hover: hover)` so it never
+   sticks on touch devices (no tap trigger). Disabled buttons don't hover
+   (the button base sets `disabled:pointer-events-none`). */
+@property --mp-angle {
+  syntax: "<angle>";
+  initial-value: 0deg;
+  inherits: false;
+}
+
+@keyframes mp-snake {
+  to {
+    --mp-angle: 360deg;
+  }
+}
+
+@media (hover: hover) {
+  .mp-btn {
+    position: relative;
+  }
+
+  .mp-btn::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    padding: 2px; /* ring thickness */
+    opacity: 0;
+    transition: opacity 200ms ease;
+    pointer-events: none;
+    /* Show only the padded border ring, punching out the center. */
+    -webkit-mask:
+      linear-gradient(#fff 0 0) content-box,
+      linear-gradient(#fff 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+  }
+
+  .mp-btn:hover::before {
+    opacity: 1;
+  }
+
+  .mp-btn-amazon::before {
+    background: #ff9900;
+  }
+
+  .mp-btn-ebay::before {
+    background: conic-gradient(
+      from var(--mp-angle),
+      #e53238,
+      #0064d2,
+      #f5af02,
+      #86b817,
+      #e53238
+    );
+  }
+
+  .mp-btn-ebay:hover::before {
+    animation: mp-snake 2.5s linear infinite;
+  }
+}
