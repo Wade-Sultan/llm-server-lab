@@ -225,11 +225,11 @@
   .mp-btn-ebay::before {
     background: conic-gradient(
       from var(--mp-angle),
-      #e53238,
-      #0064d2,
-      #f5af02,
-      #86b817,
-      #e53238
+      #ff3b3b,
+      #1a8fff,
+      #ffcc00,
+      #4ce832,
+      #ff3b3b
     );
   }
 
