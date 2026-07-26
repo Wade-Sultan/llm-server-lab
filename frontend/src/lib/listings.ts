@@ -24,20 +24,33 @@ async function fetchListingsForPart(partId: string): Promise<Listing[]> {
   return data.data ?? []
 }
 
+/** The current listing for a part, split by marketplace. */
+export interface PartListings {
+  amazon?: Listing
+  ebay?: Listing
+}
+
 /**
- * Fetch the best current listing for each part, keyed by part_id. Parts with
- * no active listing (or failed requests) are simply absent from the result —
- * callers fall back to whatever snapshot data they already have.
+ * Fetch the current listings for each part, keyed by part_id and split by
+ * marketplace (the first active listing of each). Parts with no active listing
+ * (or failed requests) are simply absent from the result — callers fall back to
+ * whatever snapshot data they already have.
  */
-export async function fetchBestListings(
+export async function fetchListingsByPart(
   partIds: string[],
-): Promise<Record<string, Listing>> {
-  const results: Record<string, Listing> = {}
+): Promise<Record<string, PartListings>> {
+  const results: Record<string, PartListings> = {}
   await Promise.allSettled(
     partIds.map(async (partId) => {
       const listings = await fetchListingsForPart(partId)
-      const best = listings.find((l) => l.url) ?? listings[0]
-      if (best) results[partId] = best
+      const byMarketplace: PartListings = {}
+      for (const l of listings) {
+        if (l.marketplace === "amazon") byMarketplace.amazon ??= l
+        else if (l.marketplace === "ebay") byMarketplace.ebay ??= l
+      }
+      if (byMarketplace.amazon || byMarketplace.ebay) {
+        results[partId] = byMarketplace
+      }
     }),
   )
   return results

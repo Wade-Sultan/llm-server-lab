@@ -1,8 +1,8 @@
 "use client"
 
 import type { DataMessagePartComponent } from "@assistant-ui/react"
-import { ShoppingCartIcon } from "lucide-react"
-import { useEffect, useState } from "react"
+import { type ComponentType, useEffect, useState } from "react"
+import { AmazonLogo, EbayLogo } from "@/components/assistant-ui/brand-logos"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -13,10 +13,47 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import type { BuildData } from "@/hooks/useConversationState"
-import { fetchBestListings, type Listing } from "@/lib/listings"
+import { fetchListingsByPart, type PartListings } from "@/lib/listings"
 
 const formatPrice = (value: number, currency = "USD") =>
   value.toLocaleString("en-US", { style: "currency", currency })
+
+/**
+ * A single marketplace buy button — the brand's wordmark logo as a link to the
+ * marketplace. Renders as a disabled button when no url is available so the
+ * marketplace stays visible.
+ */
+function MarketplaceButton({
+  url,
+  label,
+  logo: Logo,
+  partLabel,
+}: {
+  url: string | null | undefined
+  label: string
+  logo: ComponentType<{ className?: string }>
+  partLabel: string
+}) {
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      disabled={!url}
+      title={`Buy on ${label}`}
+      aria-label={`Buy ${partLabel} on ${label}`}
+      asChild={!!url}
+    >
+      {url ? (
+        <a href={url} target="_blank" rel="noopener noreferrer sponsored">
+          <Logo className="h-4 w-auto" />
+        </a>
+      ) : (
+        <Logo className="h-4 w-auto" />
+      )}
+    </Button>
+  )
+}
 
 /**
  * Fetch the current listing for each part from the commerce service. The
@@ -25,12 +62,12 @@ const formatPrice = (value: number, currency = "USD") =>
  * affiliate URLs. Absent entries mean "use the snapshot".
  */
 function usePartListings(parts: BuildData["parts"]) {
-  const [listings, setListings] = useState<Record<string, Listing>>({})
+  const [listings, setListings] = useState<Record<string, PartListings>>({})
   const partIdsKey = parts.map((p) => p.part_id).join(",")
 
   useEffect(() => {
     let cancelled = false
-    fetchBestListings(partIdsKey.split(",").filter(Boolean)).then((results) => {
+    fetchListingsByPart(partIdsKey.split(",").filter(Boolean)).then((results) => {
       if (!cancelled) setListings(results)
     })
     return () => {
@@ -59,8 +96,15 @@ export const BuildCard: DataMessagePartComponent<BuildData> = (props) => {
         </CardHeader>
         <CardContent className="flex flex-col gap-2">
           {data.parts.map((part) => {
-            const listing = listings[part.part_id]
-            const amazonUrl = listing?.url ?? part.amazon_url
+            const partListings = listings[part.part_id]
+            const amazonListing = partListings?.amazon
+            const ebayListing = partListings?.ebay
+            const amazonUrl = amazonListing?.url ?? part.amazon_url
+            const ebayUrl = ebayListing?.url
+            // Live price comes from the Amazon listing (eBay listings are
+            // filtered search links with no single price).
+            const priceListing = amazonListing
+            const partLabel = `${part.brand} ${part.model}`
             return (
               <div
                 key={part.part_id}
@@ -74,39 +118,27 @@ export const BuildCard: DataMessagePartComponent<BuildData> = (props) => {
                     {part.brand} {part.model}
                   </p>
                 </div>
-                <div className="flex shrink-0 items-center gap-2">
-                  {listing?.price_amount != null && (
+                <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+                  {priceListing?.price_amount != null && (
                     <span className="text-sm text-muted-foreground">
                       {formatPrice(
-                        listing.price_amount / 100,
-                        listing.currency ?? "USD",
+                        priceListing.price_amount / 100,
+                        priceListing.currency ?? "USD",
                       )}
                     </span>
                   )}
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    disabled={!amazonUrl}
-                    aria-label={`Buy ${part.brand} ${part.model} on Amazon`}
-                    asChild={!!amazonUrl}
-                  >
-                    {amazonUrl ? (
-                      <a
-                        href={amazonUrl}
-                        target="_blank"
-                        rel="noopener noreferrer sponsored"
-                      >
-                        <ShoppingCartIcon className="size-4" />
-                        Amazon
-                      </a>
-                    ) : (
-                      <>
-                        <ShoppingCartIcon className="size-4" />
-                        Amazon
-                      </>
-                    )}
-                  </Button>
+                  <MarketplaceButton
+                    url={amazonUrl}
+                    label="Amazon"
+                    logo={AmazonLogo}
+                    partLabel={partLabel}
+                  />
+                  <MarketplaceButton
+                    url={ebayUrl}
+                    label="eBay"
+                    logo={EbayLogo}
+                    partLabel={partLabel}
+                  />
                 </div>
               </div>
             )
