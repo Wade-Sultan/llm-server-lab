@@ -42,6 +42,11 @@ type Config struct {
 	// AssociateTag is the Amazon Associates tracking id for affiliate links.
 	AssociateTag string
 
+	// EbayCampaignID is the eBay Partner Network campaign id (campid) appended
+	// to eBay listing URLs for click attribution. Empty leaves links working
+	// but unattributed, mirroring AssociateTag.
+	EbayCampaignID string
+
 	// FirebaseProjectID is passed to the Firebase Admin SDK for ID token
 	// verification. Required outside dev, where Application Default
 	// Credentials on Cloud Run resolve the project automatically.
@@ -73,6 +78,7 @@ func Load() (*Config, error) {
 		DBName:                 os.Getenv("DB_NAME"),
 		DBUsePrivateIP:         os.Getenv("DB_USE_PRIVATE_IP") == "true",
 		AssociateTag:           os.Getenv("AMAZON_ASSOCIATE_TAG"),
+		EbayCampaignID:         os.Getenv("EBAY_CAMPAIGN_ID"),
 		FirebaseProjectID:      os.Getenv("FIREBASE_PROJECT_ID"),
 		FrontendHost:           getenv("FRONTEND_HOST", "http://localhost:3000"),
 		ResendAPIKey:           os.Getenv("RESEND_API_KEY"),

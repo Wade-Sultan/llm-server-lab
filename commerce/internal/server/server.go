@@ -18,11 +18,12 @@ import (
 
 // handlers holds the dependencies shared by all route handlers.
 type handlers struct {
-	store        *store.Store
-	auth         *fbauth.Client
-	email        *email.Client
-	associateTag string
-	logger       *slog.Logger
+	store          *store.Store
+	auth           *fbauth.Client
+	email          *email.Client
+	associateTag   string
+	ebayCampaignID string
+	logger         *slog.Logger
 }
 
 // New builds the fully-configured HTTP handler for the commerce service. It
@@ -48,11 +49,12 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger) (http.Han
 	}
 
 	h := &handlers{
-		store:        st,
-		auth:         fbAuth,
-		email:        email.New(cfg.ResendAPIKey, cfg.EmailFrom),
-		associateTag: cfg.AssociateTag,
-		logger:       logger,
+		store:          st,
+		auth:           fbAuth,
+		email:          email.New(cfg.ResendAPIKey, cfg.EmailFrom),
+		associateTag:   cfg.AssociateTag,
+		ebayCampaignID: cfg.EbayCampaignID,
+		logger:         logger,
 	}
 
 	mux := http.NewServeMux()

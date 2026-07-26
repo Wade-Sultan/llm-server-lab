@@ -31,3 +31,34 @@ func TestAmazonURL(t *testing.T) {
 		})
 	}
 }
+
+func TestEbayURL(t *testing.T) {
+	search := "https://www.ebay.com/sch/i.html?_nkw=RTX+4070&LH_BIN=1"
+	noQuery := "https://www.ebay.com/deals"
+	empty := ""
+	prewrapped := "https://www.ebay.com/sch/i.html?_nkw=RTX+4070&campid=5338999999"
+	track := "&mkevt=1&mkcid=1&mkrid=" + ebayUSRotationID + "&campid=5338999999&toolid=10001"
+
+	cases := []struct {
+		name       string
+		storedURL  *string
+		campaignID string
+		want       string
+	}{
+		{"nil url returns empty", nil, "5338999999", ""},
+		{"empty url returns empty", &empty, "5338999999", ""},
+		{"no campaign id returns url verbatim", &search, "", search},
+		{"appends tracking to url with existing query", &search, "5338999999", search + track},
+		{"appends tracking to url without query", &noQuery, "5338999999", noQuery + "?" + "mkevt=1&mkcid=1&mkrid=" + ebayUSRotationID + "&campid=5338999999&toolid=10001"},
+		{"already-wrapped url is returned verbatim", &prewrapped, "5338999999", prewrapped},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := EbayURL(c.storedURL, c.campaignID)
+			if got != c.want {
+				t.Errorf("EbayURL(%v, %q) = %q, want %q", c.storedURL, c.campaignID, got, c.want)
+			}
+		})
+	}
+}

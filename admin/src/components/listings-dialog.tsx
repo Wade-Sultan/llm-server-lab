@@ -17,8 +17,11 @@ import {
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Input } from '@/components/ui/input';
-import { asinSchema } from '@/lib/utils';
-import { createAmazonListing, updateAmazonListing, deleteListing, type AmazonListingFormData } from '@/lib/listings';
+import { asinSchema, ebayUrlSchema } from '@/lib/utils';
+import {
+  createAmazonListing, updateAmazonListing, createEbayListing, updateEbayListing, deleteListing,
+  type AmazonListingFormData, type EbayListingFormData,
+} from '@/lib/listings';
 
 type ListingWithAmazon = Listing & { amazonListing: AmazonListing | null };
 
@@ -96,6 +99,71 @@ function AmazonListingForm({
   );
 }
 
+const ebaySchema = z.object({
+  url: ebayUrlSchema,
+});
+
+function EbayListingForm({
+  listing,
+  partId,
+  onSuccess,
+  onCancel,
+}: {
+  listing: ListingWithAmazon | null;
+  partId: string;
+  onSuccess: () => void;
+  onCancel: () => void;
+}) {
+  const form = useForm<EbayListingFormData>({
+    resolver: zodResolver(ebaySchema),
+    defaultValues: {
+      url: listing?.url ?? '',
+    },
+  });
+  const [error, setError] = useState<string | null>(null);
+
+  async function onSubmit(data: EbayListingFormData) {
+    setError(null);
+    try {
+      if (listing) {
+        await updateEbayListing(listing.id, data);
+      } else {
+        await createEbayListing(partId, data);
+      }
+      onSuccess();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'An error occurred');
+    }
+  }
+
+  return (
+    <Form {...form}>
+      <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+        <FormField control={form.control} name="url"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>eBay search URL</FormLabel>
+              <FormControl><Input {...field} placeholder="https://www.ebay.com/sch/i.html?_nkw=..." /></FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+        <p className="text-xs text-muted-foreground">
+          Build a filtered search on eBay and paste the resulting URL. Affiliate tracking (your eBay Partner
+          Network campaign) is appended automatically when the link is served.
+        </p>
+        {error && <p className="text-sm text-destructive">{error}</p>}
+        <div className="flex justify-end gap-2 pt-2">
+          <Button type="button" variant="outline" onClick={onCancel}>Cancel</Button>
+          <Button type="submit" disabled={form.formState.isSubmitting}>
+            {form.formState.isSubmitting ? 'Saving...' : listing ? 'Update Listing' : 'Add Listing'}
+          </Button>
+        </div>
+      </form>
+    </Form>
+  );
+}
+
 export function ListingsDialog({ partId, partName, listings }: { partId: string; partName: string; listings: ListingWithAmazon[] }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -130,15 +198,13 @@ export function ListingsDialog({ partId, partName, listings }: { partId: string;
           <DialogHeader><DialogTitle>Listings — {partName}</DialogTitle></DialogHeader>
 
           {showingForm ? (
-            addingType === 'ebay' ? (
-              <div className="space-y-4">
-                <p className="text-sm text-muted-foreground rounded-md border border-dashed p-4 text-center">
-                  eBay listings: work in progress.
-                </p>
-                <div className="flex justify-end">
-                  <Button variant="outline" onClick={() => setAddingType(null)}>Back</Button>
-                </div>
-              </div>
+            addingType === 'ebay' || editingListing?.marketplace === 'ebay' ? (
+              <EbayListingForm
+                listing={editingListing}
+                partId={partId}
+                onSuccess={handleSuccess}
+                onCancel={() => { setAddingType(null); setEditingListing(null); }}
+              />
             ) : (
               <AmazonListingForm
                 listing={editingListing}
@@ -180,13 +246,14 @@ export function ListingsDialog({ partId, partName, listings }: { partId: string;
                     <TableHead>Marketplace</TableHead>
                     <TableHead>ASIN</TableHead>
                     <TableHead>Brand</TableHead>
+                    <TableHead>URL</TableHead>
                     <TableHead className="w-0" />
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {filtered.length === 0 && (
                     <TableRow>
-                      <TableCell colSpan={4} className="text-center text-muted-foreground">
+                      <TableCell colSpan={5} className="text-center text-muted-foreground">
                         No listings yet.
                       </TableCell>
                     </TableRow>
@@ -198,13 +265,18 @@ export function ListingsDialog({ partId, partName, listings }: { partId: string;
                       </TableCell>
                       <TableCell>{l.amazonListing?.asin ?? '—'}</TableCell>
                       <TableCell>{l.amazonListing?.brand ?? '—'}</TableCell>
+                      <TableCell className="max-w-[220px]">
+                        {l.url ? (
+                          <a href={l.url} target="_blank" rel="noreferrer" className="block truncate text-primary hover:underline" title={l.url}>
+                            {l.url}
+                          </a>
+                        ) : '—'}
+                      </TableCell>
                       <TableCell>
                         <div className="flex items-center gap-1 justify-end">
-                          {l.listingType === 'amazon' && (
-                            <Button variant="ghost" size="sm" onClick={() => setEditingListing(l)}>
-                              <Pencil className="h-3.5 w-3.5" />
-                            </Button>
-                          )}
+                          <Button variant="ghost" size="sm" onClick={() => setEditingListing(l)}>
+                            <Pencil className="h-3.5 w-3.5" />
+                          </Button>
                           <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive" onClick={() => setDeleteId(l.id)}>
                             <Trash2 className="h-3.5 w-3.5" />
                           </Button>

@@ -162,6 +162,7 @@ services:
       - RESEND_API_KEY=${RESEND_API_KEY}
       - EMAIL_FROM=${EMAIL_FROM:-Palladium <noreply@palladiumtech.ai>}
       - AMAZON_ASSOCIATE_TAG=${AMAZON_ASSOCIATE_TAG}
+      - EBAY_CAMPAIGN_ID=${EBAY_CAMPAIGN_ID}
       # Firebase Admin SDK needs Google creds to init; reuse the proxy's ADC.
       - GOOGLE_APPLICATION_CREDENTIALS=/gcloud/application_default_credentials.json
     volumes:

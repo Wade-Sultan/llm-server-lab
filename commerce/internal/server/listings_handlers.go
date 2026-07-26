@@ -55,9 +55,18 @@ func (h *handlers) toDTO(l *store.Listing) listingDTO {
 		CreatedAt: l.CreatedAt, UpdatedAt: l.UpdatedAt,
 		ASIN: l.ASIN, Brand: l.Brand, IsPrime: l.IsPrime, SellerName: l.SellerName, AffiliateTag: l.AffiliateTag,
 	}
-	if l.ListingType == "amazon" && l.ASIN != nil {
-		url := listings.AmazonURL(l.URL, *l.ASIN, h.associateTag)
-		dto.URL = &url
+	switch l.ListingType {
+	case "amazon":
+		if l.ASIN != nil {
+			url := listings.AmazonURL(l.URL, *l.ASIN, h.associateTag)
+			dto.URL = &url
+		}
+	case "ebay":
+		// eBay listings store the raw (filtered) search URL; wrap it with EPN
+		// tracking on read, the same read-time affiliate model as Amazon.
+		if url := listings.EbayURL(l.URL, h.ebayCampaignID); url != "" {
+			dto.URL = &url
+		}
 	}
 	return dto
 }
