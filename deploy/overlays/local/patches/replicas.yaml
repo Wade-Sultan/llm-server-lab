@@ -1,0 +1,14 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: builder
+spec:
+  # 1 replica locally. Safe because the §0.3 audit came back clean: /chat is
+  # stateless (the client resends the full message array, telemetry goes to
+  # Postgres, the SSE progress queue is request-scoped) and the only
+  # module-level cache, _resolve_cache, is keyed by profile attributes rather
+  # than conversation_id.
+  #
+  # If in-process per-conversation state is ever introduced, put this back to 2
+  # — a single local replica is exactly where that class of bug hides.
+  replicas: 1

@@ -1,0 +1,24 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: builder
+spec:
+  template:
+    spec:
+      containers:
+        - name: builder
+          # Reload mode, so Tilt's live_update sync of ./backend/app actually
+          # takes effect without rebuilding the image. Without this the sync
+          # lands in the container and nothing picks it up.
+          command:
+            ["fastapi", "dev", "--host", "0.0.0.0", "--port", "8000", "app/main.py"]
+          # Laptop-sized. The 1 vCPU / 1 GiB in base is inherited from the
+          # Cloud Run config and is still unvalidated (plan §0.5) — profile
+          # peak RSS during a full DSPy run before trusting it on Autopilot.
+          resources:
+            requests:
+              cpu: "500m"
+              memory: 768Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi

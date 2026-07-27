@@ -1,0 +1,71 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: builder
+spec:
+  replicas: 2
+  strategy:
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: builder
+  template:
+    metadata:
+      labels:
+        app: builder
+    spec:
+      serviceAccountName: builder
+      # /chat streams SSE for up to _DSPY_CHAT_TIMEOUT_S (180s default). At the
+      # commonly-suggested 40s the kubelet would SIGKILL mid-build on every
+      # rollout, dropping the user's recommendation. 200 = 180s of build + the
+      # preStop sleep + headroom.
+      terminationGracePeriodSeconds: 200
+      containers:
+        - name: builder
+          image: palladium/builder
+          ports:
+            - containerPort: 8000
+              name: http
+          envFrom:
+            - configMapRef:
+                name: builder-config
+            - secretRef:
+                name: palladium-secrets
+          # Guards the slow DSPy/litellm import: until this passes, the
+          # liveness probe is not evaluated at all. Without it, liveness fires
+          # during startup and the pod crash-loops for no visible reason.
+          startupProbe:
+            httpGet:
+              path: /api/v1/healthz
+              port: http
+            periodSeconds: 5
+            failureThreshold: 36 # 180s budget
+          livenessProbe:
+            httpGet:
+              path: /api/v1/healthz
+              port: http
+            periodSeconds: 15
+            failureThreshold: 3
+          # /readyz gates on both the DB pool and the DSPy warm-up, so a fresh
+          # pod is never added to the Service mid-import.
+          readinessProbe:
+            httpGet:
+              path: /api/v1/readyz
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              # Endpoint removal and SIGTERM race; this keeps the pod serving
+              # until it has actually left the Service's endpoint list.
+              exec:
+                command: ["sleep", "5"]
+          resources:
+            requests:
+              cpu: "1"
+              memory: 1Gi
+            limits:
+              cpu: "1"
+              memory: 1Gi

@@ -1,0 +1,58 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: commerce
+spec:
+  replicas: 1
+  strategy:
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: commerce
+  template:
+    metadata:
+      labels:
+        app: commerce
+    spec:
+      serviceAccountName: commerce
+      # Must exceed the in-process drainDelay (5s) + shutdownTimeout (20s) in
+      # cmd/server/main.go, or the kubelet SIGKILLs mid-shutdown.
+      terminationGracePeriodSeconds: 40
+      containers:
+        - name: commerce
+          image: palladium/commerce
+          ports:
+            - containerPort: 8080
+              name: http
+          envFrom:
+            - configMapRef:
+                name: commerce-config
+            - secretRef:
+                name: palladium-secrets
+          # No startupProbe: server.New() opens the pool and the Firebase client
+          # before binding, so if it is listening at all it is already warm.
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 15
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+          # NOTE: deliberately no preStop hook. The image is
+          # gcr.io/distroless/static-debian12 — no shell, no sleep binary — so
+          # an exec hook would only produce FailedPreStopHook events. The
+          # equivalent drain is done in-process on SIGTERM instead.
+          resources:
+            requests:
+              cpu: "200m"
+              memory: 128Mi
+            limits:
+              cpu: "500m"
+              memory: 256Mi

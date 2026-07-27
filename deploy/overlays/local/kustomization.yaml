@@ -1,0 +1,35 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+  - postgres-statefulset.yaml
+  - ingress-nginx.yaml
+
+patches:
+  - path: patches/replicas.yaml
+  - path: patches/builder-dev.yaml
+  - path: patches/config-local.yaml
+  - path: patches/gcp-adc.yaml
+
+# Secrets are generated from a gitignored .env.local — never a committed Secret
+# manifest. Base64 is encoding, not encryption, and a committed dev credential
+# reads exactly like a committed prod one to anyone reviewing the repo.
+secretGenerator:
+  - name: palladium-secrets
+    envs:
+      - .env.local
+
+generatorOptions:
+  # Deployments reference this Secret by a fixed name via envFrom, so the
+  # content hash suffix would break the reference. The tradeoff: editing
+  # .env.local does not itself roll the pods — restart them explicitly.
+  disableNameSuffixHash: true
+
+images:
+  - name: palladium/builder
+    newTag: dev
+  - name: palladium/commerce
+    newTag: dev
+  - name: palladium/admin
+    newTag: dev

@@ -41,4 +41,4 @@ COPY ./tests /app/tests
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync
 
-CMD ["bash", "-c", "bash scripts/prestart.sh && fastapi run --workers 1 --host 0.0.0.0 --port ${PORT:-8000} app/main.py"]
+CMD ["bash", "-c", "fastapi run --workers 1 --host 0.0.0.0 --port ${PORT:-8000} app/main.py"]

@@ -1,0 +1,79 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+spec:
+  # Headless: the StatefulSet needs stable per-pod DNS, and nothing benefits
+  # from load-balancing across a single replica.
+  clusterIP: None
+  selector:
+    app: postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+        - name: postgres
+          # Pin to the same major as Cloud SQL. A pgvector version mismatch
+          # between local and prod produces silent index-behaviour differences
+          # that are miserable to track down.
+          image: pgvector/pgvector:pg17
+          env:
+            - name: POSTGRES_USER
+              value: palladium_app
+            - name: POSTGRES_DB
+              value: palladium
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: palladium-secrets
+                  key: POSTGRES_PASSWORD
+            # Subdirectory, not the mount root: the PVC's lost+found would
+            # otherwise make initdb refuse to initialise.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          ports:
+            - containerPort: 5432
+              name: postgres
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "palladium_app", "-d", "palladium"]
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "palladium_app", "-d", "palladium"]
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          resources:
+            requests:
+              cpu: "250m"
+              memory: 512Mi
+            limits:
+              memory: 2Gi
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 10Gi

@@ -29,6 +29,7 @@ from typing import Any
 import dspy
 from sqlalchemy import func, select
 
+from app.core.logging import set_build_session_id
 from app.models.build_session import BuildSession, BuildSessionStatus, ModuleDecision
 from app.models.pcparts import PCPart
 
@@ -160,6 +161,9 @@ class BuildRecorder:
         user_id: uuid.UUID | str | None = None,
     ) -> None:
         self.session_id = uuid.uuid4()
+        # Tag every log line emitted for the rest of this run, so a build can be
+        # followed across replicas without threading the id through call sites.
+        set_build_session_id(str(self.session_id))
         self.pipeline_version = pipeline_version
         self.user_id = user_id
         try:

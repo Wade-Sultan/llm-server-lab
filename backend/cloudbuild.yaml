@@ -17,6 +17,41 @@ steps:
       - '--all-tags'
       - 'us-central1-docker.pkg.dev/$PROJECT_ID/palladium/backend'
 
+  # Migrations run once per deploy, here — not on container startup. Deployed
+  # and executed before the service below so a failed migration aborts the
+  # build and the old revision keeps serving. Reuses the backend image; only
+  # the command differs.
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: 'gcloud'
+    args:
+      - 'run'
+      - 'jobs'
+      - 'deploy'
+      - 'palladium-migrate'
+      - '--image=us-central1-docker.pkg.dev/$PROJECT_ID/palladium/backend:$BUILD_ID'
+      - '--region=us-central1'
+      - '--command=alembic'
+      - '--args=upgrade,head'
+      - '--set-cloudsql-instances=$PROJECT_ID:us-central1:palladium-db'
+      - '--service-account=palladium-backend@$PROJECT_ID.iam.gserviceaccount.com'
+      - '--set-secrets=POSTGRES_PASSWORD=palladium-db-password-prod:latest'
+      - '--set-env-vars=^|^ENVIRONMENT=production|PROJECT_NAME=Palladium|POSTGRES_USER=palladium_app|POSTGRES_DB=palladium|CLOUD_SQL_INSTANCE=$PROJECT_ID:us-central1:palladium-db|POSTGRES_SERVER=ignored|POSTGRES_PORT=5432'
+      - '--max-retries=0'
+      - '--task-timeout=900'
+
+  # --wait makes a non-zero exit here fail the build, so a bad migration never
+  # reaches the service deploy step. --max-retries=0 above keeps a half-applied
+  # migration from being retried on top of itself.
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: 'gcloud'
+    args:
+      - 'run'
+      - 'jobs'
+      - 'execute'
+      - 'palladium-migrate'
+      - '--region=us-central1'
+      - '--wait'
+
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: 'gcloud'
     args:

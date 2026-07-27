@@ -1,0 +1,50 @@
+# commerce calls firebase.NewApp() during server.New(), before it binds — with
+# no Application Default Credentials the pod fails to start at all, not on first
+# request. builder's firebase_admin.initialize_app() has the same dependency.
+# Mirrors the .gcloud mount in docker-compose.dev.yml.
+#
+# The gcp-adc Secret is created by the Tiltfile from
+# .gcloud/application_default_credentials.json rather than by secretGenerator,
+# because kustomize refuses to read files above the kustomization root without
+# --load-restrictor LoadRestrictionsNone.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: commerce
+spec:
+  template:
+    spec:
+      volumes:
+        - name: gcp-adc
+          secret:
+            secretName: gcp-adc
+      containers:
+        - name: commerce
+          env:
+            - name: GOOGLE_APPLICATION_CREDENTIALS
+              value: /var/run/gcp/application_default_credentials.json
+          volumeMounts:
+            - name: gcp-adc
+              mountPath: /var/run/gcp
+              readOnly: true
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: builder
+spec:
+  template:
+    spec:
+      volumes:
+        - name: gcp-adc
+          secret:
+            secretName: gcp-adc
+      containers:
+        - name: builder
+          env:
+            - name: GOOGLE_APPLICATION_CREDENTIALS
+              value: /var/run/gcp/application_default_credentials.json
+          volumeMounts:
+            - name: gcp-adc
+              mountPath: /var/run/gcp
+              readOnly: true

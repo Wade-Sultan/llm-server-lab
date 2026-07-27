@@ -107,6 +107,13 @@ func openConnector(cfg *config.Config) (*sql.DB, func() error, error) {
 	return db, cleanup, nil
 }
 
+// Ping verifies the pool can still reach the database. Backs the readiness
+// probe, which is deliberately separate from liveness: a DB blip should pull
+// this instance out of the Service's endpoints, not restart it.
+func (s *Store) Ping(ctx context.Context) error {
+	return s.db.PingContext(ctx)
+}
+
 func (s *Store) Close() error {
 	closeErr := s.db.Close()
 	cleanupErr := s.cleanup()

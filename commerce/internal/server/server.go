@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"time"
 
 	firebase "firebase.google.com/go/v4"
 	fbauth "firebase.google.com/go/v4/auth"
@@ -59,6 +60,7 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger) (http.Han
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", handleHealthz)
+	mux.HandleFunc("GET /readyz", h.handleReadyz)
 
 	// Listings — reads are public today (no auth dependency in the Python
 	// route either), writes require a valid Firebase user. Kept path-identical
@@ -89,8 +91,28 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger) (http.Han
 }
 
 // handleHealthz is a liveness probe. Cloud Run and uptime checks hit this.
+// It deliberately touches nothing external — a database hiccup must not get
+// an otherwise-healthy instance restarted.
 func handleHealthz(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleReadyz is the readiness probe: can this instance actually serve? The
+// short timeout matters — the probe's own period is the budget, so a hung
+// pool should fail fast rather than pile probe goroutines up behind it.
+func (h *handlers) handleReadyz(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	defer cancel()
+
+	if err := h.store.Ping(ctx); err != nil {
+		h.logger.Warn("readiness check failed", "err", err)
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+			"status": "not_ready",
+			"reason": "database",
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
 }
 
 // writeJSON is the shared response helper for JSON endpoints.

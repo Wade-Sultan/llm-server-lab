@@ -1,0 +1,27 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: builder-config
+data:
+  ENVIRONMENT: "local"
+  LOG_LEVEL: "DEBUG"
+  # In-cluster DNS for the Postgres StatefulSet's headless Service.
+  POSTGRES_SERVER: "postgres"
+  # The frontend still runs on the host via `npm run dev` (Next.js, :3000), so
+  # CORS has to allow the host origin rather than a cluster one. admin is
+  # included because it calls the API directly from the browser.
+  FRONTEND_HOST: "http://localhost:3000"
+  BACKEND_CORS_ORIGINS: "http://localhost:3000,http://admin.palladium.local"
+  # Must be the FRONTEND Firebase project (the ID token's audience), not the
+  # GCP project — a mismatch shows up as invalid-credential on every request.
+  FIREBASE_PROJECT_ID: "project-b8abf13d-d1ce-43f1-837"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: commerce-config
+data:
+  ENV: "dev"
+  FRONTEND_HOST: "http://localhost:3000"
+  BACKEND_CORS_ORIGINS: "http://localhost:3000,http://admin.palladium.local"
+  FIREBASE_PROJECT_ID: "project-b8abf13d-d1ce-43f1-837"

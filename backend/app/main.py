@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 
 import sentry_sdk
 from fastapi import FastAPI
@@ -9,6 +9,11 @@ from starlette.middleware.cors import CORSMiddleware
 
 from app.api.main import api_router
 from app.core.config import settings
+from app.core.logging import configure_logging
+from app.core.warmup import mark_dspy_warm
+
+# Before anything else logs, so uvicorn's startup lines are JSON too.
+configure_logging()
 
 logger = logging.getLogger(__name__)
 
@@ -33,14 +38,28 @@ async def _warm_dspy_pipeline() -> None:
         logger.exception(
             "DSPy warm-up failed; it will be configured lazily on first /chat request instead."
         )
+    finally:
+        # Flip readiness either way — see mark_dspy_warm's docstring for why a
+        # failed warm-up must not pin the pod out of the Service forever.
+        mark_dspy_warm()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Fire-and-forget: don't await, so lifespan startup (and thus port
     # binding) isn't blocked on the dspy/litellm import chain.
-    app.state.dspy_warm_task = asyncio.create_task(_warm_dspy_pipeline())
-    yield
+    warm_task = asyncio.create_task(_warm_dspy_pipeline())
+    app.state.dspy_warm_task = warm_task
+    try:
+        yield
+    finally:
+        # A SIGTERM landing mid-cold-start leaves this task partway through the
+        # import chain. Cancel and await it so shutdown isn't held open by it
+        # and asyncio doesn't log "Task was destroyed but it is pending".
+        if not warm_task.done():
+            warm_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await warm_task
 
 
 app = FastAPI(

@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: builder-config
+# Only environment-independent values live here. The overlay patches in
+# ENVIRONMENT, POSTGRES_SERVER, FRONTEND_HOST, BACKEND_CORS_ORIGINS and
+# FIREBASE_PROJECT_ID. Anything carrying a credential — POSTGRES_PASSWORD,
+# POSTGRES_DB_URL (embeds the password), API keys — goes in palladium-secrets.
+data:
+  PROJECT_NAME: "Palladium"
+  LOG_LEVEL: "INFO"
+  POSTGRES_PORT: "5432"
+  POSTGRES_USER: "palladium_app"
+  POSTGRES_DB: "palladium"

@@ -1,0 +1,36 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: pricing-etl
+spec:
+  schedule: "0 4 * * *"
+  # Requires k8s 1.27+; without it the schedule silently runs in UTC.
+  timeZone: "America/Los_Angeles"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 300
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 3600
+      ttlSecondsAfterFinished: 86400
+      template:
+        spec:
+          restartPolicy: Never
+          serviceAccountName: builder
+          containers:
+            - name: etl
+              image: palladium/builder
+              # Same entrypoint as the Cloud Run Job in backend/cloudbuild.yaml,
+              # so the two stay in lockstep during the migration.
+              command: ["python", "-m", "app.jobs.pricing_etl"]
+              envFrom:
+                - configMapRef:
+                    name: builder-config
+                - secretRef:
+                    name: palladium-secrets
+              resources:
+                requests:
+                  cpu: "1"
+                  memory: 2Gi

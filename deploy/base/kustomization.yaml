@@ -1,0 +1,28 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Environment-independent shape only. Anything that differs between local and
+# GKE — replica counts, DB endpoint, ingress class, resource ceilings — belongs
+# in an overlay, never here.
+#
+# Note: labels are metadata only (includeSelectors defaults to false). Adding
+# them to selectors would make the Deployments' selectors immutable-conflict on
+# the first apply against an existing cluster.
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: palladium
+
+resources:
+  - builder/serviceaccount.yaml
+  - builder/configmap.yaml
+  - builder/deployment.yaml
+  - builder/service.yaml
+  - commerce/serviceaccount.yaml
+  - commerce/configmap.yaml
+  - commerce/deployment.yaml
+  - commerce/service.yaml
+  - admin/serviceaccount.yaml
+  - admin/deployment.yaml
+  - admin/service.yaml
+  - jobs/migrate-job.yaml
+  - jobs/pricing-etl-cronjob.yaml

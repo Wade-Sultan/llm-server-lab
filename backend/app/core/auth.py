@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 
 import firebase_admin
@@ -6,13 +7,21 @@ from firebase_admin import auth, credentials
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
+logger = logging.getLogger(__name__)
+
 # Initialize Firebase Admin once at module load.
 # On Cloud Run, Application Default Credentials work automatically via the
 # attached service account. Locally, set FIREBASE_PROJECT_ID in your .env
 # (and optionally GOOGLE_APPLICATION_CREDENTIALS for a service account key).
 if not firebase_admin._apps:
     project_id = os.environ.get("FIREBASE_PROJECT_ID")
-    print("Firebase initial test")
+    # Logged because this must be the *frontend* Firebase project (the token
+    # audience), not the GCP project — a mismatch here surfaces as opaque
+    # invalid-credential errors on every authenticated request.
+    logger.info(
+        "initializing firebase admin",
+        extra={"firebase_project_id": project_id or "<application-default>"},
+    )
     firebase_admin.initialize_app(options={"projectId": project_id} if project_id else None)
 
 bearer_scheme = HTTPBearer(auto_error=True)
