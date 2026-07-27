@@ -55,3 +55,4 @@ k8s_resource('admin', resource_deps=['migrate'], port_forwards='3001:3000', labe
 # a laptop — the pricing ETL burns SerpAPI quota. Trigger by hand from the Tilt
 # UI, or: kubectl create job --from=cronjob/pricing-etl etl-manual-1
 k8s_resource('pricing-etl', trigger_mode=TRIGGER_MODE_MANUAL, auto_init=False, labels=['jobs'])
+k8s_resource('discovery', trigger_mode=TRIGGER_MODE_MANUAL, auto_init=False, labels=['jobs'])

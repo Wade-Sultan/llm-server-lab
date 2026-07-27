@@ -33,19 +33,36 @@ def _pipeline_version() -> str:
     return PIPELINE_VERSION
 
 
-async def start_discovery_run(query: str, category: str) -> uuid.UUID:
-    """Create the run row (committed before the task spawns, so the client can
-    poll immediately) and kick off the background pipeline."""
+async def _create_run(run_type: str) -> uuid.UUID:
     async with AsyncSessionLocal() as db:
         run = await crud.create_run(
             db,
-            run_type="on_demand",
+            run_type=run_type,
             pipeline_version=_pipeline_version(),
             model_name=ChatModelConfig.get_discovery_extract_model(),
         )
-        run_id = run.id
+        return run.id
 
+
+async def start_discovery_run(query: str, category: str) -> uuid.UUID:
+    """Create the run row (committed before the task spawns, so the client can
+    poll immediately) and kick off the background pipeline."""
+    run_id = await _create_run("on_demand")
     asyncio.create_task(_run(run_id, query, category))
+    return run_id
+
+
+async def run_discovery(
+    query: str, category: str, *, run_type: str = "scheduled"
+) -> uuid.UUID:
+    """Await the pipeline instead of detaching it.
+
+    The API path can fire-and-forget because the client polls the run row. A
+    batch job cannot: the container exits when its coroutine returns, and any
+    detached task would be killed mid-flight.
+    """
+    run_id = await _create_run(run_type)
+    await _run(run_id, query, category)
     return run_id
 
 

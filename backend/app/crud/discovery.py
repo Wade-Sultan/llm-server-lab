@@ -126,6 +126,37 @@ async def upsert_discovered_item(
     return result.scalar_one()
 
 
+async def get_incomplete_items(
+    db: AsyncSession, *, limit: int
+) -> list[tuple[str, str]]:
+    """Pending queue rows whose last extraction failed validation, oldest first.
+
+    These are the catalog's real gaps: the subtype columns backing
+    REQUIRED_FIELDS are all nullable=False, so an approved pc_parts row cannot
+    be missing one. What *can* be incomplete is an item staged for review whose
+    extraction came up short — a re-run gets it a fresh set of sources.
+
+    Returns (search_query, category). The query prefers the original name from
+    extracted_fields over name_normalized, which has been lowercased and
+    stripped and makes a worse search term.
+    """
+    query_expr = func.coalesce(
+        DiscoveredItem.extracted_fields["name"].astext,
+        DiscoveredItem.name_normalized,
+    )
+    stmt = (
+        select(query_expr, DiscoveredItem.category)
+        .where(
+            DiscoveredItem.review_status == "pending",
+            DiscoveredItem.validation_status == "failed",
+        )
+        .order_by(DiscoveredItem.created_at.asc())
+        .limit(limit)
+    )
+    rows = await db.execute(stmt)
+    return [(name, category) for name, category in rows.all()]
+
+
 async def get_dedup_candidates(db: AsyncSession, category: str) -> list[CatalogCandidate]:
     if category == "cpu":
         stmt = select(CPU.id, CPU.name, CPU.model_number).where(CPU.is_active == True)  # noqa: E712

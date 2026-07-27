@@ -1,0 +1,49 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: discovery
+spec:
+  # Monthly, 03:00 on the 1st.
+  schedule: "0 3 1 * *"
+  timeZone: "America/Los_Angeles"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 300
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      # 0 retries: items are processed serially and each one costs LLM calls,
+      # so a retry re-pays for everything that already succeeded. The job exits
+      # 0 on partial failure for the same reason; per-item outcomes live on
+      # their discovery_runs rows.
+      backoffLimit: 0
+      # DISCOVERY_MAX_ITEMS (25) items, each fetching and extracting up to 3
+      # sources. Generous for that, and a hard stop if a fetch wedges.
+      activeDeadlineSeconds: 5400
+      ttlSecondsAfterFinished: 86400
+      template:
+        spec:
+          restartPolicy: Never
+          serviceAccountName: builder
+          containers:
+            - name: discovery
+              image: palladium/builder
+              command: ["python", "-m", "app.jobs.discovery"]
+              envFrom:
+                - configMapRef:
+                    name: builder-config
+                - secretRef:
+                    name: palladium-secrets
+              # Sized to what this job actually does: search, HTTP fetch and
+              # LLM extraction, all network-latency bound. It holds one item's
+              # documents in memory at a time. The 2 CPU / 8 GiB in the
+              # original plan described a LlamaIndex RAG pipeline that does not
+              # exist in this codebase — on Autopilot that would have been
+              # billed idle every month.
+              resources:
+                requests:
+                  cpu: "500m"
+                  memory: 1Gi
+                limits:
+                  cpu: "1"
+                  memory: 2Gi

@@ -26,3 +26,4 @@ resources:
   - admin/service.yaml
   - jobs/migrate-job.yaml
   - jobs/pricing-etl-cronjob.yaml
+  - jobs/discovery-cronjob.yaml
