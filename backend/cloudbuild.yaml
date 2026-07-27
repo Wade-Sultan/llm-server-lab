@@ -34,7 +34,11 @@ steps:
       - '--args=upgrade,head'
       - '--set-cloudsql-instances=$PROJECT_ID:us-central1:palladium-db'
       - '--service-account=palladium-backend@$PROJECT_ID.iam.gserviceaccount.com'
-      - '--set-secrets=POSTGRES_PASSWORD=palladium-db-password-prod:latest'
+      # OPENROUTER_API_KEY and SERPAPI_KEY are irrelevant to a migration, but
+      # alembic/env.py imports app.core.config, and Settings declares both
+      # without a default — so constructing it fails without them. Keep this
+      # list in sync with the service below.
+      - '--set-secrets=POSTGRES_PASSWORD=palladium-db-password-prod:latest,OPENROUTER_API_KEY=openrouter-api-key:latest,SERPAPI_KEY=serpapi-key:latest'
       - '--set-env-vars=^|^ENVIRONMENT=production|PROJECT_NAME=Palladium|POSTGRES_USER=palladium_app|POSTGRES_DB=palladium|CLOUD_SQL_INSTANCE=$PROJECT_ID:us-central1:palladium-db|POSTGRES_SERVER=ignored|POSTGRES_PORT=5432'
       - '--max-retries=0'
       - '--task-timeout=900'
