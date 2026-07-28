@@ -11,7 +11,9 @@ data:
   # CORS has to allow the host origin rather than a cluster one. admin is
   # included because it calls the API directly from the browser.
   FRONTEND_HOST: "http://localhost:3000"
-  BACKEND_CORS_ORIGINS: "http://localhost:3000,http://admin.palladium.local"
+  # The :8081 origins are the ingress entrypoint (see Tiltfile) — a browser
+  # sends the port as part of Origin, so the portless form does not match.
+  BACKEND_CORS_ORIGINS: "http://localhost:3000,http://admin.palladium.local:8081,http://api.palladium.local:8081"
   # Must be the FRONTEND Firebase project (the ID token's audience), not the
   # GCP project — a mismatch shows up as invalid-credential on every request.
   FIREBASE_PROJECT_ID: "project-b8abf13d-d1ce-43f1-837"
@@ -23,5 +25,7 @@ metadata:
 data:
   ENV: "dev"
   FRONTEND_HOST: "http://localhost:3000"
-  BACKEND_CORS_ORIGINS: "http://localhost:3000,http://admin.palladium.local"
+  # The :8081 origins are the ingress entrypoint (see Tiltfile) — a browser
+  # sends the port as part of Origin, so the portless form does not match.
+  BACKEND_CORS_ORIGINS: "http://localhost:3000,http://admin.palladium.local:8081,http://api.palladium.local:8081"
   FIREBASE_PROJECT_ID: "project-b8abf13d-d1ce-43f1-837"

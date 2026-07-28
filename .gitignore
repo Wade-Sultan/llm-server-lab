@@ -6,6 +6,13 @@
 .gcloud/
 !.env.template
 
+# Local database snapshots pulled from Cloud SQL. These contain production
+# data — including user rows, until seed-local-db.sh scrubs them on restore —
+# and must never reach the repository.
+.local-seed/
+*.dump
+*.sql.gz
+
 # Supabase CLI (local dev)
 supabase/.temp/
 supabase/.branches/

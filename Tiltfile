@@ -41,15 +41,45 @@ docker_build(
 docker_build('palladium/commerce', context='./commerce')
 docker_build('palladium/admin', context='./admin')
 
+# Host-based routing entrypoint. The ingress controller lives in the
+# ingress-nginx namespace and isn't one of this Tiltfile's resources, so it
+# can't get a port_forward via k8s_resource — serve_cmd keeps one alive for the
+# session instead.
+#
+# Port 8081 rather than 80: under WSL2 mirrored networking, :80 is already held
+# by a Windows-side listener that WSL cannot bind or displace. nginx matches
+# server_name on the hostname alone and ignores the port in the Host header, so
+# the ingress rules work unchanged.
+local_resource(
+    'ingress-forward',
+    serve_cmd='kubectl port-forward -n ingress-nginx ' +
+              'svc/ingress-nginx-controller 8081:80 --address 127.0.0.1',
+    labels=['setup'],
+)
+
 k8s_resource('postgres', port_forwards='5433:5432', labels=['data'])
 
 # Alembic is the only migration authority; everything else waits on it so no
 # service ever starts against an un-migrated schema.
 k8s_resource('migrate', resource_deps=['postgres', 'gcp-adc-secret'], labels=['data'])
 
-k8s_resource('builder', resource_deps=['migrate'], port_forwards='8000:8000', labels=['services'])
-k8s_resource('commerce', resource_deps=['migrate'], port_forwards='8080:8080', labels=['services'])
-k8s_resource('admin', resource_deps=['migrate'], port_forwards='3001:3000', labels=['services'])
+# Restores .local-seed/palladium.dump into the cluster's Postgres, so a cold
+# `minikube delete && tilt up` comes back with a real catalog instead of an
+# empty schema. Skips itself when pc_parts already has rows, so it's nearly
+# free on every run after the first. No dump present = no-op.
+local_resource(
+    'seed-db',
+    cmd='./scripts/seed-local-db.sh',
+    resource_deps=['migrate'],
+    deps=['scripts/seed-local-db.sh'],
+    labels=['data'],
+)
+
+# Services depend on seed-db so their pools open against a populated database
+# rather than connecting first and seeing rows appear underneath them.
+k8s_resource('builder', resource_deps=['seed-db'], port_forwards='8000:8000', labels=['services'])
+k8s_resource('commerce', resource_deps=['seed-db'], port_forwards='8080:8080', labels=['services'])
+k8s_resource('admin', resource_deps=['seed-db'], port_forwards='3001:3000', labels=['services'])
 
 # CronJobs are deployed so their manifests stay exercised, but must not fire on
 # a laptop — the pricing ETL burns SerpAPI quota. Trigger by hand from the Tilt
