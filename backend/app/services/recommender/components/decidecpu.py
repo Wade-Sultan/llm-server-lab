@@ -1,5 +1,6 @@
 from __future__ import annotations
  
+from functools import lru_cache
 from pathlib import Path
  
 import dspy
@@ -70,6 +71,7 @@ class DecideCPU(dspy.Module):
         )
  
  
+@lru_cache(maxsize=1)
 def load_program() -> DecideCPU:
     """Load saved weights if available, otherwise return a fresh module."""
     module = DecideCPU()

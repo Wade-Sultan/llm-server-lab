@@ -1,4 +1,6 @@
 from __future__ import annotations
+
+from functools import lru_cache
  
 import dspy
  
@@ -49,6 +51,7 @@ class DecidePSU(dspy.Module):
         )
  
  
+@lru_cache(maxsize=1)
 def load_program() -> DecidePSU:
     # No saved weights — PSU selection doesn't benefit from GEPA optimization
     return DecidePSU()

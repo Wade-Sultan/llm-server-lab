@@ -71,7 +71,7 @@ steps:
       - '--service-account=palladium-backend@$PROJECT_ID.iam.gserviceaccount.com'
       - '--set-secrets=POSTGRES_PASSWORD=palladium-db-password-prod:latest,OPENROUTER_API_KEY=openrouter-api-key:latest,SERPAPI_KEY=serpapi-key:latest'
       - '--set-env-vars=^|^ENVIRONMENT=production|PROJECT_NAME=Palladium|FRONTEND_HOST=https://palladiumtech.ai|BACKEND_CORS_ORIGINS=https://palladiumtech.ai,https://www.palladiumtech.ai|POSTGRES_USER=palladium_app|POSTGRES_DB=palladium|CLOUD_SQL_INSTANCE=$PROJECT_ID:us-central1:palladium-db|POSTGRES_SERVER=ignored|POSTGRES_PORT=5432'
-      - '--min-instances=0'
+      - '--min-instances=1'
       - '--max-instances=4'
       - '--memory=1Gi'
       - '--cpu=1'

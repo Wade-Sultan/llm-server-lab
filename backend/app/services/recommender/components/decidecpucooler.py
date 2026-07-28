@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from functools import lru_cache
 from pathlib import Path
 
 import dspy
@@ -58,6 +59,7 @@ class DecideCPUCooler(dspy.Module):
         )
 
 
+@lru_cache(maxsize=1)
 def load_program() -> DecideCPUCooler:
     module = DecideCPUCooler()
     if WEIGHTS_PATH.exists():

@@ -128,9 +128,16 @@ def _get_extract_program():
 
 
 def warm_dspy_pipeline() -> None:
-    """Force the DSPy/litellm import chain and LM configuration to happen once,
-    off the request path (called from main.py's lifespan background task)."""
+    """Force the DSPy/litellm import chain, LM configuration, and Decide*
+    module construction to happen once, off the request path (called from
+    main.py's lifespan background task)."""
     _get_extract_program()
+
+    # Distinct from the extract program above: these are the ten build-step
+    # modules, each of which reads its GEPA weights file when first built.
+    from app.services.recommender.dspy_pipeline import load_all_programs
+
+    load_all_programs()
 
 
 def _capture_dspy_usage(prediction: Any, usage_sink: dict) -> None:

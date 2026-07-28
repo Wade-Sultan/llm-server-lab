@@ -1,5 +1,6 @@
 from __future__ import annotations
  
+from functools import lru_cache
 from pathlib import Path
  
 import dspy
@@ -59,6 +60,7 @@ class DecideRAM(dspy.Module):
         )
  
  
+@lru_cache(maxsize=1)
 def load_program() -> DecideRAM:
     module = DecideRAM()
     if WEIGHTS_PATH.exists():

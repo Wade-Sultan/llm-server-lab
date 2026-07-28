@@ -163,6 +163,30 @@ def configure_dspy() -> None:
     dspy.configure(lm=lm, track_usage=True)
 
 
+def load_all_programs() -> None:
+    """Build every Decide* module once, so the weights files are read off the
+    request path rather than on the first build.
+
+    Each load_program is lru_cached, so this is what fills those caches; the
+    step calls in run_pipeline then hit them. The caches are process-local and
+    never invalidated — after re-running optimize() and writing new weights,
+    a serving process must be restarted to pick them up.
+    """
+    for load in (
+        load_ddr,
+        load_cpu,
+        load_cooler,
+        load_motherboard,
+        load_ram,
+        load_storage,
+        load_gpu,
+        load_psu,
+        load_case,
+        load_fans,
+    ):
+        load()
+
+
 def session_lm(session_id: str | None) -> dspy.LM:
     """
     Clone the globally-configured LM with OpenRouter's `session_id` set, so

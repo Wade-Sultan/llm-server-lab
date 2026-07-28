@@ -1,4 +1,6 @@
 from __future__ import annotations
+
+from functools import lru_cache
  
 import dspy
  
@@ -47,5 +49,6 @@ class DecideFans(dspy.Module):
         )
  
  
+@lru_cache(maxsize=1)
 def load_program() -> DecideFans:
     return DecideFans()
