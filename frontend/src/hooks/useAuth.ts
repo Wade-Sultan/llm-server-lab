@@ -15,7 +15,6 @@ import { useRouter } from "next/navigation"
 import { useCallback, useEffect, useState } from "react"
 import { syncAccount } from "@/lib/commerce"
 import { auth } from "@/lib/firebase"
-import { wakeUpBuilder } from "@/lib/wake-up-builder"
 
 /**
  * Fire-and-forget sync of the Postgres users row (via the commerce service)
@@ -85,7 +84,6 @@ export default function useAuth(): UseAuthReturn {
       try {
         const { user } = await signInWithEmailAndPassword(auth, email, password)
         syncBackendAccount(user)
-        wakeUpBuilder()
         router.push("/build/new")
         return { error: null }
       } catch (err) {
@@ -99,7 +97,6 @@ export default function useAuth(): UseAuthReturn {
     try {
       const { user } = await signInWithPopup(auth, new GoogleAuthProvider())
       syncBackendAccount(user)
-      wakeUpBuilder()
       router.push("/build/new")
       return { error: null }
     } catch (err) {
@@ -119,7 +116,6 @@ export default function useAuth(): UseAuthReturn {
           await updateProfile(user, { displayName: fullName })
         }
         syncBackendAccount(user)
-        wakeUpBuilder()
         router.push("/login")
         return { error: null }
       } catch (err) {
