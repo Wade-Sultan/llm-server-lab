@@ -13,6 +13,14 @@ class DiscoveryTriggerRequest(BaseModel):
     category: Literal["cpu", "gpu_chipset", "gpu_variant"]
 
 
+class DiscoverySweepRequest(BaseModel):
+    """A sweep names a category, not a part. `hint` narrows the search ("2026
+    Nvidia", "budget AM5"); omitted, the search pins the current year."""
+
+    category: Literal["cpu", "gpu_chipset", "gpu_variant"]
+    hint: str | None = Field(default=None, max_length=200)
+
+
 class DiscoveryTriggerResponse(BaseModel):
     run_id: uuid.UUID
     status: str

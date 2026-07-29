@@ -46,6 +46,7 @@ import {
   markDuplicate,
   rejectItem,
   triggerDiscovery,
+  triggerSweep,
   type DiscoveryCategory,
 } from './actions';
 import {
@@ -82,6 +83,15 @@ const CATEGORY_OPTIONS: { value: DiscoveryCategory; label: string }[] = [
   { value: 'gpu_variant', label: 'GPU Variant' },
 ];
 
+// lookup = "I know the part"; sweep = "tell me what's new". Different backend
+// endpoints, because a sweep has no part name to send.
+type TriggerMode = 'lookup' | 'sweep';
+
+const MODE_OPTIONS: { value: TriggerMode; label: string }[] = [
+  { value: 'lookup', label: 'Specific part' },
+  { value: 'sweep', label: 'Sweep for new' },
+];
+
 function asRecord(v: unknown): Record<string, unknown> {
   return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
 }
@@ -103,19 +113,26 @@ function hostname(url: string): string {
 
 function TriggerCard() {
   const router = useRouter();
+  const [mode, setMode] = useState<TriggerMode>('lookup');
   const [query, setQuery] = useState('');
   const [category, setCategory] = useState<DiscoveryCategory>('cpu');
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
 
+  // A sweep's text box is an optional narrowing hint, not the part name, so
+  // the min-length rule that guards a lookup would be wrong here.
+  const isSweep = mode === 'sweep';
+
   function submit() {
-    if (query.trim().length < 3) {
+    if (!isSweep && query.trim().length < 3) {
       setError('Query must be at least 3 characters');
       return;
     }
     setError(null);
     startTransition(async () => {
-      const res = await triggerDiscovery(query.trim(), category);
+      const res = isSweep
+        ? await triggerSweep(query, category)
+        : await triggerDiscovery(query.trim(), category);
       if (res.error) setError(res.error);
       else {
         setQuery('');
@@ -127,12 +144,28 @@ function TriggerCard() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-base">Search for a new part</CardTitle>
+        <CardTitle className="text-base">Discover parts</CardTitle>
       </CardHeader>
       <CardContent className="space-y-2">
         <div className="flex gap-2">
+          <Select value={mode} onValueChange={(v) => setMode(v as TriggerMode)}>
+            <SelectTrigger className="w-44">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {MODE_OPTIONS.map((o) => (
+                <SelectItem key={o.value} value={o.value}>
+                  {o.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           <Input
-            placeholder='e.g. "AMD Ryzen 7 9800X3D"'
+            placeholder={
+              isSweep
+                ? 'Optional hint, e.g. "2026 Nvidia"'
+                : 'e.g. "AMD Ryzen 7 9800X3D"'
+            }
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && submit()}
@@ -151,9 +184,14 @@ function TriggerCard() {
           </Select>
           <Button onClick={submit} disabled={isPending}>
             <Search className="h-4 w-4 mr-2" />
-            {isPending ? 'Starting...' : 'Search'}
+            {isPending ? 'Starting...' : isSweep ? 'Sweep' : 'Search'}
           </Button>
         </div>
+        <p className="text-xs text-muted-foreground">
+          {isSweep
+            ? 'Reads launch coverage for the category, then runs a full discovery on each new part it names — several parts per run, so it costs several times a single search. Parts already in the catalog or the queue are skipped.'
+            : 'Extracts specs for one named part from its top spec pages.'}
+        </p>
         {error && <p className="text-sm text-destructive">{error}</p>}
       </CardContent>
     </Card>

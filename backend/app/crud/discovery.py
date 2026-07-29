@@ -157,6 +157,21 @@ async def get_incomplete_items(
     return [(name, category) for name, category in rows.all()]
 
 
+async def get_pending_names(db: AsyncSession, category: str) -> set[str]:
+    """Normalized names already awaiting review in this category.
+
+    A sweep skips these. Re-running one is harmless (the partial unique index
+    refreshes the row in place) but not free, and a reviewer gains nothing from
+    a second extraction of something already sitting in their queue.
+    """
+    stmt = select(DiscoveredItem.name_normalized).where(
+        DiscoveredItem.category == category,
+        DiscoveredItem.review_status == "pending",
+    )
+    rows = await db.execute(stmt)
+    return set(rows.scalars().all())
+
+
 async def get_dedup_candidates(db: AsyncSession, category: str) -> list[CatalogCandidate]:
     if category == "cpu":
         stmt = select(CPU.id, CPU.name, CPU.model_number).where(CPU.is_active == True)  # noqa: E712

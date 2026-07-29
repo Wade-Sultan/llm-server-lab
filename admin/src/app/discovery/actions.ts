@@ -12,22 +12,24 @@ import { splitCommaList, usdToCents } from '@/lib/utils';
 
 export type DiscoveryCategory = 'cpu' | 'gpu_chipset' | 'gpu_variant';
 
-export async function triggerDiscovery(
-  query: string,
-  category: DiscoveryCategory,
+async function postDiscovery(
+  path: string,
+  body: Record<string, unknown>,
 ): Promise<{ runId?: string; error?: string }> {
   const base = process.env.BACKEND_API_URL;
   const key = process.env.DISCOVERY_API_KEY;
   if (!base || !key) {
+    // In the cluster these come from the admin-config ConfigMap and the
+    // palladium-secrets Secret, not this file — check the pod's env first.
     return { error: 'BACKEND_API_URL and DISCOVERY_API_KEY must be set in admin/.env.local' };
   }
 
   let res: Response;
   try {
-    res = await fetch(`${base}/api/v1/discovery/runs`, {
+    res = await fetch(`${base}${path}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Admin-Key': key },
-      body: JSON.stringify({ query, category }),
+      body: JSON.stringify(body),
       cache: 'no-store',
     });
   } catch {
@@ -53,6 +55,27 @@ export async function triggerDiscovery(
     return { error: 'Backend rejected DISCOVERY_API_KEY — make sure admin and backend use the same value' };
   }
   return { error: `Discovery trigger failed (${res.status}): ${detail || res.statusText}` };
+}
+
+/** Discover one named part. */
+export async function triggerDiscovery(
+  query: string,
+  category: DiscoveryCategory,
+): Promise<{ runId?: string; error?: string }> {
+  return postDiscovery('/api/v1/discovery/runs', { query, category });
+}
+
+/** Enumerate what's new in a category and discover each candidate. One run
+ * row, up to DISCOVERY_SWEEP_MAX_CANDIDATES items — costs that many times a
+ * single-part run, so the UI warns before firing it. */
+export async function triggerSweep(
+  hint: string,
+  category: DiscoveryCategory,
+): Promise<{ runId?: string; error?: string }> {
+  return postDiscovery('/api/v1/discovery/sweeps', {
+    category,
+    hint: hint.trim() || null,
+  });
 }
 
 export interface ApproveCpuFormData {

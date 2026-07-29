@@ -13,6 +13,14 @@ logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
+# The widest schema (CPUExtraction) is ~18 fields of {value, snippet<=200 chars},
+# so a complete answer lands well under 4k tokens; the rest is headroom for the
+# extraction model's reasoning tokens. Sending this explicitly matters for cost,
+# not just truncation: OpenRouter reserves credit against max_tokens up front, so
+# leaving it unset reserves the model's full output ceiling (65536 on
+# minimax-m3) and 402s the whole run whenever the balance dips below that.
+_MAX_OUTPUT_TOKENS = 8192
+
 
 class Sourced(BaseModel, Generic[T]):
     """A field value paired with the verbatim snippet that supports it.
@@ -153,8 +161,8 @@ Rules:
 - msrp_usd is the launch/list price in US dollars."""
 
 
-def _user_content(doc: FetchedDoc, target: str) -> str | list[dict[str, Any]]:
-    header = f"Product to extract: {target}\nSource URL: {doc.url}"
+def _user_content(doc: FetchedDoc, instruction: str) -> str | list[dict[str, Any]]:
+    header = f"{instruction}\nSource URL: {doc.url}"
     if doc.kind == "markdown":
         return f"{header}\n\nPage content (markdown):\n\n{doc.text}"
     parts: list[dict[str, Any]] = [
@@ -180,7 +188,7 @@ async def extract_from_source(
     client = _get_client()
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": _SYSTEM_PROMPT},
-        {"role": "user", "content": _user_content(doc, target)},
+        {"role": "user", "content": _user_content(doc, f"Product to extract: {target}")},
     ]
 
     for attempt in range(2):
@@ -189,6 +197,7 @@ async def extract_from_source(
             messages=messages,
             response_format=_response_format(schema_cls),
             temperature=0,
+            max_tokens=_MAX_OUTPUT_TOKENS,
             **_extra_body(session_id),
         )
         usage_events.append(_usage_from_openai(resp.usage))
@@ -196,6 +205,14 @@ async def extract_from_source(
         try:
             return schema_cls.model_validate_json(raw)
         except ValidationError as exc:
+            # Call out truncation by name: a run out of output budget otherwise
+            # looks identical to a model that just emitted bad JSON.
+            if resp.choices[0].finish_reason == "length":
+                logger.warning(
+                    "discovery: extraction from %s hit the %d-token output cap "
+                    "(attempt %d) — raise _MAX_OUTPUT_TOKENS if this recurs",
+                    doc.url, _MAX_OUTPUT_TOKENS, attempt + 1,
+                )
             logger.warning(
                 "discovery: invalid extraction from %s (attempt %d): %s",
                 doc.url, attempt + 1, exc,
@@ -211,6 +228,87 @@ async def extract_from_source(
                 }
             )
     return None
+
+
+class CandidateNames(BaseModel):
+    """Sweep enumeration output: just names, no specs.
+
+    Names are a search term, not data — each one goes back through
+    search_spec_pages + extract_from_source, so a roundup's numbers never reach
+    the review queue. That separation is why this call can use a loose page
+    ("best GPUs of 2026") that would be a terrible extraction source."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    names: list[str]
+
+
+# What the model should be listing, per category. gpu_chipset and gpu_variant
+# differ by design: one wants the silicon, the other the board-partner SKU.
+_CATEGORY_NOUNS = {
+    "cpu": "desktop CPU models",
+    "gpu_chipset": "GPU chipsets (the silicon, e.g. \"RTX 5080\" — not board-partner cards)",
+    "gpu_variant": "board-partner graphics cards (e.g. \"ASUS ROG Astral RTX 5080 OC\")",
+}
+
+# A roundup listing more than this is a spec database or a category index, not
+# launch coverage; taking the first slice of it beats extracting 200 names.
+_MAX_NAMES_PER_PAGE = 30
+
+_SWEEP_SYSTEM_PROMPT = """You list PC hardware product names from a roundup or news page.
+
+Rules:
+- Return ONLY products the page presents as officially released or officially
+  announced by the manufacturer, with a real product name.
+- Skip anything rumored, leaked, speculated, or unconfirmed, however credible
+  the page makes it sound. Signals: "leak", "rumor", "reportedly", "allegedly",
+  "expected", "could launch", an unnamed source, or specs the page itself calls
+  unconfirmed. When a page mixes confirmed products with rumored ones, return
+  only the confirmed ones.
+- Skip products mentioned as older comparisons or context.
+- Use the canonical retail name a buyer would search, exactly as the page
+  writes it. No marketing copy, no prices, no verdicts.
+- One entry per distinct product. Never invent a product the page does not name.
+- Name individual models only. Skip families, series and generations ("RTX
+  60-series", "Zen 6", "Arrow Lake") — a name that covers several products
+  cannot be extracted into one catalog row.
+- Only list products of the requested type. If the page lists none, return an
+  empty list."""
+
+
+async def extract_candidate_names(
+    doc: FetchedDoc,
+    category: str,
+    session_id: str | None,
+    usage_events: list[dict],
+) -> list[str]:
+    """Product names one roundup page presents as new. Returns [] on any
+    failure — a sweep pools names across pages, so a bad page is a smaller loss
+    than a failed source is to a single-part run, and never worth a retry."""
+    noun = _CATEGORY_NOUNS.get(category)
+    if noun is None:
+        return []
+
+    client = _get_client()
+    resp = await client.chat.completions.create(
+        model=ChatModelConfig.get_discovery_extract_model(),
+        messages=[
+            {"role": "system", "content": _SWEEP_SYSTEM_PROMPT},
+            {"role": "user", "content": _user_content(doc, f"List the {noun} on this page.")},
+        ],
+        response_format=_response_format(CandidateNames),
+        temperature=0,
+        max_tokens=_MAX_OUTPUT_TOKENS,
+        **_extra_body(session_id),
+    )
+    usage_events.append(_usage_from_openai(resp.usage))
+    raw = resp.choices[0].message.content or ""
+    try:
+        parsed = CandidateNames.model_validate_json(raw)
+    except ValidationError as exc:
+        logger.warning("discovery sweep: invalid name list from %s: %s", doc.url, exc)
+        return []
+    return [n.strip() for n in parsed.names[:_MAX_NAMES_PER_PAGE] if n.strip()]
 
 
 def unwrap(extraction: BaseModel, source_url: str) -> tuple[dict, dict]:

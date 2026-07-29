@@ -34,6 +34,7 @@ class DiscoveryRunType(str, enum.Enum):
     HARDWARE = "hardware"      # scheduled source-monitoring run (monthly job)
     AI_MODELS = "ai_models"    # scheduled Hugging Face Hub run (monthly job)
     ON_DEMAND = "on_demand"    # admin-panel search button
+    SWEEP = "sweep"            # admin-panel category sweep (one row, N items)
 
 
 class DiscoveryRunStatus(str, enum.Enum):

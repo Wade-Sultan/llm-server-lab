@@ -51,3 +51,31 @@ def match_item(
         return best_id, "fuzzy", best_score / 100.0
 
     return None, None, None
+
+
+def filter_new_names(
+    names: list[str], known_normalized: set[str], limit: int
+) -> list[str]:
+    """Narrow enumerated sweep candidates to the ones worth paying to extract:
+    drop in-sweep repeats and anything already in the catalog or review queue,
+    preserving order, then cap.
+
+    Exact-on-normalized only — deliberately weaker than match_item(). Fuzzy
+    would skip candidates *before* any extraction happens, and WRatio scores a
+    new SKU against its predecessor right at the 90 threshold ("RTX 5080 Super"
+    vs "RTX 5080"), so a fuzzy pre-filter would silently discard exactly the
+    launches a sweep exists to catch. Near-misses cost one extraction each and
+    are caught afterwards by match_item(), which flags them for the reviewer
+    instead of dropping them.
+    """
+    seen: set[str] = set()
+    fresh: list[str] = []
+    for name in names:
+        key = _normalize(name)
+        if not key or key in known_normalized or key in seen:
+            continue
+        seen.add(key)
+        fresh.append(name)
+        if len(fresh) == limit:
+            break
+    return fresh
