@@ -22,6 +22,7 @@ resources:
   - commerce/deployment.yaml
   - commerce/service.yaml
   - admin/serviceaccount.yaml
+  - admin/configmap.yaml
   - admin/deployment.yaml
   - admin/service.yaml
   - jobs/migrate-job.yaml

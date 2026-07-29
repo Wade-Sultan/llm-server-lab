@@ -25,6 +25,8 @@ spec:
             - containerPort: 3000
               name: http
           envFrom:
+            - configMapRef:
+                name: admin-config
             - secretRef:
                 name: palladium-secrets
           livenessProbe:
