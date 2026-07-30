@@ -132,13 +132,14 @@ steps:
           grep -nE '\bPROJECT_ID\b|newTag: latest' kustomization.yaml >&2
           exit 1
         fi
-        # Validate the value, not just the absence of the placeholder string.
-        # A literal "<private-ip-from-§2>" pasted in by hand passes a
-        # placeholder-only check and then fails as DNS resolution errors at
-        # runtime, so require an actual RFC1918 address.
-        PG_HOST=$$(grep -E '^ *POSTGRES_SERVER:' patches/config-prod.yaml | head -1 | sed -E 's/.*"(.*)".*/\1/')
-        if ! echo "$$PG_HOST" | grep -qE '^(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.)[0-9.]+$'; then
-          echo "ERROR: POSTGRES_SERVER is not a private IP: '$$PG_HOST' (RUNBOOK §5)" >&2
+        # POSTGRES_SERVER is intentionally not in this ConfigMap — it is the Cloud
+        # SQL private IP and lives in palladium-secrets-builder so it never gets
+        # committed. Guard against someone re-adding it, which would both leak
+        # the address and shadow nothing (the Secret would still win, silently
+        # diverging from what the repo appears to say).
+        if grep -qE '^ *POSTGRES_SERVER:' patches/config-prod.yaml; then
+          echo "ERROR: POSTGRES_SERVER must not be in config-prod.yaml — it belongs in" >&2
+          echo "       palladium-secrets-builder (RUNBOOK §7). Remove it." >&2
           exit 1
         fi
 
@@ -176,7 +177,26 @@ steps:
       - |
         set -euo pipefail
         gcloud container clusters get-credentials "$_CLUSTER" --region "$_REGION"
-        kubectl -n "$_NAMESPACE" get deploy
+
+        # Preflight. These Secrets are created out-of-band (RUNBOOK §7), so the
+        # repo cannot verify them — but deploying without them means three pods
+        # crash-looping on missing env, which reads like an application bug.
+        for s in builder commerce admin; do
+          kubectl -n "$_NAMESPACE" get secret "palladium-secrets-$$s" >/dev/null \
+            || { echo "ERROR: secret palladium-secrets-$$s missing (RUNBOOK §7)" >&2; exit 1; }
+        done
+
+        # POSTGRES_SERVER lives only in the Secret. Validate the actual value:
+        # a pasted-in placeholder or an empty host fails at runtime as DNS or
+        # connection errors, which is far more expensive to diagnose than here.
+        PG_HOST=$$(kubectl -n "$_NAMESPACE" get secret palladium-secrets-builder \
+          -o jsonpath='{.data.POSTGRES_SERVER}' | base64 -d)
+        if ! echo "$$PG_HOST" | grep -qE '^(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.)[0-9]+\.[0-9]+$'; then
+          echo "ERROR: POSTGRES_SERVER in palladium-secrets-builder is not a private IP" >&2
+          echo "       (got '$$PG_HOST') — see RUNBOOK §7" >&2
+          exit 1
+        fi
+        echo "preflight OK"
 
   # -------------------------------------------------------------- migrate ----
   # The rollout gate. `create`, not `apply`: the name is unique per commit so

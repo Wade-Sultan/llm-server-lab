@@ -5,22 +5,22 @@ metadata:
 data:
   ENVIRONMENT: "production"
   LOG_LEVEL: "INFO"
-  # Cloud SQL private IP, reached directly over the VPC — Autopilot clusters are
-  # VPC-native, so no Auth Proxy sidecar is needed. A sidecar would add
-  # 250m/512Mi to every pod including job pods, to solve a problem this topology
-  # does not have.
+  # POSTGRES_SERVER is deliberately ABSENT here. Do not add it back.
   #
-  # Fill this by deriving the value, never by typing it (RUNBOOK.md §5):
+  # It is the Cloud SQL private IP, which must not be committed, so it is
+  # supplied through palladium-secrets-builder instead — created out-of-band from
+  # the live instance (RUNBOOK §7). Reached directly over the VPC: Autopilot
+  # clusters are VPC-native, so no Auth Proxy sidecar is needed.
   #
-  #   IP=$(gcloud sql instances describe "$SQL_INSTANCE" \
-  #     --format="value(ipAddresses.filter(\"type:PRIVATE\").extract(\"ipAddress\"))")
-  #   sed -i "s/REPLACE_WITH_CLOUD_SQL_PRIVATE_IP/$IP/" patches/config-prod.yaml
+  # This works because envFrom lists the configMapRef first and the secretRef
+  # second, so the Secret contributes the key with nothing to conflict with. The
+  # field is REQUIRED — `POSTGRES_SERVER: str` in backend/app/core/config.py has
+  # no default — so if the Secret omits it, builder fails pydantic validation on
+  # startup rather than falling back to anything.
   #
-  # Left obviously broken rather than plausibly wrong — a stale-but-valid IP here
-  # fails as intermittent connection timeouts, which is far worse to debug. The
-  # render step in deploy/cloudbuild.yaml also refuses to deploy unless this
-  # parses as an RFC1918 address, so a half-substituted placeholder cannot ship.
-  POSTGRES_SERVER: "REPLACE_WITH_CLOUD_SQL_PRIVATE_IP"
+  # The `credentials` step in deploy/cloudbuild.yaml asserts the Secret exists
+  # and that the value is an RFC1918 address before any rollout.
+  #
   # The real database on Cloud SQL. Local uses `palladium_local` so the two are
   # never confusable in a connection string.
   POSTGRES_DB: "palladium"
