@@ -10,11 +10,17 @@ data:
   # 250m/512Mi to every pod including job pods, to solve a problem this topology
   # does not have.
   #
-  # REPLACE_ME: fill from `gcloud sql instances describe palladium-db
-  # --format='value(ipAddresses[?type=PRIVATE].ipAddress)'` (RUNBOOK.md §2).
-  # Left obviously broken rather than plausibly wrong — a stale-but-valid IP
-  # here fails as intermittent connection timeouts, which is far worse to debug.
-  POSTGRES_SERVER: "<private-ip-from-§2>"
+  # Fill this by deriving the value, never by typing it (RUNBOOK.md §5):
+  #
+  #   IP=$(gcloud sql instances describe "$SQL_INSTANCE" \
+  #     --format="value(ipAddresses.filter(\"type:PRIVATE\").extract(\"ipAddress\"))")
+  #   sed -i "s/REPLACE_WITH_CLOUD_SQL_PRIVATE_IP/$IP/" patches/config-prod.yaml
+  #
+  # Left obviously broken rather than plausibly wrong — a stale-but-valid IP here
+  # fails as intermittent connection timeouts, which is far worse to debug. The
+  # render step in deploy/cloudbuild.yaml also refuses to deploy unless this
+  # parses as an RFC1918 address, so a half-substituted placeholder cannot ship.
+  POSTGRES_SERVER: "REPLACE_WITH_CLOUD_SQL_PRIVATE_IP"
   # The real database on Cloud SQL. Local uses `palladium_local` so the two are
   # never confusable in a connection string.
   POSTGRES_DB: "palladium"

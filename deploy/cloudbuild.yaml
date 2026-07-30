@@ -132,8 +132,13 @@ steps:
           grep -nE '\bPROJECT_ID\b|newTag: latest' kustomization.yaml >&2
           exit 1
         fi
-        if grep -q 'REPLACE_WITH_CLOUD_SQL_PRIVATE_IP' patches/config-prod.yaml; then
-          echo "ERROR: Cloud SQL private IP placeholder never filled in (RUNBOOK §5)" >&2
+        # Validate the value, not just the absence of the placeholder string.
+        # A literal "<private-ip-from-§2>" pasted in by hand passes a
+        # placeholder-only check and then fails as DNS resolution errors at
+        # runtime, so require an actual RFC1918 address.
+        PG_HOST=$$(grep -E '^ *POSTGRES_SERVER:' patches/config-prod.yaml | head -1 | sed -E 's/.*"(.*)".*/\1/')
+        if ! echo "$$PG_HOST" | grep -qE '^(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.)[0-9.]+$'; then
+          echo "ERROR: POSTGRES_SERVER is not a private IP: '$$PG_HOST' (RUNBOOK §5)" >&2
           exit 1
         fi
 
