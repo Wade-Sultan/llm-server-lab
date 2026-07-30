@@ -1,0 +1,13 @@
+# Minikube has no LoadBalancer provider, so without this the gateway Service
+# sits at <pending> and Cilium reports the Gateway Programmed=False
+# (AddressNotAssigned). Cilium's LB-IPAM assigns an address from this pool,
+# which is enough to green the status. The address is NOT reachable from the
+# host (no L2 announcement) — real traffic enters via the Service's NodePort
+# through scripts/gateway-forward.sh.
+apiVersion: cilium.io/v2
+kind: CiliumLoadBalancerIPPool
+metadata:
+  name: local-gateway
+spec:
+  blocks:
+    - cidr: 10.200.200.0/29

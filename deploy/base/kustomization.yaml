@@ -17,10 +17,12 @@ resources:
   - builder/configmap.yaml
   - builder/deployment.yaml
   - builder/service.yaml
+  - builder/httproute.yaml
   - commerce/serviceaccount.yaml
   - commerce/configmap.yaml
   - commerce/deployment.yaml
   - commerce/service.yaml
+  - commerce/httproute.yaml
   - admin/serviceaccount.yaml
   - admin/configmap.yaml
   - admin/deployment.yaml

@@ -1,10 +1,12 @@
 # Local dev against Minikube. Frontend is NOT here — it keeps running on the
-# host via `npm run dev` and talks to the cluster through the ingress hosts.
+# host via `npm run dev` and talks to the cluster through the gateway hosts.
 #
-#   minikube start --driver=docker --cpus=6 --memory=16g \
-#     --kubernetes-version=v1.33.0 --addons=ingress,metrics-server
-#   minikube tunnel        # separate terminal, required with the docker driver
+#   ./scripts/minikube-cilium-up.sh   # (re)creates the cluster: Cilium CNI,
+#                                     # kube-proxy replacement, Gateway API
 #   tilt up
+#
+# No `minikube tunnel` needed anymore — gateway-forward relays to the
+# gateway Service's NodePort directly.
 
 # Refuse to run against anything but the local cluster. Without this a stray
 # kubectl context makes `tilt up` deploy to whatever it happens to be pointing
@@ -41,19 +43,14 @@ docker_build(
 docker_build('palladium/commerce', context='./commerce')
 docker_build('palladium/admin', context='./admin')
 
-# Host-based routing entrypoint. The ingress controller lives in the
-# ingress-nginx namespace and isn't one of this Tiltfile's resources, so it
-# can't get a port_forward via k8s_resource — serve_cmd keeps one alive for the
-# session instead.
-#
-# Port 8081 rather than 80: under WSL2 mirrored networking, :80 is already held
-# by a Windows-side listener that WSL cannot bind or displace. nginx matches
-# server_name on the hostname alone and ignores the port in the Host header, so
-# the ingress rules work unchanged.
+# Host-based routing entrypoint: 127.0.0.1:8081 → Cilium Gateway. The gateway
+# Service is created by Cilium (not this Tiltfile) and is selector-less, so
+# neither k8s_resource port_forwards nor `kubectl port-forward` can target it —
+# the script relays to its NodePort instead. See the script header for the
+# 8081-vs-80 WSL2 story.
 local_resource(
-    'ingress-forward',
-    serve_cmd='kubectl port-forward -n ingress-nginx ' +
-              'svc/ingress-nginx-controller 8081:80 --address 127.0.0.1',
+    'gateway-forward',
+    serve_cmd='./scripts/gateway-forward.sh',
     labels=['setup'],
 )
 

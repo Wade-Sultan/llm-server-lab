@@ -4,7 +4,8 @@ kind: Kustomization
 resources:
   - ../../base
   - postgres-statefulset.yaml
-  - ingress-nginx.yaml
+  - gateway.yaml
+  - lb-ippool.yaml
 
 patches:
   - path: patches/replicas.yaml

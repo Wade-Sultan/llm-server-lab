@@ -1,0 +1,22 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: builder
+spec:
+  # No hostname here on purpose: hostnames are per-environment and live on the
+  # Gateway's listeners (local overlay vs GKE). sectionName pins this route to
+  # the `api` listener, so the pairing survives hostname changes.
+  parentRefs:
+    - name: palladium
+      sectionName: api
+  rules:
+    - backendRefs:
+        - name: builder
+          port: 80
+      # SSE: the /chat stream must outlive _DSPY_CHAT_TIMEOUT_S (180s), or the
+      # proxy cuts a long build off mid-stream. Replaces the old nginx
+      # proxy-read-timeout annotation. If the GKE Gateway controller rejects
+      # this field, move the prod timeout to a GCPBackendPolicy (timeoutSec)
+      # in the prod overlay and keep this for Cilium.
+      timeouts:
+        request: 300s
