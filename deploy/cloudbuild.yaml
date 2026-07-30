@@ -196,6 +196,26 @@ steps:
           echo "       (got '$$PG_HOST') — see RUNBOOK §7" >&2
           exit 1
         fi
+
+        # The DB connection URLs have been the most error-prone value in this
+        # whole migration, failing twice in ways that only surface at runtime:
+        #   ...@:5432/palladium          empty host (an unset shell variable)
+        #   ...@['10.0.16.3']:5432/...   a gcloud list projection pasted verbatim
+        # Both are valid *strings*, so nothing upstream objects; they then fail in
+        # three libraries with three unrelated messages (pydantic "empty host",
+        # pgx "invalid host", Prisma "invalid IPv6 address"). Assert the shape
+        # here, where the error names the actual problem.
+        for pair in builder:POSTGRES_DB_URL commerce:DATABASE_URL admin:DATABASE_URL; do
+          S=$${pair%%:*}; K=$${pair##*:}
+          U=$$(kubectl -n "$_NAMESPACE" get secret "palladium-secrets-$$S" \
+                 -o jsonpath="{.data.$$K}" | base64 -d)
+          # host must be bare: letters/digits/dots/dashes only, then :port/db
+          if ! echo "$$U" | grep -qE '^postgresql://[^:/@]+:[^@]*@[0-9A-Za-z.-]+:[0-9]+/[^?]+'; then
+            echo "ERROR: palladium-secrets-$$S/$$K is not a usable Postgres URL." >&2
+            echo "       host is empty or malformed — see RUNBOOK §7" >&2
+            exit 1
+          fi
+        done
         echo "preflight OK"
 
   # -------------------------------------------------------------- migrate ----
