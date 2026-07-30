@@ -18,8 +18,9 @@ spec:
     - backendRefs:
         - name: builder
           port: 80
-      # Kept in sync with base/builder/httproute.yaml — smoke-testing against a
-      # shorter timeout than production would hide exactly the SSE truncation
-      # bug this host exists to catch.
-      timeouts:
-        request: 300s
+# No timeouts field: the GKE Gateway controller rejects it outright
+# ("Error GWCER104: ... timeouts are not supported") and a single invalid route
+# marks the WHOLE Gateway Programmed=False, taking every other listener down
+# with it. The 300s budget for this host comes from the builder GCPBackendPolicy
+# in backend-policies.yaml, which applies to the Service and therefore covers
+# this route and the main one identically.

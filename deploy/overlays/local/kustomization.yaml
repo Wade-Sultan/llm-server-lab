@@ -12,6 +12,12 @@ patches:
   - path: patches/builder-dev.yaml
   - path: patches/config-local.yaml
   - path: patches/gcp-adc.yaml
+  - path: patches/httproute-timeout.yaml
+    target:
+      group: gateway.networking.k8s.io
+      version: v1
+      kind: HTTPRoute
+      name: builder
 
 # Secrets are generated from a gitignored .env.local — never a committed Secret
 # manifest. Base64 is encoding, not encryption, and a committed dev credential

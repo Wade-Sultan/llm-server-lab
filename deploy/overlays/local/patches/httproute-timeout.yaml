@@ -1,0 +1,12 @@
+# The Cilium half of the SSE timeout (see base/builder/httproute.yaml for why it
+# is not in base). Cilium implements Gateway API's timeouts.request natively —
+# verified in the generated CiliumEnvoyConfig, which carries
+# "timeout": "300s" on the builder route.
+#
+# A JSON6902 add rather than a strategic merge patch: `rules` is a list with no
+# patchMergeKey, so a merge patch would replace the whole list and the
+# backendRefs would have to be duplicated here just to bolt on one field.
+- op: add
+  path: /spec/rules/0/timeouts
+  value:
+    request: 300s

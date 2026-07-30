@@ -13,10 +13,16 @@ spec:
     - backendRefs:
         - name: builder
           port: 80
-      # SSE: the /chat stream must outlive _DSPY_CHAT_TIMEOUT_S (180s), or the
-      # proxy cuts a long build off mid-stream. Replaces the old nginx
-      # proxy-read-timeout annotation. If the GKE Gateway controller rejects
-      # this field, move the prod timeout to a GCPBackendPolicy (timeoutSec)
-      # in the prod overlay and keep this for Cilium.
-      timeouts:
-        request: 300s
+# The SSE timeout is NOT here, because the two controllers disagree about how to
+# express it and this file has to be valid for both.
+#
+# The /chat stream must outlive _DSPY_CHAT_TIMEOUT_S (180s) or the proxy cuts a
+# long build off mid-stream — that requirement is environment-independent, but
+# the mechanism is not:
+#
+#   local  overlays/local/patches/httproute-timeout.yaml  (Cilium honours
+#          HTTPRoute timeouts.request; verified in the generated Envoy config)
+#   prod   overlays/prod/backend-policies.yaml            (GCPBackendPolicy
+#          timeoutSec; the GKE controller REJECTS timeouts.request outright with
+#          "Error GWCER104: ... timeouts are not supported", and one bad route
+#          invalidates the entire Gateway — not just that route)
