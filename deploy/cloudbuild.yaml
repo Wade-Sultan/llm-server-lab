@@ -1,0 +1,250 @@
+# GKE deploy pipeline. Replaces the three per-service Cloud Run pipelines
+# (backend/, commerce/, admin/cloudbuild.yaml) with one build that ships all
+# three images and gates the rollout on a migration.
+#
+# Manual run — $SHORT_SHA is only populated for trigger-driven builds, so pass
+# it explicitly or every image lands on the same tag:
+#
+#   gcloud builds submit --config=deploy/cloudbuild.yaml \
+#     --substitutions=SHORT_SHA=$(git rev-parse --short HEAD)
+#
+# NOTE ON $$: Cloud Build resolves `$FOO` as a substitution and errors on names
+# it does not know, so every *shell* variable below is written `$$FOO`, which it
+# emits as a literal `$FOO`. Single-$ names are Cloud Build's own
+# ($PROJECT_ID, $SHORT_SHA, $_IMG, ...). Getting this backwards is the classic
+# way this file fails on the very first step.
+#
+# KUBECONFIG lives in /workspace so one get-credentials is shared by every later
+# step; $HOME does not persist between steps, /workspace does.
+
+substitutions:
+  _REGION: us-central1
+  _CLUSTER: palladium
+  _NAMESPACE: palladium
+  _IMG: us-central1-docker.pkg.dev/$PROJECT_ID/palladium
+  _OVERLAY: deploy/overlays/prod
+
+options:
+  # Required when the build runs as a user-specified service account.
+  logging: CLOUD_LOGGING_ONLY
+  machineType: E2_HIGHCPU_8
+
+timeout: 3600s
+
+steps:
+  # ---------------------------------------------------------------- build ----
+  # All three build in parallel (waitFor: ['-']). --cache-from needs the tag
+  # locally first, and `|| true` keeps the very first build — when no :latest
+  # exists yet — from failing.
+  - id: build-builder
+    name: gcr.io/cloud-builders/docker
+    dir: backend
+    entrypoint: bash
+    waitFor: ['-']
+    env: ['DOCKER_BUILDKIT=1']
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        docker pull "$_IMG/backend:latest" || true
+        docker build \
+          --cache-from "$_IMG/backend:latest" \
+          --build-arg BUILDKIT_INLINE_CACHE=1 \
+          -t "$_IMG/backend:$SHORT_SHA" \
+          -t "$_IMG/backend:latest" .
+
+  - id: build-commerce
+    name: gcr.io/cloud-builders/docker
+    dir: commerce
+    entrypoint: bash
+    waitFor: ['-']
+    env: ['DOCKER_BUILDKIT=1']
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        docker pull "$_IMG/commerce:latest" || true
+        docker build \
+          --cache-from "$_IMG/commerce:latest" \
+          --build-arg BUILDKIT_INLINE_CACHE=1 \
+          -t "$_IMG/commerce:$SHORT_SHA" \
+          -t "$_IMG/commerce:latest" .
+
+  - id: build-admin
+    name: gcr.io/cloud-builders/docker
+    dir: admin
+    entrypoint: bash
+    waitFor: ['-']
+    env: ['DOCKER_BUILDKIT=1']
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        docker pull "$_IMG/admin:latest" || true
+        docker build \
+          --cache-from "$_IMG/admin:latest" \
+          --build-arg BUILDKIT_INLINE_CACHE=1 \
+          -t "$_IMG/admin:$SHORT_SHA" \
+          -t "$_IMG/admin:latest" .
+
+  # ----------------------------------------------------------------- push ----
+  - id: push-builder
+    name: gcr.io/cloud-builders/docker
+    waitFor: [build-builder]
+    args: [push, --all-tags, '$_IMG/backend']
+
+  - id: push-commerce
+    name: gcr.io/cloud-builders/docker
+    waitFor: [build-commerce]
+    args: [push, --all-tags, '$_IMG/commerce']
+
+  - id: push-admin
+    name: gcr.io/cloud-builders/docker
+    waitFor: [build-admin]
+    args: [push, --all-tags, '$_IMG/admin']
+
+  # --------------------------------------------------------------- render ----
+  # Runs in parallel with the image builds — it only touches text.
+  #
+  # cloud-sdk rather than the kubectl builder because this step needs python3
+  # as well as kubectl, and cloud-sdk is guaranteed to have both (gcloud itself
+  # is a python application).
+  #
+  # sed rather than `kustomize edit set image`: the substitution is two fields,
+  # and the \b boundaries keep FIREBASE_PROJECT_ID from being rewritten — the
+  # same trap documented in RUNBOOK §1.
+  - id: render
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: bash
+    waitFor: ['-']
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        cd "$_OVERLAY"
+
+        sed -i "s/\bPROJECT_ID\b/$PROJECT_ID/g" kustomization.yaml patches/workload-identity.yaml
+        sed -i "s/newTag: latest/newTag: $SHORT_SHA/g" kustomization.yaml
+
+        # Fail loudly rather than deploying a half-substituted manifest.
+        if grep -qE '\bPROJECT_ID\b|newTag: latest' kustomization.yaml; then
+          echo "ERROR: substitution incomplete" >&2
+          grep -nE '\bPROJECT_ID\b|newTag: latest' kustomization.yaml >&2
+          exit 1
+        fi
+        if grep -q 'REPLACE_WITH_CLOUD_SQL_PRIVATE_IP' patches/config-prod.yaml; then
+          echo "ERROR: Cloud SQL private IP placeholder never filled in (RUNBOOK §5)" >&2
+          exit 1
+        fi
+
+        kubectl kustomize . > /workspace/manifests.yaml
+
+        # Split the migration Job from everything else: it must complete BEFORE
+        # the Deployments roll, so it cannot ride along in the same apply.
+        # Splitting on document separators needs no YAML parser — kustomize
+        # output is canonical, exactly one "---" line between documents.
+        python3 - <<'PY'
+        import re
+        docs = open('/workspace/manifests.yaml').read().split('\n---\n')
+        is_job = lambda d: re.search(r'^kind: Job$', d, re.M)
+        open('/workspace/migrate.yaml', 'w').write('\n---\n'.join(d for d in docs if is_job(d)))
+        open('/workspace/rest.yaml', 'w').write('\n---\n'.join(d for d in docs if not is_job(d)))
+        PY
+
+        test -s /workspace/migrate.yaml || { echo "ERROR: no migration Job rendered" >&2; exit 1; }
+        test -s /workspace/rest.yaml    || { echo "ERROR: nothing else rendered" >&2; exit 1; }
+
+        # Job specs are immutable, so re-applying `migrate` with a new image
+        # fails. The SHA suffix sidesteps that and leaves a legible record of
+        # which commit ran which migration.
+        sed -i "s/^  name: migrate\$/  name: migrate-$SHORT_SHA/" /workspace/migrate.yaml
+        grep -m1 '^  name: migrate-' /workspace/migrate.yaml
+
+  # ----------------------------------------------------------------- auth ----
+  - id: credentials
+    name: gcr.io/cloud-builders/kubectl
+    entrypoint: bash
+    waitFor: [render]
+    env: ['KUBECONFIG=/workspace/kubeconfig']
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        gcloud container clusters get-credentials "$_CLUSTER" --region "$_REGION"
+        kubectl -n "$_NAMESPACE" get deploy
+
+  # -------------------------------------------------------------- migrate ----
+  # The rollout gate. `create`, not `apply`: the name is unique per commit so
+  # there is nothing to merge, and create fails loudly if this SHA already ran.
+  #
+  # The two competing waits exist because `kubectl wait --for=condition=complete`
+  # does NOT return when a Job fails — it blocks until the timeout expires.
+  # Waiting on `failed` in parallel and taking whichever resolves first turns a
+  # 15-minute hang into an immediate, correctly-attributed failure.
+  - id: migrate
+    name: gcr.io/cloud-builders/kubectl
+    entrypoint: bash
+    waitFor: [credentials, push-builder]
+    env: ['KUBECONFIG=/workspace/kubeconfig']
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        JOB="migrate-$SHORT_SHA"
+
+        kubectl -n "$_NAMESPACE" create -f /workspace/migrate.yaml
+
+        dump_logs() {
+          echo "--- migration diagnostics ---" >&2
+          kubectl -n "$_NAMESPACE" logs "job/$$JOB" --tail=200 --all-containers >&2 || true
+          kubectl -n "$_NAMESPACE" describe "job/$$JOB" >&2 || true
+        }
+        trap dump_logs ERR
+
+        kubectl -n "$_NAMESPACE" wait --for=condition=complete --timeout=900s "job/$$JOB" &
+        ok=$$!
+        ( kubectl -n "$_NAMESPACE" wait --for=condition=failed --timeout=900s "job/$$JOB" && exit 1 ) &
+        bad=$$!
+
+        wait -n "$$ok" "$$bad"
+        kill "$$ok" "$$bad" 2>/dev/null || true
+
+        echo "migration $$JOB complete"
+        kubectl -n "$_NAMESPACE" logs "job/$$JOB" --tail=50 --all-containers || true
+
+  # --------------------------------------------------------------- deploy ----
+  - id: deploy
+    name: gcr.io/cloud-builders/kubectl
+    entrypoint: bash
+    waitFor: [migrate, push-commerce, push-admin]
+    env: ['KUBECONFIG=/workspace/kubeconfig']
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        kubectl apply -f /workspace/rest.yaml
+
+  # --------------------------------------------------------------- verify ----
+  # maxUnavailable: 0 means old pods keep serving until new ones are ready, so a
+  # failed rollout is a stalled deploy rather than an outage. Failing the build
+  # here is what makes that visible instead of silently timing out.
+  - id: rollout
+    name: gcr.io/cloud-builders/kubectl
+    entrypoint: bash
+    waitFor: [deploy]
+    env: ['KUBECONFIG=/workspace/kubeconfig']
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        for d in builder commerce admin; do
+          kubectl -n "$_NAMESPACE" rollout status "deployment/$$d" --timeout=600s
+        done
+
+        PROGRAMMED=$$(kubectl -n "$_NAMESPACE" get gateway palladium \
+          -o jsonpath='{.status.conditions[?(@.type=="Programmed")].status}' 2>/dev/null || true)
+        [ "$$PROGRAMMED" = "True" ] || echo "WARNING: Gateway not Programmed (got '$$PROGRAMMED')" >&2
+
+# Images are pushed by explicit steps rather than an `images:` block, because
+# that block only pushes after every step succeeds — which would mean the
+# migration ran against images that were never published.

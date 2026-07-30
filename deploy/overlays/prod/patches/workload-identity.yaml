@@ -1,6 +1,6 @@
 # Workload Identity: the KSA -> Google SA link. This annotation is the half that
 # lives in the cluster; the matching roles/iam.workloadIdentityUser binding is
-# in RUNBOOK.md §3. Both are required — with only one, token exchange fails at
+# in RUNBOOK.md §6. Both are required — with only one, token exchange fails at
 # runtime with a permission error rather than at deploy time.
 #
 # Replaces the Cloud Run --service-account flag. No service account JSON keys
@@ -8,7 +8,14 @@
 # gcp-adc.yaml patch has no prod counterpart: ADC comes from the metadata
 # server here, not a mounted file.
 #
-# PROJECT_ID must be substituted before apply (RUNBOOK.md §1).
+# These are the SAME three service accounts Cloud Run and the admin GCE box
+# already use (see backend/, commerce/ and admin/cloudbuild.yaml). Reusing them
+# is deliberate: they already hold the Cloud SQL and Secret Manager grants, so
+# the migration re-grants nothing and both stacks stay identical in what they
+# can reach during the parallel run.
+#
+# PROJECT_ID must be substituted before apply (RUNBOOK.md §1). Keep the
+# placeholder in git — substitute at deploy time, not in a commit.
 apiVersion: v1
 kind: ServiceAccount
 metadata:

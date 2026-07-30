@@ -1,0 +1,50 @@
+# Build context for `gcloud builds submit`. Without this file gcloud derives one
+# from .gitignore, which mostly works — but being explicit matters here for two
+# reasons: the top-level .venv/ is *tracked* (so git's own ignore rule does not
+# apply to it), and credentials like .env and .gcloud/ should never enter a
+# build context regardless of what git does with them.
+
+.git/
+.gitignore
+
+# Dependency trees — every image installs its own inside the Dockerfile.
+.venv/
+*/.venv/
+node_modules/
+*/node_modules/
+
+# Build output. Images build from source; shipping a host-built .next would at
+# best be ignored and at worst be copied in stale.
+.next/
+*/.next/
+frontend/dist/
+*.egg-info/
+__pycache__/
+
+# Caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.copier/
+
+# Local-only state and credentials. None of this is needed to build an image and
+# all of it is either large or sensitive.
+.gcloud/
+.local-seed/
+*.dump
+.env
+.env.*
+deploy/overlays/local/.env.local
+cloud-sql-proxy
+
+# Test artefacts
+frontend/test-results/
+frontend/blob-report/
+frontend/playwright-report/
+
+# Editor/agent scratch
+.claude/
+.continue/
+.kilo/
+img/

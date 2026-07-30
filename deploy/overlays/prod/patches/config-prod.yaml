@@ -14,7 +14,7 @@ data:
   # --format='value(ipAddresses[?type=PRIVATE].ipAddress)'` (RUNBOOK.md §2).
   # Left obviously broken rather than plausibly wrong — a stale-but-valid IP
   # here fails as intermittent connection timeouts, which is far worse to debug.
-  POSTGRES_SERVER: "REPLACE_WITH_CLOUD_SQL_PRIVATE_IP"
+  POSTGRES_SERVER: "<private-ip-from-§2>"
   # The real database on Cloud SQL. Local uses `palladium_local` so the two are
   # never confusable in a connection string.
   POSTGRES_DB: "palladium"

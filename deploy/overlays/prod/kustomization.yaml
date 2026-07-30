@@ -19,11 +19,17 @@ patches:
   - path: patches/config-prod.yaml
   - path: patches/workload-identity.yaml
   - path: patches/resources.yaml
+  - path: patches/secrets-scoped.yaml
 
 # NOTE: no secretGenerator here, deliberately — unlike the local overlay there
-# is no .env.prod to read. palladium-secrets is created out-of-band from Secret
-# Manager (RUNBOOK.md §5) so no prod credential is ever on a developer's disk
-# or in a kustomize build output.
+# is no .env.prod to read. The three palladium-secrets-* Secrets are created
+# out-of-band from Secret Manager (RUNBOOK.md §7) so no prod credential is ever
+# on a developer's disk or in a kustomize build output.
+#
+# Three, not one: patches/secrets-scoped.yaml narrows each workload to the keys
+# it actually reads, so commerce cannot see OPENROUTER_API_KEY and builder
+# cannot see the affiliate tags. Local keeps a single Secret — one dev database
+# and one throwaway key set make scoping there pure friction.
 
 # Cloud Build overrides these per commit:
 #   kustomize edit set image palladium/builder=$_IMG/builder:$SHORT_SHA
@@ -31,8 +37,13 @@ patches:
 # rely on it for a real rollout — an immutable SHA tag is what makes a rollback
 # legible.
 images:
+  # newName is `backend`, not `builder`: that is the existing Artifact Registry
+  # path (see backend/cloudbuild.yaml). Reusing it means the layer cache carries
+  # over, and — more importantly — during the Phase 4 parallel run Cloud Run and
+  # GKE serve the *same image digest*, so a behaviour difference between them is
+  # real rather than an artefact of two separately-built images.
   - name: palladium/builder
-    newName: us-central1-docker.pkg.dev/PROJECT_ID/palladium/builder
+    newName: us-central1-docker.pkg.dev/PROJECT_ID/palladium/backend
     newTag: latest
   - name: palladium/commerce
     newName: us-central1-docker.pkg.dev/PROJECT_ID/palladium/commerce
