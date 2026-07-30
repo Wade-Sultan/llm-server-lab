@@ -123,7 +123,8 @@ steps:
         set -euo pipefail
         cd "$_OVERLAY"
 
-        sed -i "s/\bPROJECT_ID\b/$PROJECT_ID/g" kustomization.yaml patches/workload-identity.yaml
+        sed -i "s/\bPROJECT_ID\b/$PROJECT_ID/g" \
+          kustomization.yaml patches/workload-identity.yaml grafana-syncer.yaml
         sed -i "s/newTag: latest/newTag: $SHORT_SHA/g" kustomization.yaml
 
         # Fail loudly rather than deploying a half-substituted manifest.

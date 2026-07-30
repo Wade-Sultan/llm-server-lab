@@ -14,6 +14,7 @@ resources:
   - backend-policies.yaml
   - hpa.yaml
   - pdb.yaml
+  - grafana-syncer.yaml
 
 patches:
   - path: patches/config-prod.yaml

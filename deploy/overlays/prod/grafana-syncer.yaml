@@ -1,0 +1,100 @@
+# Grafana Cloud <-> Google Managed Prometheus, via Google's datasource-syncer.
+#
+# WHY THIS RATHER THAN AN AGENT: Grafana's Prometheus data source cannot
+# authenticate to Google (no native OAuth2/GCP auth), so the usual answer is to
+# run Grafana Alloy in-cluster and remote_write everything to Grafana Cloud.
+# That would duplicate collection GMP already does, add always-on pods to a
+# cluster already at its CPUS_ALL_REGIONS quota, and bill Grafana Cloud ingest
+# for every active series.
+#
+# The syncer instead pushes a fresh GCP OAuth2 token into an existing Grafana
+# Cloud data source every 10 minutes (Google access tokens live 1 hour), so
+# Grafana Cloud queries GMP *directly* at query time. No duplicate storage, no
+# ingest cost, no always-on agent — just a short-lived pod six times an hour.
+#
+# Adapted from
+# https://github.com/GoogleCloudPlatform/prometheus-engine/blob/v0.17.2/cmd/datasource-syncer/datasource-syncer.yaml
+# with three deliberate changes:
+#   1. The Grafana API token comes from a Secret file, not a CLI arg. Upstream
+#      passes --grafana-api-token=<token> literally, which leaks it into
+#      `kubectl get cronjob -o yaml`, into shell history, and into git.
+#   2. A dedicated KSA with Workload Identity instead of the namespace `default`
+#      SA, so read access to metrics is not granted to every pod in the
+#      namespace.
+#   3. No companion init Job. Upstream ships one for an immediate first sync;
+#      it is omitted because deploy/cloudbuild.yaml routes every `kind: Job` in
+#      the rendered output into the migration gate. Trigger the first sync by
+#      hand instead:
+#        kubectl -n palladium create job --from=cronjob/grafana-datasource-syncer sync-now
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: grafana-syncer
+  annotations:
+    # Needs only roles/monitoring.viewer — read access to the Cloud Monitoring
+    # API. Deliberately a separate identity from the three app service accounts.
+    iam.gke.io/gcp-service-account: palladium-grafana@PROJECT_ID.iam.gserviceaccount.com
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: grafana-datasource-syncer
+spec:
+  # Tokens last 1 hour; syncing every 10 minutes means a missed run (node
+  # upgrade, transient Grafana API failure) cannot expire the credential.
+  schedule: "*/10 * * * *"
+  timeZone: "America/Los_Angeles"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 300
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 300
+      ttlSecondsAfterFinished: 600
+      template:
+        spec:
+          restartPolicy: Never
+          serviceAccountName: grafana-syncer
+          containers:
+            - name: syncer
+              image: gke.gcr.io/prometheus-engine/datasource-syncer:v0.17.2-gke.2
+              args:
+                # $(VAR) is Kubernetes env expansion, so the endpoint and UID
+                # come from the Secret rather than being baked into the manifest.
+                - --grafana-api-endpoint=$(GRAFANA_API_ENDPOINT)
+                - --datasource-uids=$(DATASOURCE_UIDS)
+                # Read from a file, never an arg — args are world-readable to
+                # anyone with get on the CronJob.
+                - --grafana-api-token-filepath=/etc/grafana/token
+                - --project-id=PROJECT_ID
+              env:
+                - name: GRAFANA_API_ENDPOINT
+                  valueFrom:
+                    secretKeyRef:
+                      name: grafana-syncer
+                      key: GRAFANA_API_ENDPOINT
+                - name: DATASOURCE_UIDS
+                  valueFrom:
+                    secretKeyRef:
+                      name: grafana-syncer
+                      key: DATASOURCE_UIDS
+              volumeMounts:
+                - name: grafana-token
+                  mountPath: /etc/grafana
+                  readOnly: true
+              resources:
+                requests:
+                  cpu: "100m"
+                  memory: 128Mi
+                limits:
+                  cpu: "500m"
+                  memory: 128Mi
+          volumes:
+            - name: grafana-token
+              secret:
+                secretName: grafana-syncer
+                items:
+                  - key: GRAFANA_API_TOKEN
+                    path: token
