@@ -1,0 +1,25 @@
+# TEMPORARY — Phase 4 only. Routes the parallel-run host at builder so the GKE
+# stack can be exercised end to end while Cloud Run still serves
+# api.palladiumtech.ai. Delete this file and the api-cutover listener in
+# gateway.yaml once NEXT_PUBLIC_API_URL has been flipped in Vercel.
+#
+# Separate from base/builder/httproute.yaml because that route binds to the
+# `api` listener; a single HTTPRoute cannot attach to two listeners with
+# different hostnames and still keep base environment-independent.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: builder-cutover
+spec:
+  parentRefs:
+    - name: palladium
+      sectionName: api-cutover
+  rules:
+    - backendRefs:
+        - name: builder
+          port: 80
+      # Kept in sync with base/builder/httproute.yaml — smoke-testing against a
+      # shorter timeout than production would hide exactly the SSE truncation
+      # bug this host exists to catch.
+      timeouts:
+        request: 300s

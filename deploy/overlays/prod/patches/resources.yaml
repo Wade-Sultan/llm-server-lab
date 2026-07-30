@@ -1,0 +1,122 @@
+# Autopilot bursting. Requests are what Autopilot bills; limits above requests
+# are honoured on clusters >= 1.29.3-gke.1093000 and let a pod consume unused
+# node capacity for free. The old "Autopilot forces limits == requests" rule no
+# longer applies, and the per-pod floor is now 50m / 52Mi rather than
+# 0.25 vCPU / 0.5 GiB.
+#
+# Memory limit always equals memory request, on purpose. CPU over-limit is
+# throttled — a slowdown — but memory over-limit is an OOM kill, so "bursting"
+# memory buys a crash instead of headroom.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: builder
+spec:
+  template:
+    spec:
+      containers:
+        - name: builder
+          resources:
+            requests:
+              cpu: "250m"
+              memory: 1Gi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: commerce
+spec:
+  template:
+    spec:
+      containers:
+        - name: commerce
+          resources:
+            requests:
+              cpu: "250m"
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: admin
+spec:
+  template:
+    spec:
+      containers:
+        - name: admin
+          resources:
+            requests:
+              cpu: "250m"
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+---
+# Jobs are billed the same way as Deployments on Autopilot, so they get the same
+# treatment. Migrations are short and bursty — a low request keeps the billed
+# baseline small while the CPU ceiling keeps `alembic upgrade head` from
+# crawling.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: migrate
+spec:
+  template:
+    spec:
+      containers:
+        - name: alembic
+          resources:
+            requests:
+              cpu: "250m"
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+---
+# The ETL and discovery jobs are network-latency bound (SerpApi, HTTP fetch, LLM
+# extraction), so they spend most of their wall time idle. A high CPU request
+# would be billed for the entire run to no benefit; the burst ceiling covers the
+# parsing spikes.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: pricing-etl
+spec:
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+            - name: etl
+              resources:
+                requests:
+                  cpu: "500m"
+                  memory: 2Gi
+                limits:
+                  cpu: "2"
+                  memory: 2Gi
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: discovery
+spec:
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+            - name: discovery
+              resources:
+                requests:
+                  cpu: "500m"
+                  memory: 2Gi
+                limits:
+                  cpu: "2"
+                  memory: 2Gi

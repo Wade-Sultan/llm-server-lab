@@ -1,0 +1,91 @@
+# GKE-specific policy attachments. These are the Gateway API replacements for
+# BackendConfig, which only works with Ingress.
+#
+# Why HealthCheckPolicy is not optional: the GCLB health check defaults to `/`
+# on the serving port. builder returns 404 there and commerce redirects, so
+# every backend is marked unhealthy and the LB serves 502s for the whole
+# deployment. This is the single most common GKE ingress/gateway failure, and
+# it looks like a broken app rather than a broken probe.
+apiVersion: networking.gke.io/v1
+kind: HealthCheckPolicy
+metadata:
+  name: builder
+spec:
+  targetRef:
+    group: ""
+    kind: Service
+    name: builder
+  default:
+    # Slower than the kubelet probes on purpose: this only decides LB
+    # membership, and flapping a NEG endpoint is more disruptive than a pod
+    # restart. 15s x 2 failures = ~30s to eject a bad pod.
+    checkIntervalSec: 15
+    timeoutSec: 10
+    healthyThreshold: 1
+    unhealthyThreshold: 2
+    config:
+      type: HTTP
+      httpHealthCheck:
+        # /readyz, not /healthz: readiness gates on the DB pool and the DSPy
+        # warm-up, so a pod that is up but not warm stays out of the LB instead
+        # of taking traffic it will fail.
+        requestPath: /api/v1/readyz
+        # USE_SERVING_PORT follows the NEG endpoint port rather than hardcoding
+        # 8000, so changing the container port cannot desync the health check.
+        portSpecification: USE_SERVING_PORT
+---
+apiVersion: networking.gke.io/v1
+kind: HealthCheckPolicy
+metadata:
+  name: commerce
+spec:
+  targetRef:
+    group: ""
+    kind: Service
+    name: commerce
+  default:
+    checkIntervalSec: 15
+    timeoutSec: 10
+    healthyThreshold: 1
+    unhealthyThreshold: 2
+    config:
+      type: HTTP
+      httpHealthCheck:
+        requestPath: /readyz
+        portSpecification: USE_SERVING_PORT
+---
+# The GCLB backend response timeout. Cilium honours HTTPRoute
+# `timeouts.request` directly (verified locally: the generated Envoy route
+# carries "timeout": "300s"), but the GKE Gateway controller programs GCLB
+# rather than an in-cluster Envoy, and its support for that field is not
+# documented — so the timeout is set here as well.
+#
+# This one matters more than it looks: the GCLB default is 30s, which would cut
+# every /chat SSE stream off long before _DSPY_CHAT_TIMEOUT_S (180s). Without
+# this policy the migration ships a stack where long builds silently truncate.
+apiVersion: networking.gke.io/v1
+kind: GCPBackendPolicy
+metadata:
+  name: builder
+spec:
+  targetRef:
+    group: ""
+    kind: Service
+    name: builder
+  default:
+    timeoutSec: 300
+---
+apiVersion: networking.gke.io/v1
+kind: GCPBackendPolicy
+metadata:
+  name: commerce
+spec:
+  targetRef:
+    group: ""
+    kind: Service
+    name: commerce
+  default:
+    # commerce serves ordinary JSON requests; the 30s default is fine, but it
+    # is stated explicitly so a future streaming endpoint has an obvious knob
+    # rather than an inherited surprise.
+    timeoutSec: 30

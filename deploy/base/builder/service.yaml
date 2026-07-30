@@ -3,7 +3,9 @@ kind: Service
 metadata:
   name: builder
   annotations:
-    # Container-native load balancing on GKE; ignored by the local nginx addon.
+    # Container-native load balancing on GKE (NEG-backed, so the LB health
+    # checks pods directly rather than hopping through a node port). Ignored by
+    # Cilium locally.
     cloud.google.com/neg: '{"ingress": true}'
 spec:
   selector:

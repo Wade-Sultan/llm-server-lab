@@ -38,7 +38,7 @@ spec:
             - name: POSTGRES_USER
               value: palladium_app
             - name: POSTGRES_DB
-              value: palladium
+              value: palladium_local
             - name: POSTGRES_PASSWORD
               valueFrom:
                 secretKeyRef:
@@ -53,11 +53,11 @@ spec:
               name: postgres
           readinessProbe:
             exec:
-              command: ["pg_isready", "-U", "palladium_app", "-d", "palladium"]
+              command: ["pg_isready", "-U", "palladium_app", "-d", "palladium_local"]
             periodSeconds: 5
           livenessProbe:
             exec:
-              command: ["pg_isready", "-U", "palladium_app", "-d", "palladium"]
+              command: ["pg_isready", "-U", "palladium_app", "-d", "palladium_local"]
             initialDelaySeconds: 30
             periodSeconds: 15
           resources:

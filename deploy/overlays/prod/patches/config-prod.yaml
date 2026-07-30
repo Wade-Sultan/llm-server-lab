@@ -1,0 +1,39 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: builder-config
+data:
+  ENVIRONMENT: "production"
+  LOG_LEVEL: "INFO"
+  # Cloud SQL private IP, reached directly over the VPC — Autopilot clusters are
+  # VPC-native, so no Auth Proxy sidecar is needed. A sidecar would add
+  # 250m/512Mi to every pod including job pods, to solve a problem this topology
+  # does not have.
+  #
+  # REPLACE_ME: fill from `gcloud sql instances describe palladium-db
+  # --format='value(ipAddresses[?type=PRIVATE].ipAddress)'` (RUNBOOK.md §2).
+  # Left obviously broken rather than plausibly wrong — a stale-but-valid IP
+  # here fails as intermittent connection timeouts, which is far worse to debug.
+  POSTGRES_SERVER: "REPLACE_WITH_CLOUD_SQL_PRIVATE_IP"
+  # The real database on Cloud SQL. Local uses `palladium_local` so the two are
+  # never confusable in a connection string.
+  POSTGRES_DB: "palladium"
+  FRONTEND_HOST: "https://palladiumtech.ai"
+  # No ports and no localhost, unlike local: browsers send the origin without a
+  # port for :443, so the portless form is the one that matches. k8s-api is
+  # included for the Phase 4 parallel run and can be dropped at cutover.
+  BACKEND_CORS_ORIGINS: "https://palladiumtech.ai,https://www.palladiumtech.ai,https://k8s-api.palladiumtech.ai"
+  # The FRONTEND Firebase project (the ID token's audience), not the GCP
+  # project. Same value as local because the frontend project is shared; a
+  # mismatch surfaces as invalid-credential on every authenticated request.
+  FIREBASE_PROJECT_ID: "project-b8abf13d-d1ce-43f1-837"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: commerce-config
+data:
+  ENV: "production"
+  FRONTEND_HOST: "https://palladiumtech.ai"
+  BACKEND_CORS_ORIGINS: "https://palladiumtech.ai,https://www.palladiumtech.ai"
+  FIREBASE_PROJECT_ID: "project-b8abf13d-d1ce-43f1-837"

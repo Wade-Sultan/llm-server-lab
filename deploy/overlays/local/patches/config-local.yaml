@@ -7,6 +7,10 @@ data:
   LOG_LEVEL: "DEBUG"
   # In-cluster DNS for the Postgres StatefulSet's headless Service.
   POSTGRES_SERVER: "postgres"
+  # Distinct from prod's `palladium` so it is never ambiguous which database a
+  # connection string points at. Underscore rather than a hyphen because a
+  # hyphenated database name needs double-quoting in every DDL statement.
+  POSTGRES_DB: "palladium_local"
   # The frontend still runs on the host via `npm run dev` (Next.js, :3000), so
   # CORS has to allow the host origin rather than a cluster one. admin is
   # included because it calls the API directly from the browser.

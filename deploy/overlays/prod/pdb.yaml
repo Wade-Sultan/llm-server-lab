@@ -1,0 +1,16 @@
+# builder only, and only because it runs 2+ replicas.
+#
+# There is deliberately NO PDB for commerce or admin. At 1 replica
+# minAvailable: 1 permits zero voluntary disruptions, which does not protect
+# them — it blocks node drains, stalls Autopilot's node upgrades, and ends with
+# the pod force-evicted after the grace window anyway. The outage still happens,
+# it just arrives with a jammed upgrade attached.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: builder
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: builder

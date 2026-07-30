@@ -1,0 +1,31 @@
+# Workload Identity: the KSA -> Google SA link. This annotation is the half that
+# lives in the cluster; the matching roles/iam.workloadIdentityUser binding is
+# in RUNBOOK.md §3. Both are required — with only one, token exchange fails at
+# runtime with a permission error rather than at deploy time.
+#
+# Replaces the Cloud Run --service-account flag. No service account JSON keys
+# exist anywhere in this topology, which is also why the local overlay's
+# gcp-adc.yaml patch has no prod counterpart: ADC comes from the metadata
+# server here, not a mounted file.
+#
+# PROJECT_ID must be substituted before apply (RUNBOOK.md §1).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: builder
+  annotations:
+    iam.gke.io/gcp-service-account: palladium-backend@PROJECT_ID.iam.gserviceaccount.com
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: commerce
+  annotations:
+    iam.gke.io/gcp-service-account: palladium-commerce@PROJECT_ID.iam.gserviceaccount.com
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: admin
+  annotations:
+    iam.gke.io/gcp-service-account: palladium-admin@PROJECT_ID.iam.gserviceaccount.com

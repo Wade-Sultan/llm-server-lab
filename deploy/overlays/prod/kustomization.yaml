@@ -1,0 +1,42 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Matches the Workload Identity member strings in RUNBOOK.md
+# (PROJECT_ID.svc.id.goog[palladium/builder]). Changing this namespace means
+# re-running every IAM binding.
+namespace: palladium
+
+resources:
+  - ../../base
+  - namespace.yaml
+  - gateway.yaml
+  - httproute-cutover.yaml
+  - backend-policies.yaml
+  - hpa.yaml
+  - pdb.yaml
+
+patches:
+  - path: patches/config-prod.yaml
+  - path: patches/workload-identity.yaml
+  - path: patches/resources.yaml
+
+# NOTE: no secretGenerator here, deliberately — unlike the local overlay there
+# is no .env.prod to read. palladium-secrets is created out-of-band from Secret
+# Manager (RUNBOOK.md §5) so no prod credential is ever on a developer's disk
+# or in a kustomize build output.
+
+# Cloud Build overrides these per commit:
+#   kustomize edit set image palladium/builder=$_IMG/builder:$SHORT_SHA
+# The :latest here is a placeholder so `kustomize build` works locally; never
+# rely on it for a real rollout — an immutable SHA tag is what makes a rollback
+# legible.
+images:
+  - name: palladium/builder
+    newName: us-central1-docker.pkg.dev/PROJECT_ID/palladium/builder
+    newTag: latest
+  - name: palladium/commerce
+    newName: us-central1-docker.pkg.dev/PROJECT_ID/palladium/commerce
+    newTag: latest
+  - name: palladium/admin
+    newName: us-central1-docker.pkg.dev/PROJECT_ID/palladium/admin
+    newTag: latest

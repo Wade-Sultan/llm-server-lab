@@ -3,12 +3,17 @@ kind: ConfigMap
 metadata:
   name: builder-config
 # Only environment-independent values live here. The overlay patches in
-# ENVIRONMENT, POSTGRES_SERVER, FRONTEND_HOST, BACKEND_CORS_ORIGINS and
-# FIREBASE_PROJECT_ID. Anything carrying a credential — POSTGRES_PASSWORD,
-# POSTGRES_DB_URL (embeds the password), API keys — goes in palladium-secrets.
+# ENVIRONMENT, POSTGRES_SERVER, POSTGRES_DB, FRONTEND_HOST,
+# BACKEND_CORS_ORIGINS and FIREBASE_PROJECT_ID. Anything carrying a credential
+# — POSTGRES_PASSWORD, POSTGRES_DB_URL (embeds the password), API keys — goes
+# in palladium-secrets.
+#
+# POSTGRES_DB is per-overlay on purpose: local is `palladium_local` and prod is
+# `palladium`, so a connection string (or a psql prompt) says out loud which
+# database it is attached to. Both being `palladium` is how you end up running
+# a scratch query against Cloud SQL.
 data:
   PROJECT_NAME: "Palladium"
   LOG_LEVEL: "INFO"
   POSTGRES_PORT: "5432"
   POSTGRES_USER: "palladium_app"
-  POSTGRES_DB: "palladium"

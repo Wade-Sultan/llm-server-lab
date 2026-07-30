@@ -1,0 +1,38 @@
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: builder
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: builder
+  # minReplicas matches the base Deployment's replicas: 2, so the first apply
+  # does not immediately fight the HPA. 2 is also the floor the PDB needs to
+  # permit a voluntary eviction at all.
+  minReplicas: 2
+  maxReplicas: 4
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          # 150, not 70 — and this is the subtle part of combining bursting with
+          # an HPA. Utilization is measured against the *request* (250m), not
+          # the limit, so 100% means "using the billed baseline" and the pod can
+          # legitimately reach 400%. A 70% target would scale out at 175m, well
+          # below one burstable core, and the cluster would sit at maxReplicas
+          # under trivial load. 150% (~375m) scales once a pod is genuinely past
+          # its reserved share while leaving real burst headroom.
+          averageUtilization: 150
+  behavior:
+    scaleDown:
+      # New nodes take 60-120s to schedule on Autopilot, so paying to scale down
+      # eagerly and then back up is a bad trade. Five minutes of stability also
+      # protects long SSE streams from being drained mid-build.
+      stabilizationWindowSeconds: 300
+# Caveat worth re-checking against real traffic: builder is mostly blocked on
+# OpenRouter, so CPU understates load — a pod can be saturated on in-flight
+# requests while looking idle. If p95 latency degrades before this HPA reacts,
+# the answer is concurrency-based scaling (KEDA), not a lower CPU target.

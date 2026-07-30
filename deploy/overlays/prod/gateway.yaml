@@ -1,0 +1,74 @@
+# The prod half of the Gateway API split. The HTTPRoutes in deploy/base are
+# byte-identical to what runs locally against Cilium; only this file differs.
+#
+# Listener names MUST stay `api` and `commerce` — the base HTTPRoutes bind to
+# them by sectionName, and a rename silently detaches the routes (the Gateway
+# still reports Programmed, you just get 404s).
+#
+# admin has no listener here, exactly as in the local overlay: it is reached
+# only by `kubectl port-forward svc/admin 3000:3000`, which replaces the GCE
+# IAP tunnel. Nothing about admin is exposed to the internet, so there is no
+# IAP/OAuth backend config to maintain and no way to misconfigure it open.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: palladium
+  annotations:
+    # Certificate Manager, NOT the ManagedCertificate CRD — that CRD only works
+    # with Ingress and is silently ignored by the Gateway controller. Create
+    # the cert map first (RUNBOOK.md §6); TLS is resolved entirely through this
+    # annotation, which is why the listeners below carry no `tls` block.
+    networking.gke.io/certmap: palladium-certs
+spec:
+  gatewayClassName: gke-l7-global-external-managed
+  addresses:
+    # Reserved before the Gateway exists (RUNBOOK.md §4). Pinning it is what
+    # lets DNS — and therefore certificate provisioning — be done in advance,
+    # instead of waiting on an ephemeral LB address.
+    - type: NamedAddress
+      value: palladium-ingress-ip
+  listeners:
+    - name: api
+      protocol: HTTPS
+      port: 443
+      hostname: api.palladiumtech.ai
+    - name: commerce
+      protocol: HTTPS
+      port: 443
+      hostname: commerce.palladiumtech.ai
+    # Parallel-run host for Phase 4: GKE serves this while api.palladiumtech.ai
+    # still points at Cloud Run, so the whole stack can be smoke-tested under
+    # real TLS with zero user-facing risk. Delete this listener and
+    # httproute-cutover.yaml once traffic has moved.
+    - name: api-cutover
+      protocol: HTTPS
+      port: 443
+      hostname: k8s-api.palladiumtech.ai
+    # Plain HTTP exists only to bounce to HTTPS. Without it, http:// URLs hit a
+    # listener that does not exist and fail with a connection error rather than
+    # a redirect.
+    - name: http-redirect
+      protocol: HTTP
+      port: 80
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: https-redirect
+spec:
+  parentRefs:
+    - name: palladium
+      sectionName: http-redirect
+  # The redirect listener has no hostname (so it accepts anything), which makes
+  # this route the place hostnames are enforced. An unlisted host gets a 404
+  # instead of being redirected onward.
+  hostnames:
+    - api.palladiumtech.ai
+    - commerce.palladiumtech.ai
+    - k8s-api.palladiumtech.ai
+  rules:
+    - filters:
+        - type: RequestRedirect
+          requestRedirect:
+            scheme: https
+            statusCode: 301

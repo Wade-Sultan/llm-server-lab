@@ -19,6 +19,11 @@ cd "$REPO_ROOT"
 SEED_DIR="${PALLADIUM_SEED_DIR:-$REPO_ROOT/.local-seed}"
 DUMP_FILE="${PALLADIUM_SEED_DUMP:-$SEED_DIR/palladium.dump}"
 PG_PORT="${PALLADIUM_LOCAL_PG_PORT:-5433}"
+# Must match POSTGRES_DB in deploy/overlays/local/patches/config-local.yaml.
+# Deliberately not `palladium` — that is the Cloud SQL database, and the dump
+# restored here came from it, so identical names invite restoring in the wrong
+# direction.
+PG_DB="${PALLADIUM_LOCAL_PG_DB:-palladium_local}"
 FORCE="${PALLADIUM_SEED_FORCE:-0}"
 [ "${1:-}" = "--force" ] && FORCE=1
 
@@ -37,7 +42,7 @@ if [ -z "$LOCAL_PW" ]; then
 fi
 export PGPASSWORD="$LOCAL_PW"
 
-PSQL=(psql -h 127.0.0.1 -p "$PG_PORT" -U palladium_app -d palladium)
+PSQL=(psql -h 127.0.0.1 -p "$PG_PORT" -U palladium_app -d "$PG_DB")
 
 # Tilt starts this once the migrate Job finishes, but the port-forward is
 # established independently — wait rather than race it.
@@ -64,7 +69,7 @@ echo "Restoring $DUMP_FILE ..."
 # --clean drops objects the migrate Job just created; the DROPs for objects that
 # do not exist yet are expected noise, so a non-zero exit here is not fatal on
 # its own. The verification below is what actually decides.
-pg_restore -h 127.0.0.1 -p "$PG_PORT" -U palladium_app -d palladium \
+pg_restore -h 127.0.0.1 -p "$PG_PORT" -U palladium_app -d "$PG_DB" \
   --no-owner --no-privileges --clean --if-exists "$DUMP_FILE" \
   2> >(grep -v 'does not exist, skipping' >&2) || true
 
