@@ -28,6 +28,16 @@ options:
   # Required when the build runs as a user-specified service account.
   logging: CLOUD_LOGGING_ONLY
   machineType: E2_HIGHCPU_8
+  # REQUIRED because _IMG references $PROJECT_ID in its value. Cloud Build only
+  # expands a substitution *inside another substitution's value* when dynamic
+  # substitutions are on — and that is automatic ONLY for trigger-invoked
+  # builds. On a manual `gcloud builds submit` without this, _IMG stays the
+  # literal string "...pkg.dev/$PROJECT_ID/palladium", bash receives an
+  # unexpanded $PROJECT_ID, and `set -u` kills the step with
+  # "PROJECT_ID: unbound variable" — which reads like a missing project rather
+  # than an unexpanded template. Harmless for trigger builds, which already
+  # behave this way.
+  dynamicSubstitutions: true
 
 timeout: 3600s
 
