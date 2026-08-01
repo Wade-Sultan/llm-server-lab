@@ -196,7 +196,20 @@ def session_lm(session_id: str | None) -> dspy.LM:
     Use via `with dspy.context(lm=session_lm(...)):` around a run — dspy.context
     is safe to call from any thread/task, unlike dspy.configure (which is
     restricted to the one thread that first called it).
+
+    Under load test this returns a local stub instead, so none of the eleven
+    Decide* modules calls OpenRouter. Resolving it here rather than deeper is
+    deliberate: every caller wraps the result in dspy.context, and DSPy carries
+    its own settings into the worker threads it spawns — so the stub survives
+    into places a ContextVar would not reach.
     """
+    from app.core.loadtest import is_load_test
+
+    if is_load_test():
+        from app.core.loadtest_stubs import make_stub_lm
+
+        return make_stub_lm()
+
     if not session_id:
         return dspy.settings.lm
     return dspy.settings.lm.copy(extra_body={**_OPENROUTER_EXTRA_BODY, "session_id": session_id})

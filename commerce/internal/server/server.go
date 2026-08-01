@@ -85,6 +85,11 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger) (http.Han
 	handler = cors(cfg.CORSOrigins)(handler)
 	handler = requestLogger(logger)(handler)
 	handler = recoverPanic(logger)(handler)
+	// Outside recoverPanic, not inside: a handler that panics must be counted
+	// as the 5xx the client actually received. Inside, the deferred record
+	// would still run during unwinding but would see the untouched 200 default,
+	// so panics would silently show up in the dashboards as successes.
+	handler = requestMetrics(mux)(handler)
 
 	cleanup := func() error { return st.Close() }
 	return handler, cleanup, nil

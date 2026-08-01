@@ -187,6 +187,13 @@ steps:
             || { echo "ERROR: secret palladium-secrets-$$s missing (RUNBOOK §7)" >&2; exit 1; }
         done
 
+        # The metrics link (deploy/observability.md) is a WARNING, not an error:
+        # a missing Grafana secret must not fail an application rollout. Without
+        # this line the only symptom is a CronJob that silently never succeeds,
+        # and the data source going unauthorized an hour later.
+        kubectl -n "$_NAMESPACE" get secret grafana-syncer >/dev/null 2>&1 \
+          || echo "WARNING: secret grafana-syncer missing — Grafana Cloud will not query GMP (deploy/observability.md §4)" >&2
+
         # POSTGRES_SERVER lives only in the Secret. Validate the actual value:
         # a pasted-in placeholder or an empty host fails at runtime as DNS or
         # connection errors, which is far more expensive to diagnose than here.

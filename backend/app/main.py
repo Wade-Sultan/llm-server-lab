@@ -9,7 +9,10 @@ from starlette.middleware.cors import CORSMiddleware
 
 from app.api.main import api_router
 from app.core.config import settings
+from app.core.loadtest import LoadTestMiddleware
 from app.core.logging import configure_logging
+from app.core.metrics import instrument as instrument_metrics
+from app.core.metrics import start_exporter as start_metrics_exporter
 from app.core.warmup import mark_dspy_warm
 
 # Before anything else logs, so uvicorn's startup lines are JSON too.
@@ -46,6 +49,11 @@ async def _warm_dspy_pipeline() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Started here rather than at import time so the port is only bound by the
+    # process that actually serves, not by anything that merely imports
+    # app.main (alembic, the test suite, `fastapi run`'s reloader parent).
+    start_metrics_exporter()
+
     # Fire-and-forget: don't await, so lifespan startup (and thus port
     # binding) isn't blocked on the dspy/litellm import chain.
     warm_task = asyncio.create_task(_warm_dspy_pipeline())
@@ -79,4 +87,16 @@ if settings.all_cors_origins:
         allow_headers=["*"],
     )
 
+# add_middleware, so this wraps outside the router but inside CORS. Registered
+# as a raw ASGI class rather than @app.middleware("http") on purpose — the
+# latter is BaseHTTPMiddleware, which runs the endpoint in a separate task and
+# would lose the ContextVar this sets. See app/core/loadtest.py.
+app.add_middleware(LoadTestMiddleware)
+
 app.include_router(api_router, prefix=settings.API_V1_STR)
+
+# After include_router: the instrumentator reads the route table to label
+# timings by route template, so routes registered afterwards would be recorded
+# under their raw path instead. Module level, not lifespan — adding middleware
+# to a running app raises RuntimeError.
+instrument_metrics(app)

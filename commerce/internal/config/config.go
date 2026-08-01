@@ -16,6 +16,13 @@ type Config struct {
 	// Port is the TCP port to listen on. Cloud Run injects PORT (default 8080).
 	Port string
 
+	// MetricsPort is the TCP port serving /metrics for Google Managed
+	// Prometheus. Deliberately separate from Port and absent from the k8s
+	// Service: both HTTPRoutes match every path, so /metrics on the API port
+	// would be public. GMP scrapes pod IPs directly, bypassing Service and
+	// Gateway, so a pod-only port is scrapeable without being routable.
+	MetricsPort string
+
 	// Env identifies the deployment environment, e.g. "dev" or "prod".
 	Env string
 
@@ -71,6 +78,7 @@ type Config struct {
 func Load() (*Config, error) {
 	cfg := &Config{
 		Port:                   getenv("PORT", "8080"),
+		MetricsPort:            getenv("METRICS_PORT", "9090"),
 		Env:                    getenv("ENV", "dev"),
 		DatabaseURL:            os.Getenv("DATABASE_URL"),
 		InstanceConnectionName: os.Getenv("INSTANCE_CONNECTION_NAME"),

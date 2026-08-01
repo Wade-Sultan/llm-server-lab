@@ -28,6 +28,13 @@ spec:
           ports:
             - containerPort: 8000
               name: http
+            # Prometheus exposition, scraped by GMP via the PodMonitoring in
+            # overlays/prod. Deliberately NOT in service.yaml: both HTTPRoutes
+            # match every path, so anything reachable through the Service is
+            # reachable from the internet. GMP scrapes pod IPs directly, so a
+            # pod-only port is scrapeable without being routable.
+            - containerPort: 9090
+              name: metrics
           envFrom:
             - configMapRef:
                 name: builder-config

@@ -59,3 +59,10 @@ docker-compose.override.yml
 .next
 next-env.d.ts
 dist
+
+# Local operator runbook — deliberately untracked. Contains the step-by-step
+# Grafana Cloud / GCP setup that only the person holding those consoles needs.
+# Code comments reference it by path (cloudbuild.yaml, scripts/logs.sh,
+# backend/app/core/metrics.py, scripts/k6/chat.js); those are pointers for
+# whoever has the file, not a build dependency.
+deploy/observability.md

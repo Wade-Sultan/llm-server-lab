@@ -26,6 +26,10 @@ spec:
           ports:
             - containerPort: 8080
               name: http
+            # See builder/deployment.yaml for why this port is not in the
+            # Service.
+            - containerPort: 9090
+              name: metrics
           envFrom:
             - configMapRef:
                 name: commerce-config

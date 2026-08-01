@@ -57,6 +57,29 @@ func main() {
 		IdleTimeout:  60 * time.Second,
 	}
 
+	// Metrics listen on their own port, scraped by GMP directly off the pod IP.
+	// See config.MetricsPort for why this is not folded into the API port.
+	metricsMux := http.NewServeMux()
+	metricsMux.Handle("GET /metrics", server.MetricsHandler())
+	metricsSrv := &http.Server{
+		Addr:    ":" + cfg.MetricsPort,
+		Handler: metricsMux,
+		// No WriteTimeout: a large registry served over a slow scrape
+		// connection would be cut off mid-body, and a truncated exposition
+		// response is a parse error on the GMP side rather than a clean miss.
+		ReadTimeout: 10 * time.Second,
+		IdleTimeout: 60 * time.Second,
+	}
+
+	// Deliberately not reported on serverErr: losing metrics must not take the
+	// service down. A failure here is logged and the API keeps serving.
+	go func() {
+		slog.Info("metrics listening", "addr", metricsSrv.Addr)
+		if err := metricsSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			slog.Error("metrics server stopped; metrics are no longer exported", "err", err)
+		}
+	}()
+
 	// Run the listener in its own goroutine so main can block on signals.
 	serverErr := make(chan error, 1)
 	go func() {
@@ -90,6 +113,16 @@ func main() {
 
 	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
+
+	// Metrics go down only after the API has drained, so a scrape landing
+	// during the drain window still captures the final counter values for
+	// requests served on the way out.
+	defer func() {
+		if err := metricsSrv.Shutdown(ctx); err != nil {
+			slog.Error("metrics shutdown failed", "err", err)
+		}
+	}()
+
 	if err := srv.Shutdown(ctx); err != nil {
 		slog.Error("graceful shutdown failed", "err", err)
 		os.Exit(1)

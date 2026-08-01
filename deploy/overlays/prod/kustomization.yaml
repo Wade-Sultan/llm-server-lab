@@ -15,6 +15,7 @@ resources:
   - hpa.yaml
   - pdb.yaml
   - grafana-syncer.yaml
+  - podmonitoring.yaml
 
 patches:
   - path: patches/config-prod.yaml

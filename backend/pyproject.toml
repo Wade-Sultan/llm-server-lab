@@ -24,6 +24,9 @@ dependencies = [
     "dspy-ai>=3.2.1",
     "psycopg2-binary>=2.9.12",
     "sqlalchemy>=2.0.35",
+    # Capped below 8.0: that release requires starlette>=1.0, which cannot be
+    # satisfied alongside fastapi<1.0 (it pins starlette<0.42).
+    "prometheus-fastapi-instrumentator>=7.1.0,<8.0.0",
     # Discovery pipeline — lazy-imported inside app/services/discovery/ only,
     # so the API's startup path never pays for them.
     "trafilatura>=1.12",

@@ -1,0 +1,54 @@
+# Google Managed Prometheus scrape config for the application metrics.
+#
+# PROD ONLY, and that placement is load-bearing: PodMonitoring is a GMP CRD
+# (monitoring.googleapis.com), installed by GKE. The local overlay runs on
+# minikube + Cilium with no GMP, so putting this in base/ would make every
+# local `kubectl apply` fail with "no matches for kind PodMonitoring" — a
+# confusing error for a file that has nothing to do with local development.
+#
+# HOW THIS REACHES GRAFANA: GMP scrapes the pods below and stores the series in
+# Cloud Monitoring. Grafana Cloud then queries GMP at read time through the data
+# source kept authenticated by grafana-syncer.yaml. Nothing is pushed outward,
+# so adding metrics here costs GMP ingest but no Grafana Cloud ingest.
+#
+# Scraping is pod-direct on a port that is not in either Service, so /metrics
+# is never reachable through the Gateway. See base/builder/deployment.yaml.
+#
+# admin is deliberately absent — it exposes no Prometheus endpoint. Adding one
+# to Next.js is a separate change.
+apiVersion: monitoring.googleapis.com/v1
+kind: PodMonitoring
+metadata:
+  name: builder
+spec:
+  selector:
+    matchLabels:
+      app: builder
+  endpoints:
+    # By port NAME, not number: the name is the contract with the Deployment,
+    # so changing the port there cannot silently orphan this scrape config.
+    - port: metrics
+      path: /metrics
+      # 30s against builder's 2-4 replicas is ~8 samples/min. Worth being
+      # deliberate about — GMP bills per sample ingested, and dropping to 10s
+      # would triple that bill for resolution no dashboard here needs.
+      interval: 30s
+      # Generous relative to the interval: the Python exporter serves from a
+      # thread that competes with an event loop busy on SSE streams, and a
+      # timeout is recorded as a failed scrape (a gap in the series) rather
+      # than a retry.
+      timeout: 10s
+---
+apiVersion: monitoring.googleapis.com/v1
+kind: PodMonitoring
+metadata:
+  name: commerce
+spec:
+  selector:
+    matchLabels:
+      app: commerce
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 30s
+      timeout: 10s

@@ -89,6 +89,16 @@ _client: openai.AsyncOpenAI | None = None
 
 def _get_client() -> openai.AsyncOpenAI:
     global _client
+    # Load-test requests never reach OpenRouter. Checked before the cached
+    # client so a stubbed request cannot fall through to the real one, and NOT
+    # cached itself — the decision is per-request, not per-process.
+    from app.core.loadtest import is_load_test
+
+    if is_load_test():
+        from app.core.loadtest_stubs import StubOpenAIClient
+
+        return StubOpenAIClient()  # type: ignore[return-value]
+
     if _client is None:
         api_key = settings.OPENROUTER_API_KEY
         if not api_key:
