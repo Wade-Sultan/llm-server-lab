@@ -44,7 +44,18 @@ data:
   # default for local development and the wrong state for production, so
   # cloudbuild.yaml's credentials step warns when the key is missing.
   VALKEY_PORT: "6379"
-  VALKEY_CLUSTER: "true"
+  # FALSE, and this must stay in step with how the instance was created. Prod
+  # runs a `custom-pico` node, which Google sells on Cluster Mode Disabled
+  # instances only — so there is no CLUSTER SLOTS to read and a RedisCluster
+  # client would fail at connect.
+  #
+  # custom-pico over shared-core-nano deliberately: nano is marginally larger
+  # (1.12 GB vs 1.08 GB) but has 0.5 shared vCPU and **no SLA**, and Google
+  # documents it as development-only. pico gives 2 dedicated vCPU and an SLA at
+  # essentially the same memory. Memory was never the constraint here — the
+  # working set is TTL'd stream entries — so trading a rounding error of RAM for
+  # dedicated cores and a support commitment is the right way round.
+  VALKEY_CLUSTER: "false"
   # Memorystore for Valkey only accepts TLS if the instance was created with
   # in-transit encryption; it cannot be enabled afterwards. Keep this in step
   # with how the instance was actually provisioned or every command times out

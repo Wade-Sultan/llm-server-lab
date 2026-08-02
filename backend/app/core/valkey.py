@@ -3,13 +3,26 @@
 Valkey speaks the Redis wire protocol, so this is redis-py throughout — there is
 no separate client library, and `import redis` here is not a mistake.
 
-CLUSTER MODE IS THE DEFAULT, and getting it wrong is the most likely way to lose
-an afternoon: Memorystore for Valkey always speaks the cluster protocol, even at
-one shard. A plain `Redis` client connects and issues commands happily until the
-first key that hashes outside the node it happened to reach, then fails with a
-MOVED error that surfaces as an unrelated-looking exception mid-turn. `RedisCluster`
-reads CLUSTER SLOTS at connect time and routes correctly. `VALKEY_CLUSTER=false`
-exists only for a standalone valkey container in local dev.
+CLUSTER MODE MUST MATCH THE INSTANCE, and getting it wrong is the most likely way
+to lose an afternoon, because the two mismatches fail in opposite directions:
+
+  Redis client -> clustered instance   Connects fine, then dies on the first key
+                                       that hashes outside the node it reached,
+                                       with a MOVED error surfacing as an
+                                       unrelated-looking exception mid-turn.
+  RedisCluster -> non-clustered        Fails at connect: there is no CLUSTER
+                                       SLOTS to read.
+
+`VALKEY_CLUSTER` defaults to False, which is correct for both real deployments.
+Production runs a `custom-pico` node — the smallest node type Google sells with
+an SLA, and one they offer on **Cluster Mode Disabled instances only** — and local
+dev runs a standalone valkey container. (`shared-core-nano` is cheaper and does
+speak the cluster protocol, but it has no SLA and Google documents it as
+development-only.)
+
+Nothing here depends on the non-clustered shape. The key layout in
+app/services/turn_stream.py is already cluster-safe, so moving to a Cluster Mode
+Enabled instance later is a config flip rather than a rewrite.
 
 DEGRADES RATHER THAN CRASHES. Every accessor returns None when Valkey is
 unconfigured or unreachable, and callers treat that as "no buffering, no resume"
@@ -77,11 +90,12 @@ async def get_client() -> Redis | RedisCluster | None:
         common["ssl_cert_reqs"] = "required"
 
     try:
+        # 128 either way. XREAD BLOCK parks a connection for the whole block
+        # duration, so the pool ceiling is really the SSE fan-in ceiling: every
+        # browser tailing a turn on this pod holds one. The default (roughly 2^31
+        # in redis-py, bounded in practice by the OS) is not the problem — being
+        # explicit here is, so that a future reduction is a deliberate act.
         if settings.VALKEY_CLUSTER:
-            # XREAD BLOCK parks a connection for the whole block duration. In
-            # cluster mode redis-py keeps a per-node pool, and the default
-            # max_connections is shared across every tailing request on this pod,
-            # so it has to clear the SSE fan-in ceiling with room to spare.
             client: Redis | RedisCluster = RedisCluster(
                 max_connections=128, **common
             )

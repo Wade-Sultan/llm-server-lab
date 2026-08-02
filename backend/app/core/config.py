@@ -96,12 +96,20 @@ class Settings(BaseSettings):
     # mode, because an inline turn dies with its client connection.
     VALKEY_HOST: str = ""
     VALKEY_PORT: int = 6379
-    # Memorystore for Valkey is cluster-mode always — even a 1-shard instance
-    # speaks the cluster protocol and answers CLUSTER SLOTS. redis-py needs
-    # RedisCluster for that; a plain Redis client appears to connect and then
-    # fails on the first MOVED redirect. Only set this False for a standalone
-    # valkey/redis container in local dev.
-    VALKEY_CLUSTER: bool = True
+    # Which redis-py client to build: RedisCluster when True, Redis when False.
+    # It must match how the Memorystore instance was created, and the two fail
+    # in opposite, equally confusing ways — a plain Redis client against a
+    # clustered instance dies on the first MOVED redirect mid-turn, and a
+    # RedisCluster client against a Cluster Mode Disabled instance fails at
+    # connect because there is no CLUSTER SLOTS to read.
+    #
+    # False is the default because it matches both real deployments: prod runs a
+    # `custom-pico` node, which Google only offers on Cluster Mode Disabled
+    # instances, and local dev runs a standalone valkey container. Set True only
+    # if the instance is recreated as Cluster Mode Enabled — the key layout is
+    # already cluster-safe (see app/services/turn_stream.py), so that is a
+    # config change rather than a code change.
+    VALKEY_CLUSTER: bool = False
     # AUTH is off by default on Memorystore. When enabled, the string lands here
     # from Secret Manager. TLS ("in-transit encryption") is a per-instance
     # setting chosen at creation and cannot be toggled later.

@@ -11,8 +11,14 @@ mid-build reconnect work, and it is why the frontend can send Last-Event-ID.
 
 KEY LAYOUT. `chat:evt:{<turn_id>}` — the braces are a real cluster hash tag, not
 formatting. Everything for one turn hashes to one slot, so the stream and the
-chat buffer (app/services/chat_buffer.py) live on the same shard and can be
-touched together without a cross-slot error.
+chat buffer (app/services/chat_buffer.py) would live on the same shard and could
+be touched together without a cross-slot error.
+
+That is deliberately future-proofing rather than a present requirement: prod runs
+a Cluster Mode Disabled instance (forced by the `custom-pico` node type — see
+app/core/valkey.py), where there is one shard and slots are irrelevant. The tags
+cost nothing there and mean a later move to a clustered instance is a config flip
+instead of a key-naming migration. Keep them.
 
 TERMINATION IS EXPLICIT. The last entry is always `{"type": "end"}`, written by
 the producer after persistence has run. Readers stop on it. Inferring the end
