@@ -24,6 +24,30 @@ spec:
               cpu: "1"
               memory: 1Gi
 ---
+# The worker's CPU request stays low for the same reason builder's does — turns
+# are blocked on OpenRouter, not computing — but memory does NOT get the same
+# treatment. It runs up to PUBSUB_MAX_CONCURRENCY turns at once, each holding a
+# DSPy state and its candidate set, so 2Gi is a working-set requirement rather
+# than a ceiling to burst against. Memory request equals limit here as
+# everywhere: over-limit memory is an OOM kill, and an OOM-killed worker drops
+# every turn it was running.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker
+spec:
+  template:
+    spec:
+      containers:
+        - name: worker
+          resources:
+            requests:
+              cpu: "250m"
+              memory: 2Gi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:

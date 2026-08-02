@@ -88,6 +88,61 @@ class Settings(BaseSettings):
 
     SERPAPI_KEY: str
 
+    # --- Valkey (Memorystore) -------------------------------------------------
+    # Empty host disables both the turn stream and the chat buffer, and the API
+    # falls back to running the pipeline inline in the request (see
+    # app/api/routes/chat.py). That fallback is what keeps local development and
+    # the test suite working without a Valkey to talk to; it is NOT a production
+    # mode, because an inline turn dies with its client connection.
+    VALKEY_HOST: str = ""
+    VALKEY_PORT: int = 6379
+    # Memorystore for Valkey is cluster-mode always — even a 1-shard instance
+    # speaks the cluster protocol and answers CLUSTER SLOTS. redis-py needs
+    # RedisCluster for that; a plain Redis client appears to connect and then
+    # fails on the first MOVED redirect. Only set this False for a standalone
+    # valkey/redis container in local dev.
+    VALKEY_CLUSTER: bool = True
+    # AUTH is off by default on Memorystore. When enabled, the string lands here
+    # from Secret Manager. TLS ("in-transit encryption") is a per-instance
+    # setting chosen at creation and cannot be toggled later.
+    VALKEY_PASSWORD: str = ""
+    VALKEY_TLS: bool = False
+
+    # How long a turn's event stream outlives its last write. This is the window
+    # in which a browser that lost its connection can still resume mid-build and
+    # replay what it missed; past it, XREAD finds nothing and the client starts a
+    # fresh turn. 30 minutes covers a phone whose screen locked partway through.
+    TURN_STREAM_TTL_S: int = 1800
+    # Hard ceiling on entries per turn stream, enforced by XADD MAXLEN. A long
+    # recommendation is a few thousand token events; 20k leaves headroom without
+    # letting a pathological turn grow unbounded in memory.
+    TURN_STREAM_MAXLEN: int = 20000
+
+    # Fallback expiry on the chat buffer. The buffer is normally deleted the
+    # moment its turn is committed to Postgres, so this only fires for turns that
+    # never commit — a worker OOM-killed mid-run, or a poison message that
+    # exhausted its retries. Deliberately longer than TURN_STREAM_TTL_S so the
+    # buffer outlives the stream it describes and a post-mortem can still read it.
+    CHAT_BUFFER_TTL_S: int = 86400
+
+    # --- Pub/Sub --------------------------------------------------------------
+    # Unset topic disables publishing, which is what selects the inline fallback
+    # described above. GOOGLE_CLOUD_PROJECT is set automatically on GKE via the
+    # metadata server; it is only needed explicitly for local emulator runs.
+    PUBSUB_TOPIC: str = ""
+    PUBSUB_SUBSCRIPTION: str = ""
+    GOOGLE_CLOUD_PROJECT: str = ""
+    # Ceiling on turns one worker pod runs at once. Each turn is mostly blocked
+    # on OpenRouter rather than on CPU, so this is about memory and OpenRouter
+    # rate limits, not cores — the same reason builder's CPU-based HPA
+    # understates its load (deploy/overlays/prod/hpa.yaml).
+    PUBSUB_MAX_CONCURRENCY: int = 8
+    # Must exceed the longest possible turn. The subscriber extends the ack
+    # deadline while a turn runs, but Pub/Sub caps total extension at 60 minutes,
+    # after which the message is redelivered even though the first attempt is
+    # still going.
+    PUBSUB_ACK_EXTENSION_S: int = 600
+
 
 settings = Settings()  # type: ignore
 

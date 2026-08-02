@@ -204,6 +204,15 @@ steps:
             || { echo "ERROR: secret palladium-secrets-$$s missing (RUNBOOK §7)" >&2; exit 1; }
         done
 
+        # VALKEY_HOST is a WARNING, not an error. Its absence is a valid (if
+        # degraded) configuration: /chat falls back to running turns inline, and
+        # failing the rollout would take a working API down over a missing
+        # optional dependency. But the worker Deployment cannot do anything
+        # useful without it, so say so loudly.
+        kubectl -n "$_NAMESPACE" get secret palladium-secrets-builder \
+          -o jsonpath='{.data.VALKEY_HOST}' 2>/dev/null | grep -q . \
+          || echo "WARNING: VALKEY_HOST missing from palladium-secrets-builder — /chat will run turns inline and they will not survive client disconnect (deploy/messaging.md §1)" >&2
+
         # POSTGRES_SERVER lives only in the Secret. Validate the actual value:
         # a pasted-in placeholder or an empty host fails at runtime as DNS or
         # connection errors, which is far more expensive to diagnose than here.

@@ -8,11 +8,13 @@ from fastapi.routing import APIRoute
 from starlette.middleware.cors import CORSMiddleware
 
 from app.api.main import api_router
+from app.core import pubsub
 from app.core.config import settings
 from app.core.loadtest import LoadTestMiddleware
 from app.core.logging import configure_logging
 from app.core.metrics import instrument as instrument_metrics
 from app.core.metrics import start_exporter as start_metrics_exporter
+from app.core.valkey import close_client as close_valkey
 from app.core.warmup import mark_dspy_warm
 
 # Before anything else logs, so uvicorn's startup lines are JSON too.
@@ -68,6 +70,12 @@ async def lifespan(app: FastAPI):
             warm_task.cancel()
             with suppress(asyncio.CancelledError):
                 await warm_task
+
+        # Flushes anything the publisher has batched but not yet sent. Skipping
+        # this drops turns that were accepted by /chat but never reached the
+        # topic — the user watches a stream that no worker will ever write to.
+        pubsub.close()
+        await close_valkey()
 
 
 app = FastAPI(

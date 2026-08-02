@@ -14,3 +14,18 @@ spec:
   selector:
     matchLabels:
       app: builder
+---
+# The worker qualifies on the same 2-replica grounds. It matters slightly less
+# than builder's — a drained worker's in-flight turns are redelivered rather
+# than lost — but "redelivered" still means the user watches their build stall
+# for the redelivery backoff, so keeping one pod pulling through a node drain is
+# worth the same protection.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: worker
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: worker

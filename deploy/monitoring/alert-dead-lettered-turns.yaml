@@ -1,0 +1,67 @@
+# A chat turn failed 5 delivery attempts and landed in the dead-letter topic.
+#
+# THIS IS THE PAGE-WORTHY ONE. Everything else in this directory describes a
+# system under strain; this describes a turn that is definitively never going to
+# run. The user watched a build spinner until their stream timed out, and no
+# retry is coming.
+#
+# Threshold is 0, not a rate: dead-lettering is rare enough that a single message
+# is worth a human looking. If this fires routinely, the fix is upstream (a
+# poison message shape, a persistent OpenRouter failure), not a higher threshold.
+#
+# The 300s duration exists so a message that is dead-lettered and immediately
+# drained by the reader subscription does not page anyone.
+displayName: "Palladium — chat turns dead-lettered"
+documentation:
+  mimeType: text/markdown
+  content: |
+    One or more chat turns exhausted `--max-delivery-attempts=5` on
+    `chat-turns-workers` and were routed to `chat-turns-dead`.
+
+    **Inspect the messages** (they are not auto-drained, so pulling without
+    `--auto-ack` leaves them in place):
+
+    ```
+    gcloud pubsub subscriptions pull chat-turns-dead-sub --limit=5 --format=json
+    ```
+
+    The payload contains `turn_id`, `conversation_id` and the full message
+    history, so the turn can be reconstructed or replayed by hand.
+
+    **Common causes, in the order worth checking:**
+    - The worker is crashing on a specific input — check
+      `kubectl -n palladium logs -l app=worker --previous` for the turn_id.
+    - OpenRouter is returning a persistent error for the model this turn selects.
+    - A schema change made an older queued message undecodable. `_decode` in
+      `app/worker.py` acks those away rather than dead-lettering, so seeing them
+      here means the failure was later than decode.
+
+    **This does NOT mean data was lost.** If the turn ever reached persistence,
+    its buffer is still in Valkey under `chat:buf:{conversation_id}` — see the
+    "turns not reaching Postgres" alert.
+combiner: OR
+conditions:
+  - displayName: "chat-turns-dead has undelivered messages"
+    conditionThreshold:
+      filter: >-
+        resource.type = "pubsub_subscription"
+        AND resource.labels.subscription_id = "chat-turns-dead-sub"
+        AND metric.type = "pubsub.googleapis.com/subscription/num_undelivered_messages"
+      comparison: COMPARISON_GT
+      thresholdValue: 0
+      duration: 300s
+      trigger:
+        count: 1
+      aggregations:
+        - alignmentPeriod: 60s
+          # MAX, not MEAN: a message that arrives and is drained inside one
+          # alignment window would average down to near zero and never fire.
+          perSeriesAligner: ALIGN_MAX
+          crossSeriesReducer: REDUCE_MAX
+alertStrategy:
+  # A week. The condition clears when the DLQ is drained, and draining it is a
+  # deliberate human action, so auto-closing sooner would hide an unresolved
+  # incident rather than resolve it.
+  autoClose: 604800s
+enabled: true
+notificationChannels: []

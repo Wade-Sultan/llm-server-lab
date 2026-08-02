@@ -60,9 +60,14 @@ docker-compose.override.yml
 next-env.d.ts
 dist
 
-# Local operator runbook — deliberately untracked. Contains the step-by-step
-# Grafana Cloud / GCP setup that only the person holding those consoles needs.
-# Code comments reference it by path (cloudbuild.yaml, scripts/logs.sh,
-# backend/app/core/metrics.py, scripts/k6/chat.js); those are pointers for
-# whoever has the file, not a build dependency.
+# Local operator runbooks — deliberately untracked. They contain the step-by-step
+# GCP console/CLI setup that only the person holding those consoles needs.
+# Code comments reference them by path (cloudbuild.yaml, scripts/logs.sh,
+# backend/app/core/metrics.py, scripts/k6/chat.js, backend/app/core/pubsub.py);
+# those are pointers for whoever has the file, not a build dependency.
+#
+# The alert policies in deploy/monitoring/ are NOT covered by this: they are
+# declarative resources applied from the repo, not instructions for a human, and
+# they carry no project-specific identifiers.
 deploy/observability.md
+deploy/messaging.md

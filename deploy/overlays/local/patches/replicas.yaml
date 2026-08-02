@@ -12,3 +12,21 @@ spec:
   # If in-process per-conversation state is ever introduced, put this back to 2
   # — a single local replica is exactly where that class of bug hides.
   replicas: 1
+---
+# Scaled to zero locally rather than omitted from base, so the manifest is still
+# rendered and validated by every `kustomize build` of this overlay.
+#
+# It cannot run here: app/worker.py fails fast without PUBSUB_SUBSCRIPTION, and
+# minikube has neither a Pub/Sub emulator nor a Memorystore. Locally /chat takes
+# the inline path instead (app/api/routes/chat.py), which is why that fallback
+# has to keep working — it is the only chat path anyone exercises in development.
+#
+# To work on the dispatched path locally, run the Pub/Sub emulator and a valkey
+# container, set PUBSUB_EMULATOR_HOST/VALKEY_HOST in .env.local, and scale this
+# to 1. See deploy/messaging.md §6.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker
+spec:
+  replicas: 0

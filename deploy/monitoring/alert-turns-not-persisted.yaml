@@ -1,0 +1,110 @@
+# Chat turns that ran but did not reach Postgres.
+#
+# THE MOST EXPENSIVE FAILURE THIS SYSTEM HAS, and the least visible one. The user
+# saw their build render, the stream terminated normally, and OpenRouter was
+# billed for the tokens. Nothing about the request looks wrong. The only evidence
+# is a buffer left behind in Valkey and this counter.
+#
+# TWO CONDITIONS, OR'd, because they fail in opposite directions:
+#
+#   commit failure rate   Catches the event as it happens, but says nothing about
+#                         accumulation — a slow drip of one failure an hour never
+#                         looks alarming on a rate.
+#   retained buffers      Catches the standing backlog, including failures that
+#                         happened while notifications were silenced or before
+#                         this policy existed. Sampled every 60s by
+#                         _buffer_gauge_loop in app/worker.py.
+#
+# Neither alone is sufficient. The rate can be zero while ten turns sit
+# unpersisted from last night, and the gauge can be zero for a turn that failed
+# and whose buffer then hit CHAT_BUFFER_TTL_S.
+displayName: "Palladium — chat turns not reaching Postgres"
+documentation:
+  mimeType: text/markdown
+  content: |
+    Turns completed and were streamed to the user, but their rows were not
+    committed. Each one is work the user already paid OpenRouter for.
+
+    **The data is not gone yet.** `app/services/turn_runner.py` deliberately
+    retains the Valkey buffer when a commit fails — it is the only remaining copy.
+    It expires after `CHAT_BUFFER_TTL_S` (24h by default), so this has a deadline.
+
+    **Find them:**
+
+    ```
+    kubectl -n palladium exec -it deploy/worker -- python -c "
+    import asyncio
+    from app.core.valkey import get_client
+    async def main():
+        c = await get_client()
+        async for k in c.scan_iter(match='chat:buf:*'):
+            print(k)
+    asyncio.run(main())
+    "
+    ```
+
+    **Read one back** with `chat_buffer.load('<conversation_id>')` — the payload
+    holds `messages`, `assistant_text`, `turn_usage` and the resolved build, i.e.
+    everything `save_turn` needs.
+
+    **Then find out why the commit failed.** The exception is logged with a
+    traceback by `save_turn`:
+
+    ```
+    scripts/logs.sh -H -s 6h -g "Failed to save conversation turn" builder
+    ```
+
+    Usual suspects: Cloud SQL connection exhaustion, a migration that has not been
+    applied to the pods currently running, or a NOT NULL added ahead of the code
+    that populates it.
+
+    **There is no automatic replay.** Reconstructing these into Postgres is
+    manual today — noted as a gap in `deploy/messaging.md` §8.
+combiner: OR
+conditions:
+  - displayName: "commits are failing"
+    conditionThreshold:
+      filter: >-
+        resource.type = "prometheus_target"
+        AND metric.type = "prometheus.googleapis.com/palladium_turn_commits_total/counter"
+        AND metric.labels.result = "failed"
+      comparison: COMPARISON_GT
+      thresholdValue: 0
+      duration: 300s
+      trigger:
+        count: 1
+      aggregations:
+        - alignmentPeriod: 300s
+          # Counters must be rate-aligned; a raw counter only ever goes up and
+          # would fire permanently after the first failure ever recorded.
+          perSeriesAligner: ALIGN_RATE
+          # SUM across pods: a failure on any worker counts, and they are
+          # distinct failures rather than replicas of one number.
+          crossSeriesReducer: REDUCE_SUM
+          groupByFields:
+            - metric.label.result
+
+  - displayName: "buffers are accumulating"
+    conditionThreshold:
+      filter: >-
+        resource.type = "prometheus_target"
+        AND metric.type = "prometheus.googleapis.com/palladium_chat_buffers_retained/gauge"
+      comparison: COMPARISON_GT
+      thresholdValue: 0
+      # 600s, longer than the commit-failure condition: a buffer is written
+      # before the commit is attempted, so every healthy turn briefly shows as
+      # retained. Anything still there after ten minutes did not commit.
+      duration: 600s
+      trigger:
+        count: 1
+      aggregations:
+        - alignmentPeriod: 60s
+          perSeriesAligner: ALIGN_MAX
+          # MAX, not SUM. Every worker replica scans the same instance and
+          # reports the same instance-wide number under its own pod label;
+          # summing would multiply the count by the replica count.
+          crossSeriesReducer: REDUCE_MAX
+alertStrategy:
+  autoClose: 604800s
+enabled: true
+notificationChannels: []

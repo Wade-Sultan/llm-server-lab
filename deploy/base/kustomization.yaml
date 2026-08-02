@@ -18,6 +18,10 @@ resources:
   - builder/deployment.yaml
   - builder/service.yaml
   - builder/httproute.yaml
+  # No serviceaccount/service/httproute of its own: the worker reuses the
+  # builder KSA (same Cloud SQL and Secret Manager grants, plus pubsub.subscriber)
+  # and has nothing routing to it. See worker/deployment.yaml.
+  - worker/deployment.yaml
   - commerce/serviceaccount.yaml
   - commerce/configmap.yaml
   - commerce/deployment.yaml

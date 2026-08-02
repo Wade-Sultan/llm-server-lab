@@ -1,0 +1,66 @@
+# The workers stopped reporting.
+#
+# THIS ONE GUARDS THE OTHER ALERTS. A threshold condition on a metric that is no
+# longer being written does not fire — it goes quiet, which reads identically to
+# healthy. So without this policy, the two failure modes that matter most are
+# also the two most likely to silence their own alarms:
+#
+#   - every worker pod is down or crash-looping (nothing runs turns, and
+#     "buffers accumulating" reports nothing because nothing is scanning)
+#   - Valkey is unreachable (count_retained() returns None, so the gauge is
+#     never set, and turns silently fall back to the inline path)
+#
+# `palladium_chat_buffers_retained` is the right metric to watch for absence
+# specifically because it is written unconditionally on a 60s timer rather than
+# per turn. A traffic-driven metric would look absent during any quiet hour and
+# would have to be threshold-tuned against usage patterns instead.
+displayName: "Palladium — worker metrics absent"
+documentation:
+  mimeType: text/markdown
+  content: |
+    No worker pod has reported `palladium_chat_buffers_retained` for 10 minutes.
+    It is written on a fixed 60s timer, so absence is never explained by low
+    traffic.
+
+    **Treat the other chat-turn alerts as unreliable until this clears** — they
+    are threshold conditions on metrics that are no longer arriving, so their
+    silence means nothing right now.
+
+    **Check, in order:**
+
+    ```
+    kubectl -n palladium get pods -l app=worker
+    kubectl -n palladium logs -l app=worker --tail=50
+    ```
+
+    - **CrashLoopBackOff** — usually a missing `PUBSUB_SUBSCRIPTION` (the worker
+      fails fast without it) or a bad image rollout.
+    - **`Valkey unreachable`** — the PSC service connection policy or the
+      Memorystore instance. `deploy/messaging.md` §1a. Note that the API keeps
+      serving in this state by falling back to inline turns, so the site looks
+      fine while durability is gone.
+    - **Pods Running, no metrics** — the GMP scrape, not the worker. Check the
+      PodMonitoring:
+      `kubectl -n palladium describe podmonitoring worker`
+    - **Zero pods** — check whether replicas were scaled to 0, and whether
+      Autopilot has capacity to schedule them (`kubectl describe` the
+      ReplicaSet for FailedScheduling).
+combiner: OR
+conditions:
+  - displayName: "no worker has reported in 10 minutes"
+    conditionAbsent:
+      filter: >-
+        resource.type = "prometheus_target"
+        AND metric.type = "prometheus.googleapis.com/palladium_chat_buffers_retained/gauge"
+      # Ten sample intervals. Long enough that a rolling restart (maxUnavailable:
+      # 0, so at least one pod is always up) never trips it, short enough to
+      # catch a real outage before a shift's worth of turns go unpersisted.
+      duration: 600s
+      aggregations:
+        - alignmentPeriod: 60s
+          perSeriesAligner: ALIGN_MEAN
+          crossSeriesReducer: REDUCE_MAX
+alertStrategy:
+  autoClose: 604800s
+enabled: true
+notificationChannels: []

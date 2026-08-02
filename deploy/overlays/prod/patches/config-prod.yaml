@@ -33,6 +33,32 @@ data:
   # project. Same value as local because the frontend project is shared; a
   # mismatch surfaces as invalid-credential on every authenticated request.
   FIREBASE_PROJECT_ID: "project-b8abf13d-d1ce-43f1-837"
+  # --- Valkey / Pub/Sub -----------------------------------------------------
+  # VALKEY_HOST is deliberately ABSENT here, for the same reason as
+  # POSTGRES_SERVER above: it is the Memorystore instance's private VPC address
+  # and does not belong in git. It comes from palladium-secrets-builder
+  # (deploy/messaging.md §1).
+  #
+  # Unlike POSTGRES_SERVER, an absent VALKEY_HOST does NOT fail startup — it
+  # defaults to "" and degrades /chat to inline streaming. That is the right
+  # default for local development and the wrong state for production, so
+  # cloudbuild.yaml's credentials step warns when the key is missing.
+  VALKEY_PORT: "6379"
+  VALKEY_CLUSTER: "true"
+  # Memorystore for Valkey only accepts TLS if the instance was created with
+  # in-transit encryption; it cannot be enabled afterwards. Keep this in step
+  # with how the instance was actually provisioned or every command times out
+  # on a handshake that never completes.
+  VALKEY_TLS: "false"
+  PUBSUB_TOPIC: "chat-turns"
+  PUBSUB_SUBSCRIPTION: "chat-turns-workers"
+  # 8 concurrent turns per worker pod at 2 replicas = 16 in flight. Raise this
+  # before raising replicas: turns are OpenRouter-bound, so a pod at 8 is mostly
+  # idle, and more pods cost Autopilot capacity that concurrency does not.
+  PUBSUB_MAX_CONCURRENCY: "8"
+  # Comfortably above _DSPY_CHAT_TIMEOUT_S (180s) so a slow-but-healthy build is
+  # never redelivered underneath itself.
+  PUBSUB_ACK_EXTENSION_S: "600"
 ---
 apiVersion: v1
 kind: ConfigMap

@@ -1,0 +1,560 @@
+"""Guards the Valkey-backed turn stream and the evict-on-commit buffer.
+
+These are durability tests. A regression here does not break a page — the stream
+still renders, the build still appears — it silently makes turns non-recoverable
+again, which only shows up as users reporting a build that "disappeared" after
+their phone locked. So the negative cases (Valkey down, commit failed, duplicate
+delivery) matter more than the happy path here.
+
+Backed by a fake rather than a real Valkey: the behaviours under test are this
+code's decisions about *when* to write, evict and stop, none of which depend on
+redis-py's actual network layer. A real instance would only add a service
+dependency to `pytest`.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+
+import pytest
+
+from app.core import valkey
+from app.core.config import settings
+from app.services import chat_buffer, turn_stream
+
+
+class FakeValkey:
+    """Enough of the redis-py surface for streams, SET/GET/DEL and pipelines."""
+
+    def __init__(self) -> None:
+        self.streams: dict[str, list[tuple[str, dict]]] = {}
+        self.kv: dict[str, str] = {}
+        self.expiries: dict[str, int] = {}
+        self._seq = 0
+
+    # -- streams -------------------------------------------------------
+    async def xadd(self, key, fields, maxlen=None, approximate=True):
+        self._seq += 1
+        entry_id = f"1-{self._seq}"
+        self.streams.setdefault(key, []).append((entry_id, dict(fields)))
+        if maxlen is not None:
+            self.streams[key] = self.streams[key][-maxlen:]
+        return entry_id
+
+    async def xread(self, streams, count=None, block=None):
+        out = []
+        for key, last in streams.items():
+            entries = self.streams.get(key, [])
+            # "0" means from the beginning; otherwise strictly after `last`.
+            newer = [e for e in entries if e[0] > last] if last != "0" else entries
+            if count:
+                newer = newer[:count]
+            if newer:
+                out.append((key, newer))
+        return out
+
+    # -- kv ------------------------------------------------------------
+    async def set(self, key, value, ex=None, nx=False):
+        if nx and key in self.kv:
+            return None
+        self.kv[key] = value
+        if ex:
+            self.expiries[key] = ex
+        return True
+
+    async def get(self, key):
+        return self.kv.get(key)
+
+    async def delete(self, *keys):
+        return sum(1 for k in keys if self.kv.pop(k, None) is not None)
+
+    async def exists(self, key):
+        return 1 if (key in self.streams or key in self.kv) else 0
+
+    async def expire(self, key, ttl):
+        self.expiries[key] = ttl
+        return True
+
+    async def scan_iter(self, match=None, count=None):
+        prefix = (match or "*").rstrip("*")
+        for key in list(self.kv):
+            if key.startswith(prefix):
+                yield key
+
+    async def ping(self):
+        return True
+
+    def pipeline(self):
+        return _FakePipeline(self)
+
+
+class _FakePipeline:
+    """Queues calls and replays them on execute(), like redis-py's pipeline."""
+
+    def __init__(self, client: FakeValkey) -> None:
+        self._client = client
+        self._queued: list[tuple[str, tuple, dict]] = []
+
+    def xadd(self, *a, **kw):
+        self._queued.append(("xadd", a, kw))
+        return self
+
+    def expire(self, *a, **kw):
+        self._queued.append(("expire", a, kw))
+        return self
+
+    async def execute(self):
+        return [
+            await getattr(self._client, name)(*a, **kw)
+            for name, a, kw in self._queued
+        ]
+
+
+@pytest.fixture
+def fake(monkeypatch) -> FakeValkey:
+    client = FakeValkey()
+
+    async def _get_client():
+        return client
+
+    monkeypatch.setattr(valkey, "get_client", _get_client)
+    monkeypatch.setattr(turn_stream, "get_client", _get_client)
+    monkeypatch.setattr(chat_buffer, "get_client", _get_client)
+    return client
+
+
+@pytest.fixture
+def no_valkey(monkeypatch):
+    """Valkey unreachable — every accessor returns None."""
+
+    async def _get_client():
+        return None
+
+    monkeypatch.setattr(turn_stream, "get_client", _get_client)
+    monkeypatch.setattr(chat_buffer, "get_client", _get_client)
+
+
+# ---------------------------------------------------------------- streaming --
+
+
+@pytest.mark.usefixtures("fake")
+def test_tail_replays_events_written_before_the_reader_attached():
+    """The whole reason this is a stream and not pub/sub.
+
+    The browser attaches after POST /chat returns, so anything the worker emitted
+    in between must still be there. With pub/sub semantics this test is
+    impossible to pass.
+    """
+
+    async def scenario():
+        await turn_stream.emit("t1", {"type": "progress", "step": "cpu"})
+        await turn_stream.emit("t1", {"type": "token", "text": "Hello"})
+        await turn_stream.emit_end("t1")
+
+        seen = [item async for item in turn_stream.tail("t1") if item is not None]
+        return [e for _, e in seen]
+
+    events = asyncio.run(scenario())
+    assert events == [
+        {"type": "progress", "step": "cpu"},
+        {"type": "token", "text": "Hello"},
+    ]
+
+
+@pytest.mark.usefixtures("fake")
+def test_tail_resumes_after_last_id_without_duplicating():
+    """A reconnect must not re-render text the user already has on screen."""
+
+    async def scenario():
+        await turn_stream.emit("t2", {"type": "token", "text": "one"})
+        await turn_stream.emit("t2", {"type": "token", "text": "two"})
+        await turn_stream.emit_end("t2")
+
+        first = [i async for i in turn_stream.tail("t2") if i is not None]
+        # Reconnect from the id of the first event, as the frontend would.
+        resume_from = first[0][0]
+        second = [
+            i async for i in turn_stream.tail("t2", last_id=resume_from) if i is not None
+        ]
+        return [e["text"] for _, e in second]
+
+    assert asyncio.run(scenario()) == ["two"]
+
+
+@pytest.mark.usefixtures("fake")
+def test_tail_stops_at_terminal_entry_not_at_pipeline_done():
+    """`done` is emitted before persistence; only `end` means it is safe to leave.
+
+    If the tail stopped on `done`, a client could disconnect while the turn was
+    still committing — and the buffer eviction that follows would then run under
+    a reader that had not finished.
+    """
+
+    async def scenario():
+        await turn_stream.emit("t3", {"type": "done"})
+        await turn_stream.emit("t3", {"type": "token", "text": "after-done"})
+        await turn_stream.emit_end("t3")
+        return [e async for e in turn_stream.tail("t3") if e is not None]
+
+    events = [e for _, e in asyncio.run(scenario())]
+    assert {"type": "token", "text": "after-done"} in events
+
+
+@pytest.mark.usefixtures("fake")
+def test_tail_gives_up_rather_than_blocking_forever():
+    """A worker OOM-killed mid-turn never writes `end`.
+
+    Without the idle bound the reader would hold an HTTP connection and a Valkey
+    connection open indefinitely waiting for an entry that is never coming.
+    """
+
+    async def scenario():
+        await turn_stream.emit("t4", {"type": "token", "text": "partial"})
+        # No emit_end. Tight bounds so the test does not actually wait 10 minutes.
+        return [
+            i
+            async for i in turn_stream.tail(
+                "t4", idle_timeout_ms=1, max_idle_rounds=3
+            )
+        ]
+
+    items = asyncio.run(scenario())
+    # The one real event, then idle heartbeats, then a clean return.
+    assert items[0] is not None
+    assert items.count(None) == 3
+
+
+@pytest.mark.usefixtures("no_valkey")
+def test_emit_survives_valkey_being_down():
+    """A failed emit must never kill the pipeline that produced the event."""
+
+    async def scenario():
+        emitted = await turn_stream.emit("t5", {"type": "token"})
+        # An unavailable Valkey ends the tail immediately rather than hanging;
+        # the route turns that into a clean [DONE] instead of a stuck response.
+        tailed = [i async for i in turn_stream.tail("t5")]
+        return emitted, tailed
+
+    emitted, tailed = asyncio.run(scenario())
+    assert emitted is False
+    assert tailed == []
+
+
+def test_maxlen_bounds_a_pathological_turn(fake, monkeypatch):
+    monkeypatch.setattr(settings, "TURN_STREAM_MAXLEN", 5, raising=False)
+
+    async def scenario():
+        for i in range(20):
+            await turn_stream.emit("t6", {"type": "token", "text": str(i)})
+
+    asyncio.run(scenario())
+    assert len(fake.streams[turn_stream.stream_key("t6")]) == 5
+
+
+# ------------------------------------------------------------------- claims --
+
+
+@pytest.mark.usefixtures("fake")
+def test_claim_is_exclusive_so_redelivery_does_not_rerun_a_turn():
+    """Pub/Sub is at-least-once; without this the user sees duplicated text
+    and the turn is billed to OpenRouter twice."""
+
+    async def scenario():
+        first = await turn_stream.claim("t7", "worker-a", 60)
+        second = await turn_stream.claim("t7", "worker-b", 60)
+        return first, second
+
+    first, second = asyncio.run(scenario())
+    assert first is True
+    assert second is False
+
+
+@pytest.mark.usefixtures("fake")
+def test_released_claim_allows_a_retry():
+    """A turn cancelled by SIGTERM must be re-runnable, or a rolling restart
+    silently drops every turn that was in flight."""
+
+    async def scenario():
+        await turn_stream.claim("t8", "worker-a", 60)
+        await turn_stream.release_claim("t8")
+        return await turn_stream.claim("t8", "worker-b", 60)
+
+    assert asyncio.run(scenario()) is True
+
+
+@pytest.mark.usefixtures("no_valkey")
+def test_claim_succeeds_when_valkey_is_down():
+    """Running unclaimed beats refusing to run the turn at all."""
+    assert asyncio.run(turn_stream.claim("t9", "worker-a", 60)) is True
+
+
+# ------------------------------------------------------------------- buffer --
+
+
+@pytest.mark.usefixtures("fake")
+def test_buffer_round_trips():
+    async def scenario():
+        await chat_buffer.save("conv-1", {"assistant_text": "hi", "turn_usage": None})
+        return await chat_buffer.load("conv-1")
+
+    assert asyncio.run(scenario())["assistant_text"] == "hi"
+
+
+@pytest.mark.usefixtures("fake")
+def test_discard_removes_the_buffer():
+    async def scenario():
+        await chat_buffer.save("conv-2", {"assistant_text": "x"})
+        removed = await chat_buffer.discard("conv-2")
+        return removed, await chat_buffer.load("conv-2")
+
+    removed, after = asyncio.run(scenario())
+    assert removed is True
+    assert after is None
+
+
+def test_corrupt_buffer_is_dropped_rather_than_returned(fake):
+    """A half-written buffer replayed into Postgres is worse than no buffer."""
+    fake.kv[chat_buffer.buffer_key("conv-3")] = "{not json"
+
+    async def scenario():
+        loaded = await chat_buffer.load("conv-3")
+        return loaded, await chat_buffer.load("conv-3")
+
+    first, second = asyncio.run(scenario())
+    assert first is None and second is None
+    assert chat_buffer.buffer_key("conv-3") not in fake.kv
+
+
+def test_buffer_carries_a_ttl_so_a_dead_worker_cannot_leak_it(fake):
+    asyncio.run(chat_buffer.save("conv-4", {"assistant_text": "x"}))
+    assert fake.expiries[chat_buffer.buffer_key("conv-4")] == settings.CHAT_BUFFER_TTL_S
+
+
+@pytest.mark.usefixtures("fake")
+def test_buffer_and_stream_share_a_hash_tag():
+    """Cluster mode: a conversation's buffer and its stream must land on one
+    shard, or any future multi-key operation fails with CROSSSLOT."""
+    assert "{conv-5}" in chat_buffer.buffer_key("conv-5")
+    assert "{conv-5}" in turn_stream.stream_key("conv-5")
+
+
+# ----------------------------------------------------------- evict-on-commit --
+
+
+def test_buffer_is_evicted_only_on_a_confirmed_commit(fake, monkeypatch):
+    """The core durability guarantee.
+
+    save_turn swallows its own exceptions and returns normally on failure, so
+    "the function returned" says nothing about whether rows were written. Evicting
+    on completion rather than on the commit flag would discard the only remaining
+    copy of a turn the user already paid for.
+    """
+    from app.schemas.chat import ChatMessage
+    from app.services import turn_runner
+
+    async def fake_pipeline(_messages, **_kwargs):
+        yield {"type": "token", "text": "hello"}
+        yield {"type": "done"}
+
+    monkeypatch.setattr(turn_runner, "run_chat_turn", fake_pipeline)
+    monkeypatch.setattr(turn_runner, "save_turn", lambda *a, **kw: False)
+
+    asyncio.run(
+        turn_runner.run_turn(
+            "t10",
+            [ChatMessage(role="user", content="hi")],
+            {"uid": "u1", "email": "u@example.com"},
+            "conv-6",
+        )
+    )
+
+    raw = fake.kv.get(chat_buffer.buffer_key("conv-6"))
+    assert raw is not None, "buffer must survive a failed commit"
+    assert json.loads(raw)["assistant_text"] == "hello"
+
+
+def test_buffer_is_evicted_when_the_commit_succeeds(fake, monkeypatch):
+    from app.schemas.chat import ChatMessage
+    from app.services import turn_runner
+
+    async def fake_pipeline(_messages, **_kwargs):
+        yield {"type": "token", "text": "hello"}
+
+    monkeypatch.setattr(turn_runner, "run_chat_turn", fake_pipeline)
+    monkeypatch.setattr(turn_runner, "save_turn", lambda *a, **kw: True)
+
+    asyncio.run(
+        turn_runner.run_turn(
+            "t11",
+            [ChatMessage(role="user", content="hi")],
+            {"uid": "u1", "email": "u@example.com"},
+            "conv-7",
+        )
+    )
+
+    assert chat_buffer.buffer_key("conv-7") not in fake.kv
+
+
+def test_internal_events_never_reach_the_stream(fake, monkeypatch):
+    """`usage` carries OpenRouter spend. Forwarding it would leak cost data to
+    the browser, which is the one thing the original _event_stream was careful
+    about and the easiest thing to lose in a refactor."""
+    from app.schemas.chat import ChatMessage
+    from app.services import turn_runner
+
+    async def fake_pipeline(_messages, **_kwargs):
+        yield {"type": "token", "text": "hi"}
+        yield {"type": "usage", "cost_usd": 0.42}
+        yield {"type": "reference_estimate", "key": "k", "data": {}}
+        yield {"type": "done"}
+
+    monkeypatch.setattr(turn_runner, "run_chat_turn", fake_pipeline)
+    monkeypatch.setattr(turn_runner, "save_turn", lambda *a, **kw: True)
+
+    asyncio.run(turn_runner.run_turn("t12", [ChatMessage(role="user", content="hi")], None, None))
+
+    emitted = [
+        json.loads(f["e"])["type"]
+        for _, f in fake.streams[turn_stream.stream_key("t12")]
+    ]
+    assert "usage" not in emitted
+    assert "reference_estimate" not in emitted
+    assert emitted == ["token", "done", "end"]
+
+
+def test_guest_turns_are_streamed_but_never_buffered(fake, monkeypatch):
+    from app.schemas.chat import ChatMessage
+    from app.services import turn_runner
+
+    async def fake_pipeline(_messages, **_kwargs):
+        yield {"type": "token", "text": "hi"}
+
+    monkeypatch.setattr(turn_runner, "run_chat_turn", fake_pipeline)
+
+    asyncio.run(turn_runner.run_turn("t13", [ChatMessage(role="user", content="hi")], None, None))
+
+    assert fake.streams[turn_stream.stream_key("t13")]
+    assert not [k for k in fake.kv if k.startswith("chat:buf:")]
+
+
+def test_pipeline_error_still_terminates_the_stream(fake, monkeypatch):
+    """A reader blocked on a stream that never ends is a hung browser tab —
+    a worse failure than a visible error."""
+    from app.schemas.chat import ChatMessage
+    from app.services import turn_runner
+
+    async def exploding_pipeline(_messages, **_kwargs):
+        yield {"type": "token", "text": "partial"}
+        raise RuntimeError("OpenRouter exploded")
+
+    monkeypatch.setattr(turn_runner, "run_chat_turn", exploding_pipeline)
+
+    asyncio.run(turn_runner.run_turn("t14", [ChatMessage(role="user", content="hi")], None, None))
+
+    emitted = [
+        json.loads(f["e"])["type"]
+        for _, f in fake.streams[turn_stream.stream_key("t14")]
+    ]
+    assert emitted[-1] == "end"
+
+
+def test_cancellation_leaves_the_stream_open_for_redelivery(fake, monkeypatch):
+    """SIGTERM mid-turn must NOT write a terminal entry: the Pub/Sub message goes
+    un-acked and redelivers, and a reader that reconnects should keep waiting for
+    the retry rather than being told the turn ended."""
+    from app.schemas.chat import ChatMessage
+    from app.services import turn_runner
+
+    async def cancelled_pipeline(_messages, **_kwargs):
+        yield {"type": "token", "text": "partial"}
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(turn_runner, "run_chat_turn", cancelled_pipeline)
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(
+            turn_runner.run_turn("t15", [ChatMessage(role="user", content="hi")], None, None)
+        )
+
+    emitted = [
+        json.loads(f["e"])["type"]
+        for _, f in fake.streams[turn_stream.stream_key("t15")]
+    ]
+    assert "end" not in emitted
+
+
+# ------------------------------------------------------------------ metrics --
+
+
+@pytest.mark.usefixtures("fake")
+def test_retained_count_reflects_unpersisted_turns():
+    """Backs the `palladium_chat_buffers_retained` gauge and the alert policy in
+    deploy/monitoring/. Steady state is 0; anything else is turns the user paid
+    for that are not in Postgres."""
+
+    async def scenario():
+        assert await chat_buffer.count_retained() == 0
+        await chat_buffer.save("conv-a", {"assistant_text": "x"})
+        await chat_buffer.save("conv-b", {"assistant_text": "y"})
+        during = await chat_buffer.count_retained()
+        await chat_buffer.discard("conv-a")
+        await chat_buffer.discard("conv-b")
+        return during, await chat_buffer.count_retained()
+
+    during, after = asyncio.run(scenario())
+    assert during == 2
+    assert after == 0
+
+
+@pytest.mark.usefixtures("no_valkey")
+def test_retained_count_is_none_rather_than_zero_when_valkey_is_down():
+    """The distinction the alert depends on. Reporting 0 for an unreachable
+    Valkey would set the gauge to a healthy value and suppress the alert at
+    exactly the moment persistence is least observable."""
+    assert asyncio.run(chat_buffer.count_retained()) is None
+
+
+def test_commit_outcome_is_counted(fake, monkeypatch):
+    from app.core.turn_metrics import TURN_COMMITS
+    from app.schemas.chat import ChatMessage
+    from app.services import turn_runner
+
+    async def fake_pipeline(_messages, **_kwargs):
+        yield {"type": "token", "text": "hi"}
+
+    monkeypatch.setattr(turn_runner, "run_chat_turn", fake_pipeline)
+    monkeypatch.setattr(turn_runner, "save_turn", lambda *a, **kw: False)
+
+    before = TURN_COMMITS.labels(result="failed")._value.get()
+    asyncio.run(
+        turn_runner.run_turn(
+            "t20",
+            [ChatMessage(role="user", content="hi")],
+            {"uid": "u1", "email": "u@example.com"},
+            "conv-m",
+        )
+    )
+    assert TURN_COMMITS.labels(result="failed")._value.get() == before + 1
+    assert fake.kv.get(chat_buffer.buffer_key("conv-m")) is not None
+
+
+@pytest.mark.usefixtures("fake")
+def test_inflight_gauge_returns_to_zero_even_when_a_turn_is_cancelled(monkeypatch):
+    """A leaked increment looks exactly like a permanently saturated worker."""
+    from app.core.turn_metrics import TURNS_INFLIGHT
+    from app.schemas.chat import ChatMessage
+    from app.services import turn_runner
+
+    async def cancelled_pipeline(_messages, **_kwargs):
+        yield {"type": "token", "text": "partial"}
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(turn_runner, "run_chat_turn", cancelled_pipeline)
+
+    before = TURNS_INFLIGHT._value.get()
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(
+            turn_runner.run_turn("t21", [ChatMessage(role="user", content="hi")], None, None)
+        )
+    assert TURNS_INFLIGHT._value.get() == before

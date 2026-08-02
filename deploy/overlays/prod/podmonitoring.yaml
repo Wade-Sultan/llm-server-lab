@@ -52,3 +52,24 @@ spec:
       path: /metrics
       interval: 30s
       timeout: 10s
+---
+# The Pub/Sub workers. Same port name and path as builder — they run the same
+# image and the same exporter, just without an HTTP API in front of it.
+#
+# Worth scraping separately rather than folding into the builder selector: the
+# two answer different questions. builder's series describe request latency,
+# the worker's describe how long turns take once dequeued, and averaging them
+# together would hide a worker backlog behind healthy-looking API timings.
+apiVersion: monitoring.googleapis.com/v1
+kind: PodMonitoring
+metadata:
+  name: worker
+spec:
+  selector:
+    matchLabels:
+      app: worker
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 30s
+      timeout: 10s

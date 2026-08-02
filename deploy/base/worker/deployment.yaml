@@ -1,0 +1,87 @@
+# Chat turn workers: the Pub/Sub subscribers that run the DSPy pipeline off the
+# request path. See backend/app/worker.py.
+#
+# SAME IMAGE AS BUILDER, different command — exactly like the migrate Job. The
+# worker imports the same pipeline, models and DSPy configuration the API does,
+# so a separate image would let the two drift while looking identical in the
+# repo. `kustomize edit set image palladium/builder=...` in cloudbuild.yaml
+# retags both in one step, which also guarantees the API and the workers running
+# a given turn are the same build.
+#
+# NO SERVICE, NO HTTPROUTE. Nothing routes to a worker: it pulls its own work
+# from Pub/Sub and writes results to Valkey. That is what makes it safe for it to
+# hold no inbound port at all, and why there is no readiness probe below — an
+# unready worker simply isn't pulling, and there is no endpoint list to be
+# removed from.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker
+spec:
+  replicas: 2
+  strategy:
+    rollingUpdate:
+      # Same reasoning as builder: never take capacity away mid-turn. A worker
+      # killed while running a turn does eventually redeliver, but the user
+      # watches their build stall for the redelivery backoff first.
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: worker
+  template:
+    metadata:
+      labels:
+        app: worker
+    spec:
+      serviceAccountName: builder
+      # Must exceed the worker's own 60s drain (Worker.stop) plus the longest
+      # turn it might be finishing. The drain cancels the Pub/Sub pull first so
+      # no new turns start, making this a bound on in-flight work only.
+      terminationGracePeriodSeconds: 260
+      containers:
+        - name: worker
+          image: palladium/builder
+          # Overrides the image CMD, which starts the API server.
+          command: ["python", "-m", "app.worker"]
+          ports:
+            # Metrics only — there is no HTTP API here. Same port name as
+            # builder so overlays/prod/podmonitoring.yaml scrapes it with an
+            # identical endpoint block.
+            - containerPort: 9090
+              name: metrics
+          envFrom:
+            - configMapRef:
+                name: builder-config
+            - secretRef:
+                name: palladium-secrets
+          # Liveness without readiness: "is the process alive" is the only
+          # question that makes sense for a pull-based worker. A worker whose
+          # subscriber thread died would otherwise sit forever consuming nothing
+          # while looking perfectly healthy to Kubernetes.
+          livenessProbe:
+            exec:
+              command:
+                - python
+                - -c
+                - |
+                  import sys, urllib.request
+                  # The metrics exporter is started by the worker itself; if it
+                  # is serving, the process got past subscriber startup.
+                  sys.exit(0 if urllib.request.urlopen(
+                      "http://127.0.0.1:9090/metrics", timeout=5
+                  ).status == 200 else 1)
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            failureThreshold: 3
+          resources:
+            # Higher memory than builder's request, lower CPU. A worker runs up
+            # to PUBSUB_MAX_CONCURRENCY turns at once — each holding a DSPy state
+            # and a candidate set — but spends nearly all of that time blocked on
+            # OpenRouter rather than computing.
+            requests:
+              cpu: "500m"
+              memory: 2Gi
+            limits:
+              cpu: "2"
+              memory: 2Gi

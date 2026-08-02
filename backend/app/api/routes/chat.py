@@ -1,167 +1,86 @@
 from __future__ import annotations
 
 import asyncio
-import functools
 import json
 import logging
 import uuid
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from sqlalchemy import func, select
 
-from app.schemas.chat import ChatMessage, ChatRequest
-from app.services.chat_pipeline import run_chat_turn
+from app.core import pubsub
 from app.core.auth import optional_firebase_token
+from app.core.valkey import is_enabled as valkey_enabled
+from app.schemas.chat import ChatMessage, ChatRequest
+from app.services import turn_stream
+from app.services.chat_pipeline import run_chat_turn
+from app.services.turn_runner import run_turn
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["chat"])
 
+# SSE plumbing. `X-Accel-Buffering` disables proxy buffering; without it a
+# reverse proxy can hold tokens back until its buffer fills, which reads to the
+# user as a long stall followed by a wall of text.
+_SSE_HEADERS = {
+    "Cache-Control": "no-cache",
+    "Connection": "keep-alive",
+    "X-Accel-Buffering": "no",
+}
 
-def _save_turn(
-    firebase_uid: str,
-    firebase_email: str | None,
-    conversation_id: str,
-    messages: list[ChatMessage],
-    assistant_text: str,
-    turn_usage: dict | None = None,
-    reached_recommendation: bool = False,
-    build_data: dict | None = None,
-    build_key: str | None = None,
-    ref_estimate_data: dict | None = None,
-    ref_estimate_key: str | None = None,
-) -> None:
-    """Persist this chat turn to the DB. Runs in a thread executor (sync SQLAlchemy)."""
-    from decimal import Decimal
+_INTERNAL_EVENTS = frozenset({"usage", "reference_estimate"})
 
-    from app.core.db import SessionLocal
-    from app.models.conversation import Conversation
-    from app.models.message import Message
-    from app.models.reference_build import ReferenceBuild
-    from app.models.user import User
-
-    db = SessionLocal()
-    try:
-        # Get or create the DB user record for this Firebase user
-        user = db.execute(
-            select(User).where(User.firebase_uid == firebase_uid)
-        ).scalar_one_or_none()
-
-        if not user and firebase_email:
-            # Try to match by email (user may have registered via the DB signup flow)
-            user = db.execute(
-                select(User).where(User.email == firebase_email)
-            ).scalar_one_or_none()
-            if user:
-                user.firebase_uid = firebase_uid
-                db.add(user)
-                db.flush()
-
-        if not user and firebase_email:
-            # Auto-provision a record for Firebase-only users
-            user = User(
-                email=firebase_email,
-                firebase_uid=firebase_uid,
-                hashed_password="!firebase_oauth",
-            )
-            db.add(user)
-            db.flush()
-
-        if not user:
-            logger.warning("Could not resolve DB user for firebase_uid=%s; skipping save", firebase_uid)
-            return
-
-        # Get or create the Conversation row
-        conv_uuid = uuid.UUID(conversation_id)
-        conversation = db.get(Conversation, conv_uuid)
-        if not conversation:
-            title = messages[0].content[:100] if messages else "New Build"
-            conversation = Conversation(
-                id=conv_uuid,
-                user_id=user.id,
-                title=title,
-            )
-            db.add(conversation)
-            db.flush()
-
-        # Count already-saved messages so we only append new ones
-        saved_count = db.execute(
-            select(func.count(Message.id)).where(Message.conversation_id == conv_uuid)
-        ).scalar_one()
-
-        for msg in messages[saved_count:]:
-            db.add(Message(
-                conversation_id=conv_uuid,
-                role=msg.role,
-                content=msg.content,
-            ))
-
-        if assistant_text:
-            db.add(Message(
-                conversation_id=conv_uuid,
-                role="assistant",
-                content=assistant_text,
-                metadata_={"build": build_data} if build_data else None,
-            ))
-
-        # Roll this turn's OpenRouter spend into the conversation's running total.
-        if turn_usage:
-            conversation.total_cost_usd = (conversation.total_cost_usd or Decimal(0)) + Decimal(
-                str(turn_usage.get("cost_usd") or 0)
-            )
-            conversation.total_tokens_in = (conversation.total_tokens_in or 0) + int(
-                turn_usage.get("tokens_in") or 0
-            )
-            conversation.total_tokens_out = (conversation.total_tokens_out or 0) + int(
-                turn_usage.get("tokens_out") or 0
-            )
-            conversation.llm_call_count = (conversation.llm_call_count or 0) + int(
-                turn_usage.get("llm_call_count") or 0
-            )
-            new_models = turn_usage.get("models") or []
-            if new_models:
-                conversation.models_used = sorted(
-                    set(conversation.models_used or []) | set(new_models)
-                )
-            db.add(conversation)
-
-        # Sticky flag: once a conversation has produced a recommendation, it
-        # counts as a "completed build" for cost-per-build analytics.
-        if reached_recommendation and not conversation.reached_recommendation:
-            conversation.reached_recommendation = True
-            db.add(conversation)
-
-        # Cache the reference build resolved for this conversation (the
-        # budget-still-unknown estimate, or the one resolved alongside a
-        # completed turn) so it's never re-resolved — the guaranteed,
-        # free-to-fetch fallback for the rest of the conversation.
-        if ref_estimate_key and not conversation.reference_build_key:
-            conversation.reference_build_key = ref_estimate_key
-            conversation.reference_build = ref_estimate_data
-            db.add(conversation)
-
-        # Link the conversation to the concrete PCBuild row backing this
-        # reference build template, so pc_builds reflects what was actually
-        # recommended (not just the abstract build_key).
-        if build_key and not conversation.build_id:
-            ref_build = db.execute(
-                select(ReferenceBuild).where(ReferenceBuild.build_key == build_key)
-            ).scalar_one_or_none()
-            if ref_build and ref_build.pc_build_id:
-                conversation.build_id = ref_build.pc_build_id
-                db.add(conversation)
-
-        db.commit()
-    except Exception:
-        logger.exception("Failed to save conversation turn")
-        db.rollback()
-    finally:
-        db.close()
+# Strong refs to in-flight fallback turns. asyncio only holds weak references to
+# tasks, so without this a turn can be collected mid-run under memory pressure.
+_background_turns: set[asyncio.Task] = set()
 
 
-async def _event_stream(messages: list[ChatMessage], user: dict | None, conversation_id: str | None):
-    """Async generator that yields SSE-formatted lines."""
+def _sse(event: dict, entry_id: str | None = None) -> str:
+    """Format one SSE frame.
+
+    The `id:` line is what makes resumption work: it is echoed back by the client
+    as Last-Event-ID, and it is the Valkey stream entry ID, so the server can
+    resume from exactly that point with no translation layer in between.
+    """
+    payload = json.dumps(event, default=str)
+    if entry_id is None:
+        return f"data: {payload}\n\n"
+    return f"id: {entry_id}\ndata: {payload}\n\n"
+
+
+async def _relay(turn_id: str, last_id: str = "0"):
+    """Relay a turn's Valkey stream to the client as SSE."""
+    # Sent before anything else so a client that loses the connection knows which
+    # turn to reconnect to. Without it, a disconnect during the very first
+    # progress event would leave the browser with no handle on the running turn.
+    yield _sse({"type": "turn", "turn_id": turn_id})
+
+    async for item in turn_stream.tail(turn_id, last_id=last_id):
+        if item is None:
+            # Comment frame. Keeps the connection warm through the Gateway's idle
+            # timeout during the long silent stretch while DSPy runs.
+            yield ": ping\n\n"
+            continue
+        entry_id, event = item
+        yield _sse(event, entry_id)
+
+    yield "data: [DONE]\n\n"
+
+
+async def _inline_stream(
+    messages: list[ChatMessage], user: dict | None, conversation_id: str | None
+):
+    """Run the turn in-request and stream it directly, with no Valkey involved.
+
+    The fallback for local development and for any deployment where Valkey is not
+    configured. It is the pre-Pub/Sub behaviour, kept verbatim in one respect that
+    matters: the turn dies with the connection. That is precisely the weakness the
+    dispatched path exists to fix, so this must never be the production path — the
+    startup log in app/core/valkey.py says so out loud when it engages.
+    """
+    from app.services.turn_runner import save_turn
+
     assistant_text = ""
     turn_usage: dict | None = None
     reached_recommendation = False
@@ -169,72 +88,148 @@ async def _event_stream(messages: list[ChatMessage], user: dict | None, conversa
     build_key: str | None = None
     ref_estimate_data: dict | None = None
     ref_estimate_key: str | None = None
+
     try:
         async for event in run_chat_turn(messages, conversation_id=conversation_id):
             etype = event.get("type")
             if etype == "token":
                 assistant_text += event.get("text", "")
             elif etype == "build":
-                # The recommend path emitted a build — this conversation is a completed build.
                 reached_recommendation = True
                 build_data = event.get("data")
                 build_key = event.get("key")
             elif etype == "reference_estimate":
-                # Internal caching signal — capture it for persistence, don't forward to the client.
                 ref_estimate_data = event.get("data")
                 ref_estimate_key = event.get("key")
-                continue
             elif etype == "usage":
-                # Internal cost accounting — capture it, don't leak cost to the client.
                 turn_usage = event
-                continue
-            # default=str guards against non-JSON-native types (UUID, Decimal,
-            # datetime, ...) slipping into an event payload and killing the stream.
-            line = f"data: {json.dumps(event, default=str)}\n\n"
-            yield line
+
+            if etype not in _INTERNAL_EVENTS:
+                yield _sse(event)
     except Exception:
         logger.exception("Chat pipeline error")
-        error_event = json.dumps({
+        yield _sse({
             "type": "token",
             "text": "\n\nSomething went wrong generating your recommendation. Please try again.",
         })
-        yield f"data: {error_event}\n\n"
 
-    # Persist the turn for authenticated users
     if user and conversation_id:
-        save_fn = functools.partial(
-            _save_turn,
-            user.get("uid", ""),
-            user.get("email"),
-            conversation_id,
-            messages,
-            assistant_text,
-            turn_usage,
-            reached_recommendation,
-            build_data,
-            build_key,
-            ref_estimate_data,
-            ref_estimate_key,
+        await asyncio.get_running_loop().run_in_executor(
+            None,
+            lambda: save_turn(
+                user.get("uid", ""),
+                user.get("email"),
+                conversation_id,
+                messages,
+                assistant_text,
+                turn_usage,
+                reached_recommendation,
+                build_data,
+                build_key,
+                ref_estimate_data,
+                ref_estimate_key,
+            ),
         )
-        await asyncio.get_running_loop().run_in_executor(None, save_fn)
 
     yield "data: [DONE]\n\n"
 
 
 @router.post("/chat")
-async def chat(req: ChatRequest, user: dict | None = Depends(optional_firebase_token)) -> StreamingResponse:
+async def chat(
+    req: ChatRequest, user: dict | None = Depends(optional_firebase_token)
+) -> StreamingResponse:
     """
     Stream a recommendation response for the given conversation.
 
     Accessible to both authenticated users and guests. Authenticated users'
     conversations are persisted when a conversation_id is supplied.
+
+    The response is SSE either way, but how it is produced differs. When Pub/Sub
+    and Valkey are both configured the turn is dispatched to a worker and this
+    response merely relays its Valkey stream — so the turn survives this
+    connection dying, and the client can reconnect to /chat/{turn_id}/stream and
+    pick up mid-build. Otherwise the turn runs inline and dies with the request.
     """
+    # One id per turn, minted here rather than derived from conversation_id: a
+    # conversation has many turns, and they each need their own event stream and
+    # their own claim.
+    turn_id = uuid.uuid4().hex
+
+    dispatched = False
+    if valkey_enabled() and pubsub.is_enabled():
+        dispatched = await pubsub.publish_turn(
+            turn_id,
+            req.conversation_id,
+            {
+                "turn_id": turn_id,
+                "conversation_id": req.conversation_id,
+                "user": user,
+                "messages": [m.model_dump() for m in req.messages],
+            },
+        )
+
+    if dispatched:
+        return StreamingResponse(
+            _relay(turn_id), media_type="text/event-stream", headers=_SSE_HEADERS
+        )
+
+    if valkey_enabled():
+        # Valkey but no Pub/Sub: still worth running through the stream, because
+        # resumption works and the pod is no longer the only place the events
+        # exist. The task is not awaited here — _relay consumes what it writes.
+        #
+        # Held on the app state so a shutdown can await it; a bare create_task
+        # would be garbage-collected mid-turn if nothing kept a reference.
+        task = asyncio.create_task(
+            run_turn(turn_id, req.messages, user, req.conversation_id)
+        )
+        _background_turns.add(task)
+        task.add_done_callback(_background_turns.discard)
+        return StreamingResponse(
+            _relay(turn_id), media_type="text/event-stream", headers=_SSE_HEADERS
+        )
+
     return StreamingResponse(
-        _event_stream(req.messages, user, req.conversation_id),
+        _inline_stream(req.messages, user, req.conversation_id),
         media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",  # Disable nginx buffering if proxied
-        },
+        headers=_SSE_HEADERS,
+    )
+
+
+@router.get("/chat/{turn_id}/stream")
+async def chat_stream(
+    turn_id: str,
+    request: Request,
+    last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
+) -> StreamingResponse:
+    """Resume an in-flight turn's event stream.
+
+    Deliberately unauthenticated, and safe because turn_id is an unguessable
+    128-bit value that is only ever returned to the client that started the turn.
+    Requiring a token here would break the case this exists for: a Firebase ID
+    token lives an hour, and a tab that was backgrounded long enough to drop its
+    connection may well come back with an expired one.
+
+    `resume` in the query string overrides the Last-Event-ID header, for clients
+    using fetch() rather than EventSource — fetch has no automatic Last-Event-ID
+    handling, and the frontend adapter tracks the id itself.
+    """
+    if not valkey_enabled():
+        raise HTTPException(
+            status_code=503,
+            detail="Turn streams are not available (Valkey is not configured).",
+        )
+
+    resume_from = request.query_params.get("resume") or last_event_id or "0"
+
+    if not await turn_stream.exists(turn_id):
+        # Either the turn id is wrong, or its stream aged out past
+        # TURN_STREAM_TTL_S. Indistinguishable from here, and the client's
+        # response to both is the same: start a new turn.
+        raise HTTPException(status_code=404, detail="No such turn, or it has expired.")
+
+    return StreamingResponse(
+        _relay(turn_id, last_id=resume_from),
+        media_type="text/event-stream",
+        headers=_SSE_HEADERS,
     )
