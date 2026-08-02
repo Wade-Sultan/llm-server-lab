@@ -15,10 +15,8 @@
 #                   already happened.
 #
 # Cloud Logging needs no setup: GKE ships container stdout/stderr there by
-# default. It is deliberately NOT wired into Grafana Cloud — that datasource is
-# an Enterprise plugin and authenticates with a service account JSON key, which
-# this topology does not have anywhere (see patches/workload-identity.yaml).
-# Metrics go to Grafana; logs stay here. See deploy/observability.md.
+# default. Metrics land in Cloud Monitoring via GMP, logs here — both queryable
+# from the GCP console. See deploy/observability.md.
 set -euo pipefail
 
 NAMESPACE="${NAMESPACE:-palladium}"

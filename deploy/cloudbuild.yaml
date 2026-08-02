@@ -141,7 +141,7 @@ steps:
         cd "$_OVERLAY"
 
         sed -i "s/\bPROJECT_ID\b/$PROJECT_ID/g" \
-          kustomization.yaml patches/workload-identity.yaml grafana-syncer.yaml
+          kustomization.yaml patches/workload-identity.yaml
         sed -i "s/newTag: latest/newTag: $SHORT_SHA/g" kustomization.yaml
 
         # Fail loudly rather than deploying a half-substituted manifest.
@@ -203,13 +203,6 @@ steps:
           kubectl -n "$_NAMESPACE" get secret "palladium-secrets-$$s" >/dev/null \
             || { echo "ERROR: secret palladium-secrets-$$s missing (RUNBOOK §7)" >&2; exit 1; }
         done
-
-        # The metrics link (deploy/observability.md) is a WARNING, not an error:
-        # a missing Grafana secret must not fail an application rollout. Without
-        # this line the only symptom is a CronJob that silently never succeeds,
-        # and the data source going unauthorized an hour later.
-        kubectl -n "$_NAMESPACE" get secret grafana-syncer >/dev/null 2>&1 \
-          || echo "WARNING: secret grafana-syncer missing — Grafana Cloud will not query GMP (deploy/observability.md §4)" >&2
 
         # POSTGRES_SERVER lives only in the Secret. Validate the actual value:
         # a pasted-in placeholder or an empty host fails at runtime as DNS or

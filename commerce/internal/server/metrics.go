@@ -13,8 +13,8 @@ import (
 
 // Metric names and label sets deliberately mirror what
 // prometheus-fastapi-instrumentator emits on the builder side
-// (backend/app/core/metrics.py), so one Grafana panel can graph both services
-// without a per-service query. That is also why `status` is a grouped class
+// (backend/app/core/metrics.py), so one chart can graph both services without
+// a per-service query. That is also why `status` is a grouped class
 // ("2xx") rather than the exact code: the Python instrumentator groups by
 // default, and a panel summing across services needs the label values to mean
 // the same thing on both.

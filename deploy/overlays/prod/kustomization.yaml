@@ -14,7 +14,6 @@ resources:
   - backend-policies.yaml
   - hpa.yaml
   - pdb.yaml
-  - grafana-syncer.yaml
   - podmonitoring.yaml
 
 patches:
