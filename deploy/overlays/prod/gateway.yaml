@@ -36,10 +36,6 @@ spec:
       protocol: HTTPS
       port: 443
       hostname: commerce.palladiumtech.ai
-    - name: api-cutover
-      protocol: HTTPS
-      port: 443
-      hostname: k8s-api.palladiumtech.ai
     # Plain HTTP exists only to bounce to HTTPS. Without it, http:// URLs hit a
     # listener that does not exist and fail with a connection error rather than
     # a redirect.
@@ -58,10 +54,15 @@ spec:
   # The redirect listener has no hostname (so it accepts anything), which makes
   # this route the place hostnames are enforced. An unlisted host gets a 404
   # instead of being redirected onward.
+  #
+  # Every entry here MUST have a matching HTTPS listener above. A hostname
+  # listed without one redirects http:// to an https:// endpoint that does not
+  # exist, so the request fails at connect rather than returning a clean 404 —
+  # strictly worse than not redirecting it. That is why k8s-api.palladiumtech.ai
+  # came out of this list at the same time as its listener.
   hostnames:
     - api.palladiumtech.ai
     - commerce.palladiumtech.ai
-    - k8s-api.palladiumtech.ai
   rules:
     - filters:
         - type: RequestRedirect

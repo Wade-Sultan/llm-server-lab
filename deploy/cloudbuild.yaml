@@ -1,6 +1,8 @@
-# GKE deploy pipeline. Replaces the three per-service Cloud Run pipelines
-# (backend/, commerce/, admin/cloudbuild.yaml) with one build that ships all
-# three images and gates the rollout on a migration.
+# GKE deploy pipeline, and the only one. It replaced three per-service pipelines
+# (two Cloud Run, one GCE) with a single build that ships all three images and
+# gates the rollout on a migration; those files and the services they deployed
+# to are gone. If a Cloud Build trigger still references them it will fail on a
+# missing config — delete the trigger rather than restoring the file.
 #
 # Manual run — $SHORT_SHA is only populated for trigger-driven builds, so pass
 # it explicitly or every image lands on the same tag:

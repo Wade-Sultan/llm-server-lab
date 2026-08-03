@@ -37,11 +37,12 @@ patches:
 # rely on it for a real rollout — an immutable SHA tag is what makes a rollback
 # legible.
 images:
-  # newName is `backend`, not `builder`: that is the existing Artifact Registry
-  # path (see backend/cloudbuild.yaml). Reusing it means the layer cache carries
-  # over, and — more importantly — during the Phase 4 parallel run Cloud Run and
-  # GKE serve the *same image digest*, so a behaviour difference between them is
-  # real rather than an artefact of two separately-built images.
+  # newName is `backend`, not `builder`: that is the Artifact Registry path the
+  # retired Cloud Run pipeline already published to. It was kept through the
+  # migration so the layer cache carried over and so both stacks ran the *same
+  # image digest* during the parallel run. Cloud Run is gone now, but renaming
+  # the repository would still throw away the cache and orphan every existing
+  # SHA tag — which is what a rollback reaches for. Leave it.
   - name: palladium/builder
     newName: us-central1-docker.pkg.dev/PROJECT_ID/palladium/backend
     newTag: latest

@@ -26,9 +26,18 @@ data:
   POSTGRES_DB: "palladium"
   FRONTEND_HOST: "https://palladiumtech.ai"
   # No ports and no localhost, unlike local: browsers send the origin without a
-  # port for :443, so the portless form is the one that matches. k8s-api is
-  # included for the Phase 4 parallel run and can be dropped at cutover.
-  BACKEND_CORS_ORIGINS: "https://palladiumtech.ai,https://www.palladiumtech.ai,https://k8s-api.palladiumtech.ai"
+  # port for :443, so the portless form is the one that matches.
+  #
+  # These are BROWSER ORIGINS — where the page was served from — not API hosts.
+  # k8s-api.palladiumtech.ai used to be listed here and never did anything: no
+  # page is ever served from it, so no request can carry it as an Origin. It
+  # came out with the rest of the Phase 4 cutover scaffolding.
+  #
+  # Vercel preview deployments are deliberately absent. Their hostnames change
+  # per deployment, so they cannot be enumerated here — a preview testing
+  # against prod fails CORS by design. Use a stable alias domain and add it
+  # explicitly if that is ever needed.
+  BACKEND_CORS_ORIGINS: "https://palladiumtech.ai,https://www.palladiumtech.ai"
   # The FRONTEND Firebase project (the ID token's audience), not the GCP
   # project. Same value as local because the frontend project is shared; a
   # mismatch surfaces as invalid-credential on every authenticated request.

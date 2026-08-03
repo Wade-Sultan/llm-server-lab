@@ -22,8 +22,9 @@ spec:
           containers:
             - name: etl
               image: palladium/builder
-              # Same entrypoint as the Cloud Run Job in backend/cloudbuild.yaml,
-              # so the two stay in lockstep during the migration.
+              # Overrides the image CMD, which starts the API server. This is
+              # the same entrypoint the retired Cloud Run Job used, so the ETL's
+              # behaviour is unchanged by the migration.
               command: ["python", "-m", "app.jobs.pricing_etl"]
               envFrom:
                 - configMapRef:

@@ -3,16 +3,17 @@
 # in RUNBOOK.md §6. Both are required — with only one, token exchange fails at
 # runtime with a permission error rather than at deploy time.
 #
-# Replaces the Cloud Run --service-account flag. No service account JSON keys
-# exist anywhere in this topology, which is also why the local overlay's
+# This replaced the Cloud Run --service-account flag. No service account JSON
+# keys exist anywhere in this topology, which is also why the local overlay's
 # gcp-adc.yaml patch has no prod counterpart: ADC comes from the metadata
 # server here, not a mounted file.
 #
-# These are the SAME three service accounts Cloud Run and the admin GCE box
-# already use (see backend/, commerce/ and admin/cloudbuild.yaml). Reusing them
-# is deliberate: they already hold the Cloud SQL and Secret Manager grants, so
-# the migration re-grants nothing and both stacks stay identical in what they
-# can reach during the parallel run.
+# These are the same three service accounts the retired Cloud Run services and
+# admin GCE box used. Carrying them over rather than minting new ones is why the
+# migration re-granted nothing: they already hold every Cloud SQL and Secret
+# Manager binding the workloads need. That history is worth knowing before
+# anyone "cleans up" an SA that looks over-privileged for a GKE-only stack —
+# check what actually binds to it first.
 #
 # PROJECT_ID must be substituted before apply (RUNBOOK.md §1). Keep the
 # placeholder in git — substitute at deploy time, not in a commit.
