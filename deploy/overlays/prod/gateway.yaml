@@ -36,6 +36,10 @@ spec:
       protocol: HTTPS
       port: 443
       hostname: commerce.palladiumtech.ai
+    - name: api-cutover
+      protocol: HTTPS
+      port: 443
+      hostname: k8s-api.palladiumtech.ai
     # Plain HTTP exists only to bounce to HTTPS. Without it, http:// URLs hit a
     # listener that does not exist and fail with a connection error rather than
     # a redirect.
