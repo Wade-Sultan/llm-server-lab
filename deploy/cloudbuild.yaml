@@ -253,7 +253,22 @@ steps:
 
   # -------------------------------------------------------------- migrate ----
   # The rollout gate. `create`, not `apply`: the name is unique per commit so
-  # there is nothing to merge, and create fails loudly if this SHA already ran.
+  # there is nothing to merge.
+  #
+  # RE-RUNNING THE SAME COMMIT IS NORMAL, and the step is built for it. A build
+  # that fails at `deploy` or `rollout` leaves a completed migrate Job behind for
+  # ttlSecondsAfterFinished (1h), so a bare `create` would answer the retry with
+  # `AlreadyExists` — blocking a retry over a step that had already succeeded.
+  # Hence the three-way check below rather than create-and-hope:
+  #
+  #   already succeeded  skip. The schema is at this commit; `alembic upgrade
+  #                      head` would be a no-op anyway, and re-running it would
+  #                      only re-acquire the migration lock for nothing.
+  #   already failed     fail loudly, with logs. Deliberately NOT retried: the
+  #                      failure is deterministic, and silently re-running it
+  #                      would bury the real error under a second identical one.
+  #   still running      a concurrent build owns it. Wait on that Job rather than
+  #                      racing a second `alembic upgrade head` against it.
   #
   # The two competing waits exist because `kubectl wait --for=condition=complete`
   # does NOT return when a Job fails — it blocks until the timeout expires.
@@ -270,13 +285,71 @@ steps:
         set -euo pipefail
         JOB="migrate-$SHORT_SHA"
 
-        kubectl -n "$_NAMESPACE" create -f /workspace/migrate.yaml
-
         dump_logs() {
           echo "--- migration diagnostics ---" >&2
           kubectl -n "$_NAMESPACE" logs "job/$$JOB" --tail=200 --all-containers >&2 || true
           kubectl -n "$_NAMESPACE" describe "job/$$JOB" >&2 || true
         }
+
+        if kubectl -n "$_NAMESPACE" get "job/$$JOB" >/dev/null 2>&1; then
+          # jsonpath yields an empty string, not 0, for an unset counter — hence
+          # the :-0 defaults, without which `[ -ge ]` errors on empty input.
+          SUCCEEDED=$$(kubectl -n "$_NAMESPACE" get "job/$$JOB" \
+            -o jsonpath='{.status.succeeded}' 2>/dev/null || true)
+          FAILED=$$(kubectl -n "$_NAMESPACE" get "job/$$JOB" \
+            -o jsonpath='{.status.failed}' 2>/dev/null || true)
+
+          if [ "$${SUCCEEDED:-0}" -ge 1 ] 2>/dev/null; then
+            echo "migration $$JOB already completed for this commit; skipping"
+            exit 0
+          fi
+
+          if [ "$${FAILED:-0}" -ge 1 ] 2>/dev/null; then
+            # A failed Job is two different situations wearing the same status,
+            # and they want opposite handling:
+            #
+            #   alembic ran and raised    Deterministic. Block — the schema is in
+            #                             an unknown state and rolling code onto
+            #                             it is the outage this gate prevents.
+            #   the pod never ran         ImagePullBackOff (this step waits on
+            #                             push-builder, so a slow push does it),
+            #                             eviction, nothing schedulable. Nothing
+            #                             touched the database. Retryable.
+            #
+            # A terminated container state is the discriminator: it exists only
+            # if the container actually started and exited.
+            PODS=$$(kubectl -n "$_NAMESPACE" get pods -l "job-name=$$JOB" \
+              -o name 2>/dev/null | wc -l)
+            EXIT_CODES=$$(kubectl -n "$_NAMESPACE" get pods -l "job-name=$$JOB" \
+              -o jsonpath='{.items[*].status.containerStatuses[*].state.terminated.exitCode}' \
+              2>/dev/null || true)
+
+            # FAILS CLOSED. Pods are garbage collected, and once they are gone
+            # "no terminated container" is indistinguishable from "never ran" —
+            # so absent pods block rather than retry. Guessing wrong in this
+            # direction costs a manual delete; the other direction deploys onto
+            # a half-migrated database.
+            if [ "$$PODS" -gt 0 ] && [ -z "$$EXIT_CODES" ]; then
+              echo "migration $$JOB failed before alembic started (no container ever" >&2
+              echo "terminated) — infrastructure, not a migration. Recreating it." >&2
+              kubectl -n "$_NAMESPACE" delete job "$$JOB" --wait=true
+              kubectl -n "$_NAMESPACE" create -f /workspace/migrate.yaml
+            else
+              echo "ERROR: migration $$JOB already ran for this commit and FAILED" >&2
+              echo "       (container exit code(s): $${EXIT_CODES:-unknown})." >&2
+              echo "       Re-running would reproduce it. Fix the migration, then either" >&2
+              echo "       commit the fix (new SHA) or clear the Job to retry this one:" >&2
+              echo "         kubectl -n $_NAMESPACE delete job $$JOB" >&2
+              dump_logs
+              exit 1
+            fi
+          fi
+
+          echo "migration $$JOB is already in flight (concurrent build?); waiting on it"
+        else
+          kubectl -n "$_NAMESPACE" create -f /workspace/migrate.yaml
+        fi
+
         trap dump_logs ERR
 
         kubectl -n "$_NAMESPACE" wait --for=condition=complete --timeout=900s "job/$$JOB" &
