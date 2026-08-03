@@ -315,7 +315,7 @@ steps:
       - -c
       - |
         set -euo pipefail
-        for d in builder commerce admin; do
+        for d in builder worker commerce admin; do
           kubectl -n "$_NAMESPACE" rollout status "deployment/$$d" --timeout=600s
         done
 
