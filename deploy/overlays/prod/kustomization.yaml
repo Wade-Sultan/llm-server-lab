@@ -10,7 +10,6 @@ resources:
   - ../../base
   - namespace.yaml
   - gateway.yaml
-  - httproute-cutover.yaml
   - backend-policies.yaml
   - hpa.yaml
   - pdb.yaml

@@ -36,14 +36,6 @@ spec:
       protocol: HTTPS
       port: 443
       hostname: commerce.palladiumtech.ai
-    # Parallel-run host for Phase 4: GKE serves this while api.palladiumtech.ai
-    # still points at Cloud Run, so the whole stack can be smoke-tested under
-    # real TLS with zero user-facing risk. Delete this listener and
-    # httproute-cutover.yaml once traffic has moved.
-    - name: api-cutover
-      protocol: HTTPS
-      port: 443
-      hostname: k8s-api.palladiumtech.ai
     # Plain HTTP exists only to bounce to HTTPS. Without it, http:// URLs hit a
     # listener that does not exist and fail with a connection error rather than
     # a redirect.
