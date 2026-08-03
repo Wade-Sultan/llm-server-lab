@@ -61,9 +61,7 @@ async def save(conversation_id: str, payload: dict) -> bool:
         )
         return True
     except (RedisError, OSError):
-        logger.warning(
-            "chat_buffer save failed for %s", conversation_id, exc_info=True
-        )
+        logger.warning("chat_buffer save failed for %s", conversation_id, exc_info=True)
         return False
 
 
@@ -75,9 +73,7 @@ async def load(conversation_id: str) -> dict | None:
     try:
         raw = await client.get(buffer_key(conversation_id))
     except (RedisError, OSError):
-        logger.warning(
-            "chat_buffer load failed for %s", conversation_id, exc_info=True
-        )
+        logger.warning("chat_buffer load failed for %s", conversation_id, exc_info=True)
         return None
     if raw is None:
         return None

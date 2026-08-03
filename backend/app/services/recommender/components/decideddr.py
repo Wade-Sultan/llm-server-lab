@@ -34,7 +34,7 @@ class DDRSelection(dspy.Signature):
     budget_total: int = dspy.InputField(desc="Total build budget in USD")
     candidates: str = dspy.InputField(
         desc="JSON list with DDR generation options. Fields: ddr_gen, "
-             "avg_ram_price_usd, avg_cpu_price_usd, avg_mobo_price_usd, cpu_count"
+        "avg_ram_price_usd, avg_cpu_price_usd, avg_mobo_price_usd, cpu_count"
     )
 
     ddr_gen: str = dspy.OutputField(desc="'ddr4' or 'ddr5'")
@@ -43,7 +43,7 @@ class DDRSelection(dspy.Signature):
     )
     reconsideration_threshold: str = dspy.OutputField(
         desc="One sentence stating when the other DDR generation becomes worth considering. "
-             "Be specific — mention a dollar figure or use-case change."
+        "Be specific — mention a dollar figure or use-case change."
     )
 
 

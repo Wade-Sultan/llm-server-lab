@@ -33,10 +33,10 @@ from app.db.base import Base
 
 
 class BuildSessionStatus(str, enum.Enum):
-    RUNNING = "running"        # Pipeline started, not yet finished
-    COMPLETED = "completed"    # Pipeline finished all steps
-    ABANDONED = "abandoned"    # User left before the run resumed/finished
-    ERROR = "error"            # Pipeline raised
+    RUNNING = "running"  # Pipeline started, not yet finished
+    COMPLETED = "completed"  # Pipeline finished all steps
+    ABANDONED = "abandoned"  # User left before the run resumed/finished
+    ERROR = "error"  # Pipeline raised
 
 
 class BuildSession(Base):
@@ -194,7 +194,7 @@ class ModuleDecision(Base):
         Integer,
         nullable=False,
         doc="Bumped manually when the signature's input/output fields change "
-            "shape. Independent of pipeline_version",
+        "shape. Independent of pipeline_version",
     )
 
     candidate_set = Column(

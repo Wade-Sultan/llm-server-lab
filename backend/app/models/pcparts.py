@@ -1,12 +1,22 @@
-import uuid
 import enum
+import uuid
 
-from sqlalchemy import Boolean, Column, DateTime, String, Text, Integer, ForeignKey, Float
-from sqlalchemy.dialects.postgresql import UUID, ARRAY, JSONB
+from sqlalchemy import (
+    Boolean,
+    Column,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+)
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
 from app.db.base import Base
+
 
 class CPUBrand(str, enum.Enum):
     AMD = "amd"
@@ -95,8 +105,11 @@ class PCPart(Base):
     msrp_cents = Column(Integer, nullable=True)
     street_price_cents = Column(Integer, nullable=True)
     price_source = Column(String(20), nullable=True)
-    last_price_checked_at = Column(DateTime(timezone=True), nullable=True,
-                                   comment="When the pricing ETL last ran a SerpAPI check for this part")
+    last_price_checked_at = Column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="When the pricing ETL last ran a SerpAPI check for this part",
+    )
     used_market_viable = Column(Boolean, nullable=True, server_default="false")
 
     is_active = Column(Boolean, nullable=False, default=True, server_default="true")
@@ -152,16 +165,22 @@ class GPUChipset(Base):
     base_clock_mhz = Column(Integer, nullable=True)
     boost_clock_mhz = Column(Integer, nullable=True)
     has_ray_tracing = Column(Boolean, nullable=True)
-    cuda_cores = Column(Integer, nullable=True)      # Nvidia
-    tensor_cores = Column(Integer, nullable=True)    # Nvidia
+    cuda_cores = Column(Integer, nullable=True)  # Nvidia
+    tensor_cores = Column(Integer, nullable=True)  # Nvidia
     stream_processors = Column(Integer, nullable=True)  # AMD
-    matrix_cores = Column(Integer, nullable=True)    # AMD
+    matrix_cores = Column(Integer, nullable=True)  # AMD
     supported_features = Column(ARRAY(String), nullable=True)
     benchmark_scores = Column(JSONB, nullable=True)
 
-    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), nullable=False,
-                        server_default=func.now(), onupdate=func.now())
+    created_at = Column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
 
     variants = relationship("GPU", back_populates="chipset")
 
@@ -188,9 +207,15 @@ class PSUGroup(Base):
     pcie_16pin_connectors = Column(Integer, nullable=True)
     eps_connectors = Column(Integer, nullable=True)
 
-    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), nullable=False,
-                        server_default=func.now(), onupdate=func.now())
+    created_at = Column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
 
     variants = relationship("PSU", back_populates="group")
 
@@ -215,9 +240,15 @@ class RAMGroup(Base):
     voltage = Column(Float, nullable=True)
     is_ecc = Column(Boolean, nullable=True)
 
-    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), nullable=False,
-                        server_default=func.now(), onupdate=func.now())
+    created_at = Column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
 
     variants = relationship("RAMKit", back_populates="group")
 
@@ -243,9 +274,15 @@ class StorageGroup(Base):
     endurance_tbw = Column(Integer, nullable=True)
     rpm = Column(Integer, nullable=True)
 
-    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), nullable=False,
-                        server_default=func.now(), onupdate=func.now())
+    created_at = Column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
 
     variants = relationship("StorageDrive", back_populates="group")
 
@@ -264,12 +301,15 @@ class CPU(PCPart):
     socket = Column(String(30), nullable=False)
     tdp_watts = Column(Integer, nullable=False)
     has_igpu = Column(Boolean, nullable=False)
-    ddr_generation = Column(ARRAY(String), nullable=False) 
-    supported_features = Column(ARRAY(String), nullable=True) # e.g. ["avx2", "sse4.2", "avx512"] (for certain games)
+    ddr_generation = Column(ARRAY(String), nullable=False)
+    supported_features = Column(
+        ARRAY(String), nullable=True
+    )  # e.g. ["avx2", "sse4.2", "avx512"] (for certain games)
 
     # Validated in benchmarks.py
     benchmark_scores = Column(
-        JSONB, nullable=True,
+        JSONB,
+        nullable=True,
         doc='e.g. {"cinebench_r24_single": 2150, "cinebench_r24_multi": 14500, ...}',
     )
 
@@ -300,7 +340,6 @@ class CPU(PCPart):
     __mapper_args__ = {"polymorphic_identity": "cpu"}
 
 
-
 class CPUCooler(PCPart):
     __tablename__ = "cpu_coolers"
 
@@ -314,8 +353,8 @@ class CPUCooler(PCPart):
     supported_sockets = Column(ARRAY(String), nullable=False)
     cooler_type = Column(String(20), nullable=False)
     max_tdp_watts = Column(Integer, nullable=True)
-    height_mm = Column(Integer, nullable=True) # For air
-    radiator_size_mm = Column(Integer, nullable=True) # For liquid
+    height_mm = Column(Integer, nullable=True)  # For air
+    radiator_size_mm = Column(Integer, nullable=True)  # For liquid
 
     # Other
     fan_count = Column(Integer, nullable=True)
@@ -349,7 +388,7 @@ class Motherboard(PCPart):
     form_factor = Column(String(10), nullable=False)
     ddr_generation = Column(String(10), nullable=False)
     memory_slots = Column(Integer, nullable=False)
-    has_wifi = Column(Boolean, nullable=False) # User requirement
+    has_wifi = Column(Boolean, nullable=False)  # User requirement
     m2_slots = Column(Integer, nullable=True)
     m2_pcie_gen = Column(Integer, nullable=True)
 
@@ -540,9 +579,9 @@ class Case(PCPart):
     max_radiator_top_mm = Column(Integer, nullable=True)
     max_psu_length_mm = Column(Integer, nullable=True)
     included_fan_count = Column(Integer, nullable=True)
-    chamber_count= Column(Integer, nullable=True)
+    chamber_count = Column(Integer, nullable=True)
     front_panel_mesh = Column(Boolean, nullable=True)
-    color = Column(String(50), nullable=True) # User preference
+    color = Column(String(50), nullable=True)  # User preference
 
     # Other
     size = Column(String(20), nullable=False)

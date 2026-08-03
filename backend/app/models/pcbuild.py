@@ -30,12 +30,14 @@ class BuildComponentRole(str, enum.Enum):
     CASE = "case"
     FAN = "fan"
 
+
 class BuildStatus(str, enum.Enum):
-    DRAFT = "draft" # User is still in the configurator
-    RECOMMENDED = "recommended" # Pipeline finished — parts selected
-    PRICED = "priced" # Amazon pricing pipeline has run
-    FINALIZED = "finalized" # User confirmed the build
-    ORDERED = "ordered" # Parts purchased (future)
+    DRAFT = "draft"  # User is still in the configurator
+    RECOMMENDED = "recommended"  # Pipeline finished — parts selected
+    PRICED = "priced"  # Amazon pricing pipeline has run
+    FINALIZED = "finalized"  # User confirmed the build
+    ORDERED = "ordered"  # Parts purchased (future)
+
 
 REQUIRED_COMPONENT_BY_ROLE = {
     BuildComponentRole.CPU: True,
@@ -63,10 +65,16 @@ class PCBuild(Base):
     name = Column(String(255), nullable=False, server_default="Untitled Build")
     description = Column(Text, nullable=True)
 
-    owner_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True, index=True)
+    owner_id = Column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=True, index=True
+    )
 
     status = Column(
-        Enum(BuildStatus, name="build_status", values_callable=lambda e: [m.value for m in e]),
+        Enum(
+            BuildStatus,
+            name="build_status",
+            values_callable=lambda e: [m.value for m in e],
+        ),
         nullable=False,
         server_default="draft",
     )
@@ -153,7 +161,11 @@ class BuildPart(Base):
     )
 
     role = Column(
-        Enum(BuildComponentRole, name="build_component_role", values_callable=lambda e: [m.value for m in e]),
+        Enum(
+            BuildComponentRole,
+            name="build_component_role",
+            values_callable=lambda e: [m.value for m in e],
+        ),
         nullable=False,
     )
 

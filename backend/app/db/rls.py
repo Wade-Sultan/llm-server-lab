@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Literal
 
-from alembic import op as _op_type  # for type hints only
 from sqlalchemy import text
 
-
 # Data structures
+
 
 @dataclass
 class RLSPolicy:
@@ -26,6 +25,7 @@ class RLSPolicy:
         schema:     Schema the table lives in. Defaults to 'public'.
         permissive: Whether the policy is PERMISSIVE (default) or RESTRICTIVE.
     """
+
     name: str
     table: str
     command: Literal["ALL", "SELECT", "INSERT", "UPDATE", "DELETE"] = "ALL"
@@ -37,6 +37,7 @@ class RLSPolicy:
 
 
 # Enable / disable RLS
+
 
 def enable_rls(op, table: str, *, schema: str = "public", force: bool = True) -> None:
     qualified = f'"{schema}"."{table}"'
@@ -53,6 +54,7 @@ def disable_rls(op, table: str, *, schema: str = "public") -> None:
 
 
 # Add / drop policies
+
 
 def add_policy(op, policy: RLSPolicy) -> None:
     qualified = f'"{policy.schema}"."{policy.table}"'
@@ -83,6 +85,7 @@ def drop_policy(op, policy_name: str, table: str, *, schema: str = "public") -> 
 
 
 # Pre-built policy templates
+
 
 def owner_read_write_policy(
     table: str,

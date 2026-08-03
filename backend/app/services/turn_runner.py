@@ -137,25 +137,29 @@ def save_turn(
         ).scalar_one()
 
         for msg in messages[saved_count:]:
-            db.add(Message(
-                conversation_id=conv_uuid,
-                role=msg.role,
-                content=msg.content,
-            ))
+            db.add(
+                Message(
+                    conversation_id=conv_uuid,
+                    role=msg.role,
+                    content=msg.content,
+                )
+            )
 
         if assistant_text:
-            db.add(Message(
-                conversation_id=conv_uuid,
-                role="assistant",
-                content=assistant_text,
-                metadata_={"build": build_data} if build_data else None,
-            ))
+            db.add(
+                Message(
+                    conversation_id=conv_uuid,
+                    role="assistant",
+                    content=assistant_text,
+                    metadata_={"build": build_data} if build_data else None,
+                )
+            )
 
         # Roll this turn's OpenRouter spend into the conversation's running total.
         if turn_usage:
-            conversation.total_cost_usd = (conversation.total_cost_usd or Decimal(0)) + Decimal(
-                str(turn_usage.get("cost_usd") or 0)
-            )
+            conversation.total_cost_usd = (
+                conversation.total_cost_usd or Decimal(0)
+            ) + Decimal(str(turn_usage.get("cost_usd") or 0))
             conversation.total_tokens_in = (conversation.total_tokens_in or 0) + int(
                 turn_usage.get("tokens_in") or 0
             )
@@ -235,9 +239,17 @@ async def run_turn(
     TURNS_INFLIGHT.inc()
     try:
         await _run_turn(
-            turn_id, messages, user, conversation_id,
-            assistant_text, turn_usage, reached_recommendation,
-            build_data, build_key, ref_estimate_data, ref_estimate_key,
+            turn_id,
+            messages,
+            user,
+            conversation_id,
+            assistant_text,
+            turn_usage,
+            reached_recommendation,
+            build_data,
+            build_key,
+            ref_estimate_data,
+            ref_estimate_key,
         )
     finally:
         TURNS_INFLIGHT.dec()
@@ -286,10 +298,13 @@ async def _run_turn(
         raise
     except Exception:
         logger.exception("Chat pipeline error on turn %s", turn_id)
-        await turn_stream.emit(turn_id, {
-            "type": "token",
-            "text": "\n\nSomething went wrong generating your recommendation. Please try again.",
-        })
+        await turn_stream.emit(
+            turn_id,
+            {
+                "type": "token",
+                "text": "\n\nSomething went wrong generating your recommendation. Please try again.",
+            },
+        )
 
     # Buffer before persisting, so a crash in the commit leaves the turn
     # recoverable rather than lost.
@@ -301,20 +316,23 @@ async def _run_turn(
         TURN_COMMITS.labels(result="skipped").inc()
     if persistable:
         assert conversation_id is not None
-        await chat_buffer.save(conversation_id, {
-            "turn_id": turn_id,
-            "conversation_id": conversation_id,
-            "firebase_uid": user.get("uid", "") if user else "",
-            "firebase_email": user.get("email") if user else None,
-            "messages": [m.model_dump() for m in messages],
-            "assistant_text": assistant_text,
-            "turn_usage": turn_usage,
-            "reached_recommendation": reached_recommendation,
-            "build_data": build_data,
-            "build_key": build_key,
-            "ref_estimate_data": ref_estimate_data,
-            "ref_estimate_key": ref_estimate_key,
-        })
+        await chat_buffer.save(
+            conversation_id,
+            {
+                "turn_id": turn_id,
+                "conversation_id": conversation_id,
+                "firebase_uid": user.get("uid", "") if user else "",
+                "firebase_email": user.get("email") if user else None,
+                "messages": [m.model_dump() for m in messages],
+                "assistant_text": assistant_text,
+                "turn_usage": turn_usage,
+                "reached_recommendation": reached_recommendation,
+                "build_data": build_data,
+                "build_key": build_key,
+                "ref_estimate_data": ref_estimate_data,
+                "ref_estimate_key": ref_estimate_key,
+            },
+        )
 
         committed = await asyncio.get_running_loop().run_in_executor(
             None,

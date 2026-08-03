@@ -33,12 +33,12 @@ class Conversation(Base):
         nullable=False,
         index=True,
     )
-    
+
     build_id = Column(
-        UUID(as_uuid=True), 
-        ForeignKey("pc_builds.id", ondelete="SET NULL"), 
-        nullable=True, 
-        index=True
+        UUID(as_uuid=True),
+        ForeignKey("pc_builds.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
     )
 
     title = Column(String(255), nullable=True)
@@ -66,14 +66,14 @@ class Conversation(Base):
         nullable=False,
         server_default="{}",
         doc="Distinct OpenRouter model names used across this conversation's turns "
-            "(extraction, elicitation, recommendation)",
+        "(extraction, elicitation, recommendation)",
     )
     reached_recommendation = Column(
         Boolean,
         nullable=False,
         server_default="false",
         doc="True once this conversation produced a recommended build — used to "
-            "distinguish 'cost per completed build' from 'cost per chat'",
+        "distinguish 'cost per completed build' from 'cost per chat'",
     )
 
     # Resolved once (either as the budget-still-unknown price estimate, or
@@ -108,11 +108,10 @@ class Conversation(Base):
         "User",
         back_populates="conversations",
     )
-    
+
     messages = relationship(
         "Message",
         back_populates="conversation",
         cascade="all, delete-orphan",
         order_by="Message.created_at",
     )
-    

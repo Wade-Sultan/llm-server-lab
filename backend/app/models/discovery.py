@@ -31,10 +31,10 @@ from app.db.base import Base
 
 
 class DiscoveryRunType(str, enum.Enum):
-    HARDWARE = "hardware"      # scheduled source-monitoring run (monthly job)
-    AI_MODELS = "ai_models"    # scheduled Hugging Face Hub run (monthly job)
-    ON_DEMAND = "on_demand"    # admin-panel search button
-    SWEEP = "sweep"            # admin-panel category sweep (one row, N items)
+    HARDWARE = "hardware"  # scheduled source-monitoring run (monthly job)
+    AI_MODELS = "ai_models"  # scheduled Hugging Face Hub run (monthly job)
+    ON_DEMAND = "on_demand"  # admin-panel search button
+    SWEEP = "sweep"  # admin-panel category sweep (one row, N items)
 
 
 class DiscoveryRunStatus(str, enum.Enum):
@@ -75,7 +75,9 @@ class DiscoveryRun(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
 
     run_type = Column(Text, nullable=False)
-    status = Column(Text, nullable=False, server_default=DiscoveryRunStatus.RUNNING.value)
+    status = Column(
+        Text, nullable=False, server_default=DiscoveryRunStatus.RUNNING.value
+    )
 
     # Same git-SHA resolution as the dspy pipeline, so extraction quality can be
     # cohorted by code version when reviewing the queue.
@@ -92,7 +94,9 @@ class DiscoveryRun(Base):
     tokens_in = Column(Integer, nullable=True)
     tokens_out = Column(Integer, nullable=True)
 
-    started_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    started_at = Column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
     finished_at = Column(DateTime(timezone=True), nullable=True)
 
     items = relationship(
@@ -166,7 +170,9 @@ class DiscoveredItem(Base):
     validation_status = Column(Text, nullable=False)
     validation_errors = Column(JSONB, nullable=True)
 
-    review_status = Column(Text, nullable=False, server_default=ReviewStatus.PENDING.value)
+    review_status = Column(
+        Text, nullable=False, server_default=ReviewStatus.PENDING.value
+    )
     reviewed_at = Column(DateTime(timezone=True), nullable=True)
 
     # Audit links set on approval (chipset counterpart for gpu_chipset rows).
@@ -183,7 +189,9 @@ class DiscoveredItem(Base):
         index=True,
     )
 
-    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    created_at = Column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
 
     run = relationship("DiscoveryRun", back_populates="items")
 

@@ -6,17 +6,17 @@ import os
 import threading
 import time
 import uuid
-from typing import Any, AsyncIterator
+from collections.abc import AsyncIterator
+from typing import Any
 
 import openai
 
 from app.core.config import settings
+from app.core.db import AsyncSessionLocal
 from app.data.refbuilds import Build
 from app.schemas.chat import BuildProfile, BuildRequest, ChatMessage
-from app.services.resolver import resolve_build
 from app.services.chat_models import ChatModelConfig
-from app.core.db import AsyncSessionLocal
-
+from app.services.resolver import resolve_build
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +80,7 @@ def _merge_usage(total: dict, part: dict | None) -> None:
     if model and model not in total["models"]:
         total["models"].append(model)
 
+
 # ---------------------------------------------------------------------------
 # Client
 # ---------------------------------------------------------------------------
@@ -102,7 +103,7 @@ def _get_client() -> openai.AsyncOpenAI:
     if _client is None:
         api_key = settings.OPENROUTER_API_KEY
         if not api_key:
-            raise EnvironmentError("OPENROUTER_API_KEY is not set.")
+            raise OSError("OPENROUTER_API_KEY is not set.")
         _client = openai.AsyncOpenAI(
             api_key=api_key,
             base_url="https://openrouter.ai/api/v1",
@@ -129,8 +130,10 @@ def _get_extract_program():
         # configured it." The lock makes the init happen exactly once.
         with _extract_program_lock:
             if _extract_program is None:
+                from app.services.recommender.components.extractprofile import (
+                    load_program,
+                )
                 from app.services.recommender.dspy_pipeline import configure_dspy
-                from app.services.recommender.components.extractprofile import load_program
 
                 configure_dspy()
                 _extract_program = load_program()
@@ -159,13 +162,17 @@ def _capture_dspy_usage(prediction: Any, usage_sink: dict) -> None:
 
         lm = dspy.settings.lm
         history_entry = dict(lm.history[-1]) if getattr(lm, "history", None) else None
-        tokens_in, tokens_out, cost, model, _hash = extract_usage(prediction, history_entry)
-        usage_sink.update({
-            "tokens_in": tokens_in,
-            "tokens_out": tokens_out,
-            "cost_usd": cost,
-            "model": model,
-        })
+        tokens_in, tokens_out, cost, model, _hash = extract_usage(
+            prediction, history_entry
+        )
+        usage_sink.update(
+            {
+                "tokens_in": tokens_in,
+                "tokens_out": tokens_out,
+                "cost_usd": cost,
+                "model": model,
+            }
+        )
     except Exception:
         logger.debug("failed to capture dspy usage for extractprofile", exc_info=True)
 
@@ -279,8 +286,9 @@ def _format_build_context(
     """
     parts_text = "\n".join(
         f"  - {p['component']}: {p['brand']} {p['model']} "
-        f"(~${p['approx_price'] / 100:.0f})" if p.get("approx_price") is not None else
-        f"  - {p['component']}: {p['brand']} {p['model']}"
+        f"(~${p['approx_price'] / 100:.0f})"
+        if p.get("approx_price") is not None
+        else f"  - {p['component']}: {p['brand']} {p['model']}"
         for p in build["parts"]
     )
     return f"""\
@@ -325,10 +333,12 @@ async def stream_recommendation(
 
     api_messages: list[dict] = [{"role": "system", "content": _RECOMMEND_SYSTEM}]
     for msg in messages:
-        api_messages.append({
-            "role": msg.role if msg.role in ("user", "assistant") else "user",
-            "content": msg.content,
-        })
+        api_messages.append(
+            {
+                "role": msg.role if msg.role in ("user", "assistant") else "user",
+                "content": msg.content,
+            }
+        )
     api_messages.append({"role": "user", "content": context})
 
     stream = await client.chat.completions.create(
@@ -386,9 +396,11 @@ exactly what's still missing below, so just ask about that.
 # things like "the build recommender will be back with your build").
 def _missing_fields(profile: BuildProfile) -> list[str]:
     if profile.primary_use == "unknown":
-        return ["their primary use case (gaming, streaming, video editing, "
-                "3D rendering, AI/ML, software development, music production, "
-                "or general productivity)"]
+        return [
+            "their primary use case (gaming, streaming, video editing, "
+            "3D rendering, AI/ML, software development, music production, "
+            "or general productivity)"
+        ]
 
     missing: list[str] = []
     use = profile.primary_use
@@ -399,7 +411,9 @@ def _missing_fields(profile: BuildProfile) -> list[str]:
             missing.append("target frame rate")
     elif use == "streaming":
         if profile.streaming_style is None:
-            missing.append("whether they stream while gaming or camera/IRL content only")
+            missing.append(
+                "whether they stream while gaming or camera/IRL content only"
+            )
         elif profile.streaming_style == "while_gaming":
             if profile.gaming_resolution is None:
                 missing.append("target gaming resolution")
@@ -407,8 +421,13 @@ def _missing_fields(profile: BuildProfile) -> list[str]:
                 missing.append("target frame rate")
     elif use == "ai":
         if profile.ai_workload is None:
-            missing.append("the AI workload (running models, training/fine-tuning, or image generation)")
-        elif profile.ai_workload in ("inference", "training") and profile.ai_model_scale is None:
+            missing.append(
+                "the AI workload (running models, training/fine-tuning, or image generation)"
+            )
+        elif (
+            profile.ai_workload in ("inference", "training")
+            and profile.ai_model_scale is None
+        ):
             missing.append("roughly how large the models are")
     elif use == "video_editing":
         if profile.editing_resolution is None:
@@ -418,7 +437,9 @@ def _missing_fields(profile: BuildProfile) -> list[str]:
             missing.append("which 3D software/renderer they work in")
     elif use in ("software_dev", "music_production"):
         if profile.workload_intensity is None:
-            missing.append("how heavy the workload is (codebase size/VMs, or track/plugin counts)")
+            missing.append(
+                "how heavy the workload is (codebase size/VMs, or track/plugin counts)"
+            )
 
     if profile.budget_tier == "unknown":
         missing.append("budget expectations")
@@ -468,10 +489,12 @@ async def stream_elicitation(
 
     api_messages: list[dict] = [{"role": "system", "content": system_content}]
     for msg in messages:
-        api_messages.append({
-            "role": msg.role if msg.role in ("user", "assistant") else "user",
-            "content": msg.content,
-        })
+        api_messages.append(
+            {
+                "role": msg.role if msg.role in ("user", "assistant") else "user",
+                "content": msg.content,
+            }
+        )
 
     stream = await client.chat.completions.create(
         model=ChatModelConfig.get_elicit_model(),
@@ -497,6 +520,7 @@ async def stream_elicitation(
 # This is a hard, code-level decision over structured fields the model
 # populates — the model never decides readiness itself.
 
+
 def is_profile_complete(profile: BuildProfile) -> bool:
     """
     A profile is complete once primary_use and budget_tier have both been
@@ -519,12 +543,17 @@ def is_profile_complete(profile: BuildProfile) -> bool:
         if profile.streaming_style is None:
             return False
         if profile.streaming_style == "while_gaming":
-            return profile.gaming_resolution is not None and profile.gaming_fps is not None
+            return (
+                profile.gaming_resolution is not None and profile.gaming_fps is not None
+            )
         return True
     if use == "ai":
         if profile.ai_workload is None:
             return False
-        if profile.ai_workload in ("inference", "training") and profile.ai_model_scale is None:
+        if (
+            profile.ai_workload in ("inference", "training")
+            and profile.ai_model_scale is None
+        ):
             return False
         return True
     if use == "video_editing":
@@ -548,7 +577,9 @@ async def _resolve_build_cached(
     db,
 ) -> tuple[str, Build]:
     """Resolve a build with in-memory caching to avoid repeated DB queries."""
-    cache_key = f"{profile.primary_use}:{profile.gaming_resolution}:{profile.budget_tier}"
+    cache_key = (
+        f"{profile.primary_use}:{profile.gaming_resolution}:{profile.budget_tier}"
+    )
     if cache_key in _resolve_cache:
         return _resolve_cache[cache_key]
 
@@ -658,7 +689,9 @@ async def _assemble_dspy_build(state: Any, db) -> dict:
         part = await get_part_by_name(db, name)
         # Grouped parts (GPU/PSU/RAM/Storage) carry price on their group, not the
         # exact pc_parts row — resolve_part_price_cents handles both.
-        price_cents = await resolve_part_price_cents(db, part) if part is not None else None
+        price_cents = (
+            await resolve_part_price_cents(db, part) if part is not None else None
+        )
         if price_cents is not None:
             total_cents += price_cents
         resolved.append((component, name, part, price_cents))
@@ -734,7 +767,9 @@ async def _run_dspy_build(
     recorder = BuildRecorder(request, PIPELINE_VERSION)
 
     def _progress(step: str, message: str) -> None:
-        progress_queue.put_nowait({"type": "progress", "step": step, "message": message})
+        progress_queue.put_nowait(
+            {"type": "progress", "step": step, "message": message}
+        )
 
     try:
         async with AsyncSessionLocal() as db:
@@ -742,10 +777,14 @@ async def _run_dspy_build(
                 request, db, progress_callback=_progress, recorder=recorder
             )
             if state.error:
-                logger.warning("DSPy pipeline failed; using reference build: %s", state.error)
+                logger.warning(
+                    "DSPy pipeline failed; using reference build: %s", state.error
+                )
                 return None
             if not state.case_options or not state.case_options[0].get("name"):
-                logger.warning("DSPy pipeline produced no case options; using reference build")
+                logger.warning(
+                    "DSPy pipeline produced no case options; using reference build"
+                )
                 recorder.finish(BuildSessionStatus.ERROR)
                 return None
 
@@ -753,9 +792,13 @@ async def _run_dspy_build(
             # Both builds succeeded far enough to record together: attach the
             # reference build before post_case finishes (flushes) the recorder.
             await _attach_reference_build(recorder, ref_task)
-            state = await run_pipeline_post_case(state, db, case_name, recorder=recorder)
+            state = await run_pipeline_post_case(
+                state, db, case_name, recorder=recorder
+            )
             if state.error:
-                logger.warning("DSPy post-case step failed; using reference build: %s", state.error)
+                logger.warning(
+                    "DSPy post-case step failed; using reference build: %s", state.error
+                )
                 return None
 
             return await _assemble_dspy_build(state, db)
@@ -770,7 +813,9 @@ async def _run_dspy_build(
         progress_queue.put_nowait(_PIPELINE_DONE)
 
 
-async def _load_cached_reference_build(conversation_id: str | None) -> tuple[str, Build] | None:
+async def _load_cached_reference_build(
+    conversation_id: str | None,
+) -> tuple[str, Build] | None:
     """Load the reference build already cached on this conversation, if any.
 
     Returns None when there's no conversation_id, it's not a real UUID (guest
@@ -789,7 +834,11 @@ async def _load_cached_reference_build(conversation_id: str | None) -> tuple[str
 
     async with AsyncSessionLocal() as db:
         conversation = await db.get(Conversation, conv_uuid)
-    if conversation and conversation.reference_build_key and conversation.reference_build:
+    if (
+        conversation
+        and conversation.reference_build_key
+        and conversation.reference_build
+    ):
         return conversation.reference_build_key, conversation.reference_build
     return None
 
@@ -816,7 +865,9 @@ async def _get_reference_build(
 
     resolve_profile = profile
     if assumed_budget_tier is not None:
-        resolve_profile = profile.model_copy(update={"budget_tier": assumed_budget_tier})
+        resolve_profile = profile.model_copy(
+            update={"budget_tier": assumed_budget_tier}
+        )
 
     async with AsyncSessionLocal() as db:
         build_key, build = await _resolve_build_cached(resolve_profile, db)
@@ -841,6 +892,7 @@ def _build_payload(build: Build, profile: BuildProfile) -> dict:
 # ---------------------------------------------------------------------------
 # Public API — orchestrate the full flow
 # ---------------------------------------------------------------------------
+
 
 async def run_chat_turn(
     messages: list[ChatMessage],
@@ -872,7 +924,13 @@ async def run_chat_turn(
     this turn's calls still group together.
     """
     session_id = conversation_id or str(uuid.uuid4())
-    turn_usage = {"tokens_in": 0, "tokens_out": 0, "cost_usd": 0.0, "llm_call_count": 0, "models": []}
+    turn_usage = {
+        "tokens_in": 0,
+        "tokens_out": 0,
+        "cost_usd": 0.0,
+        "llm_call_count": 0,
+        "models": [],
+    }
 
     # Extract the structured profile up front — the model only ever populates
     # fields here. Whether that's "enough" to recommend is then a hard,
@@ -880,7 +938,9 @@ async def run_chat_turn(
     # No progress event yet: the frontend treats any "progress" event as
     # confirmation we're on the recommend path, so it can't fire until we know.
     extract_usage_sink: dict = {}
-    profile = await extract_profile(messages, usage_sink=extract_usage_sink, session_id=session_id)
+    profile = await extract_profile(
+        messages, usage_sink=extract_usage_sink, session_id=session_id
+    )
     _merge_usage(turn_usage, extract_usage_sink)
 
     if not is_profile_complete(profile):
@@ -974,7 +1034,9 @@ async def run_chat_turn(
                     "data": _build_payload(ref_build, profile),
                 }
         except Exception:
-            logger.debug("reference build task errored (already recorded/ignored)", exc_info=True)
+            logger.debug(
+                "reference build task errored (already recorded/ignored)", exc_info=True
+            )
     else:
         build_key, build, ref_cached = await ref_task
         if not ref_cached:
@@ -990,11 +1052,20 @@ async def run_chat_turn(
         "data": _build_payload(build, profile),
     }
 
-    yield {"type": "progress", "step": "presenting", "message": "Preparing your recommendation…"}
+    yield {
+        "type": "progress",
+        "step": "presenting",
+        "message": "Preparing your recommendation…",
+    }
 
     recommend_usage_sink: dict = {}
     async for chunk in stream_recommendation(
-        messages, profile, build_key, build, usage_sink=recommend_usage_sink, session_id=session_id
+        messages,
+        profile,
+        build_key,
+        build,
+        usage_sink=recommend_usage_sink,
+        session_id=session_id,
     ):
         yield {"type": "token", "text": chunk}
     _merge_usage(turn_usage, recommend_usage_sink)

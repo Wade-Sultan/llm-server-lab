@@ -34,10 +34,12 @@ class Game(Base):
     )
 
     title = Column(String(255), nullable=False, unique=True)
-    slug = Column(String(255), nullable=False, unique=True) # e.g. "cyberpunk-2077"
+    slug = Column(String(255), nullable=False, unique=True)  # e.g. "cyberpunk-2077"
 
-    genre = Column(String(50), nullable=True) # e.g. "aaa_open_world", "competitive_fps"
-    store_url = Column(Text, nullable=True) # Steam, Epic, etc.
+    genre = Column(
+        String(50), nullable=True
+    )  # e.g. "aaa_open_world", "competitive_fps"
+    store_url = Column(Text, nullable=True)  # Steam, Epic, etc.
     image_url = Column(Text, nullable=True)
 
     # This is to record features that are absolutely necessary for the title to run at all
@@ -49,11 +51,15 @@ class Game(Base):
     requirements_notes = Column(Text, nullable=True)
 
     created_at = Column(
-        DateTime(timezone=True), nullable=False, server_default=func.now(),
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
     )
     updated_at = Column(
-        DateTime(timezone=True), nullable=False,
-        server_default=func.now(), onupdate=func.now(),
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
     )
 
     minimum_parts = relationship(
@@ -108,10 +114,16 @@ class GameMinimumPart(Base):
     min_ram_gb = Column(Integer, nullable=True)
 
     created_at = Column(
-        DateTime(timezone=True), nullable=False, server_default=func.now(),
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
     )
-    updated_at = Column(DateTime(timezone=True), nullable=False,
-    server_default=func.now(), onupdate=func.now())
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
 
     game = relationship("Game", back_populates="minimum_parts")
     part = relationship("PCPart")

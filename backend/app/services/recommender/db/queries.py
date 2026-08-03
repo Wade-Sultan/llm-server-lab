@@ -31,6 +31,7 @@ def _price(part) -> float | None:
 # Serializers — one per component type.
 # ---------------------------------------------------------------------------
 
+
 def _serialize_cpu(p: CPU) -> dict:
     return {
         "name": p.name,
@@ -80,6 +81,7 @@ def _serialize_motherboard(p: Motherboard) -> dict:
 # the affordable exacts into one row per group, adding the cheapest board's price
 # as `starting_price_usd` (what the resolver will actually buy).
 
+
 def _serialize_gpu_chipset(g) -> dict:  # g: GPUChipset
     return {
         "chipset": g.name,
@@ -125,7 +127,9 @@ def _serialize_psu_group(g) -> dict:  # g: PSUGroup
     }
 
 
-def _aggregate_groups(exacts: list, group_of, serialize_group, extra=None) -> list[dict]:
+def _aggregate_groups(
+    exacts: list, group_of, serialize_group, extra=None
+) -> list[dict]:
     """Collapse affordable exacts into one candidate row per group. Price lives on
     the group now (surfaced by serialize_group as street_price_usd), so this just
     dedupes by group, ORs `used_market_viable` across the group's exacts, and
@@ -144,10 +148,15 @@ def _aggregate_groups(exacts: list, group_of, serialize_group, extra=None) -> li
                 extra(row, e)
             by_id[g.id] = row
             continue
-        row["used_market_viable"] = row["used_market_viable"] or bool(e.used_market_viable)
+        row["used_market_viable"] = row["used_market_viable"] or bool(
+            e.used_market_viable
+        )
     return sorted(
         by_id.values(),
-        key=lambda r: (r.get("street_price_usd") is None, r.get("street_price_usd") or 0),
+        key=lambda r: (
+            r.get("street_price_usd") is None,
+            r.get("street_price_usd") or 0,
+        ),
     )
 
 
@@ -183,6 +192,7 @@ def _to_json(parts: list, serializer) -> str:
 # Public query functions
 # ---------------------------------------------------------------------------
 
+
 async def get_cpu_candidates(
     session: AsyncSession,
     budget_ceiling_usd: int,
@@ -197,9 +207,25 @@ async def get_cooler_candidates(
     cpu_tdp_w: int,
     cpu_socket: str,
     budget_ceiling_usd: int,
-    form_factor: str,
+    # ACCEPTED AND IGNORED — a known gap, not a leftover parameter.
+    # crud.get_cooler_candidates has no form-factor filter, so nothing narrows
+    # the candidate set by size and an ITX build can be offered a cooler that
+    # does not physically fit its case.
+    #
+    # Guaranteed to be a concrete size ("atx"/"matx"/"itx"), never
+    # "no_preference": _step_cooler resolves it through _effective_form_factor
+    # before calling in. So whoever implements the filter can use this value
+    # directly rather than having to decide what an absent preference means.
+    #
+    # Closing the gap needs a height/clearance constraint in the CRUD query, and
+    # a max cooler height per case (or per form factor) that the schema does not
+    # currently carry. Left plumbed rather than removed so the call site does not
+    # have to change when it lands.
+    form_factor: str,  # noqa: ARG001
 ) -> str:
-    parts = await crud.get_cooler_candidates(session, cpu_tdp_w, cpu_socket, budget_ceiling_usd)
+    parts = await crud.get_cooler_candidates(
+        session, cpu_tdp_w, cpu_socket, budget_ceiling_usd
+    )
     return _to_json(parts, _serialize_cooler)
 
 
@@ -236,7 +262,9 @@ async def get_storage_candidates(
     mobo_sata_ports: int,
 ) -> str:
     """One candidate per storage group (deduped); exact drive resolved after."""
-    exacts = await crud.get_storage_candidates(session, budget_ceiling_usd, mobo_m2_slots, mobo_sata_ports)
+    exacts = await crud.get_storage_candidates(
+        session, budget_ceiling_usd, mobo_m2_slots, mobo_sata_ports
+    )
     rows = _aggregate_groups(exacts, lambda e: e.group, _serialize_storage_group)
     return json.dumps(rows, indent=None)
 
@@ -252,7 +280,9 @@ async def get_gpu_chipset_candidates(
     chipset; `brand` from a representative board (it lives on the exact); and
     starting_price_usd is the cheapest board (what the resolver will buy)."""
     # Length can't be constrained yet (the case isn't chosen), so pass None.
-    exacts = await crud.get_gpu_candidates(session, budget_ceiling_usd, None, preferences)
+    exacts = await crud.get_gpu_candidates(
+        session, budget_ceiling_usd, None, preferences
+    )
     rows = _aggregate_groups(
         exacts,
         lambda e: e.chipset,
@@ -269,7 +299,9 @@ async def get_psu_candidates(
     psu_form_factor: str,
 ) -> str:
     """One candidate per PSU group (deduped); exact unit resolved after."""
-    exacts = await crud.get_psu_candidates(session, min_wattage, budget_ceiling_usd, psu_form_factor)
+    exacts = await crud.get_psu_candidates(
+        session, min_wattage, budget_ceiling_usd, psu_form_factor
+    )
     rows = _aggregate_groups(exacts, lambda e: e.group, _serialize_psu_group)
     return json.dumps(rows, indent=None)
 
@@ -280,7 +312,9 @@ async def get_case_candidates(
     mobo_form_factor: str,
     psu_form_factor: str,
 ) -> str:
-    parts = await crud.get_case_candidates(session, budget_ceiling_usd, mobo_form_factor, psu_form_factor)
+    parts = await crud.get_case_candidates(
+        session, budget_ceiling_usd, mobo_form_factor, psu_form_factor
+    )
     return _to_json(parts, _serialize_case)
 
 

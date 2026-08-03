@@ -3,9 +3,9 @@ import logging
 import os
 
 import firebase_admin
-from firebase_admin import auth, credentials
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from firebase_admin import auth
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +22,9 @@ if not firebase_admin._apps:
         "initializing firebase admin",
         extra={"firebase_project_id": project_id or "<application-default>"},
     )
-    firebase_admin.initialize_app(options={"projectId": project_id} if project_id else None)
+    firebase_admin.initialize_app(
+        options={"projectId": project_id} if project_id else None
+    )
 
 bearer_scheme = HTTPBearer(auto_error=True)
 bearer_scheme_optional = HTTPBearer(auto_error=False)

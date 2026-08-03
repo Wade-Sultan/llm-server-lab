@@ -37,7 +37,9 @@ async def run() -> int:
         targets = await crud.get_incomplete_items(db, limit=_MAX_ITEMS)
 
     if not targets:
-        logger.info("discovery gap-fill: nothing to do", extra={"max_items": _MAX_ITEMS})
+        logger.info(
+            "discovery gap-fill: nothing to do", extra={"max_items": _MAX_ITEMS}
+        )
         return 0
 
     logger.info(

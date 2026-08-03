@@ -125,9 +125,7 @@ async def tail(
 
     while idle_rounds < max_idle_rounds:
         try:
-            resp = await client.xread(
-                {key: last_id}, count=200, block=idle_timeout_ms
-            )
+            resp = await client.xread({key: last_id}, count=200, block=idle_timeout_ms)
         except (RedisError, OSError):
             # Ends the SSE response rather than erroring it. The client already
             # knows how to reconnect with Last-Event-ID, and it holds the text
@@ -187,7 +185,9 @@ async def claim(turn_id: str, owner: str, ttl_s: int) -> bool:
     if client is None:
         return True
     try:
-        return bool(await client.set(f"chat:claim:{{{turn_id}}}", owner, nx=True, ex=ttl_s))
+        return bool(
+            await client.set(f"chat:claim:{{{turn_id}}}", owner, nx=True, ex=ttl_s)
+        )
     except (RedisError, OSError):
         logger.warning("turn_stream claim failed for %s", turn_id, exc_info=True)
         return True
@@ -206,7 +206,9 @@ async def release_claim(turn_id: str) -> None:
     try:
         await client.delete(f"chat:claim:{{{turn_id}}}")
     except (RedisError, OSError):
-        logger.warning("turn_stream claim release failed for %s", turn_id, exc_info=True)
+        logger.warning(
+            "turn_stream claim release failed for %s", turn_id, exc_info=True
+        )
 
 
 async def exists(turn_id: str) -> bool:

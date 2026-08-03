@@ -1,15 +1,19 @@
 import uuid
 from datetime import datetime
+from typing import Any, Literal
+
 from pydantic import BaseModel, ConfigDict, Field
-from typing import Any, Callable, Literal
+
 
 class ChatMessage(BaseModel):
-    role: str # User or Assistant
+    role: str  # User or Assistant
     content: str
+
 
 class ChatRequest(BaseModel):
     messages: list[ChatMessage]
     conversation_id: str | None = None
+
 
 class ConversationSummary(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -20,6 +24,7 @@ class ConversationSummary(BaseModel):
     updated_at: datetime
     message_count: int
 
+
 class MessageOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -29,6 +34,7 @@ class MessageOut(BaseModel):
     created_at: datetime
     metadata: dict | None = None
 
+
 class ConversationDetail(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -37,22 +43,24 @@ class ConversationDetail(BaseModel):
     created_at: datetime
     messages: list[MessageOut]
 
+
 class BuildProfile(BaseModel):
     # "gaming" | "streaming" | "video_editing" | "3d_rendering" | "ai"
     # | "software_dev" | "music_production" | "general"
     primary_use: str
-    gaming_resolution: str | None = None   # "1080p" | "1440p" | "4k"
-    gaming_fps: str | None = None          # "60" | "120" | "144" | "240"
-    streaming_style: str | None = None     # "while_gaming" | "camera_only"
-    ai_workload: str | None = None         # "inference" | "training" | "image_gen"
-    ai_model_scale: str | None = None      # "small" | "medium" | "large"
+    gaming_resolution: str | None = None  # "1080p" | "1440p" | "4k"
+    gaming_fps: str | None = None  # "60" | "120" | "144" | "240"
+    streaming_style: str | None = None  # "while_gaming" | "camera_only"
+    ai_workload: str | None = None  # "inference" | "training" | "image_gen"
+    ai_model_scale: str | None = None  # "small" | "medium" | "large"
     editing_resolution: str | None = None  # "1080p" | "4k" | "6k_plus"
     rendering_software: str | None = None  # free text, e.g. "Blender"
     workload_intensity: str | None = None  # "light" | "moderate" | "heavy"
-    budget_tier: str        # "entry" | "mid" | "high" | "elite"
+    budget_tier: str  # "entry" | "mid" | "high" | "elite"
     games: list[str] = []
     workloads: list[str] = []
     notes: str = ""
+
 
 class ChatResponse(BaseModel):
     reply: str
@@ -60,14 +68,18 @@ class ChatResponse(BaseModel):
     build: dict[str, Any] | None = None  # full build object when ready
     build_key: str | None = None
 
+
 class UserPreferences(BaseModel):
     """Optional high-level preferences that sit outside the per-use-case Q&A."""
+
     preferred_brand_cpu: Literal["amd", "intel", "no_preference"] = "no_preference"
     preferred_brand_gpu: Literal["nvidia", "amd", "no_preference"] = "no_preference"
     form_factor: Literal["atx", "matx", "itx", "no_preference"] = "no_preference"
     rgb_lighting: bool = False
     wifi_required: bool = False
-    color_theme: str | None = Field(None, description="e.g. 'black', 'white', 'black & red'")
+    color_theme: str | None = Field(
+        None, description="e.g. 'black', 'white', 'black & red'"
+    )
 
 
 class BuildRequest(BaseModel):
@@ -78,10 +90,11 @@ class BuildRequest(BaseModel):
     are either a single string (single-select) or a list of strings
     (multi-select), mirroring the React state.
     """
+
     use_cases: list[str] = Field(
         ...,
         description="Selected use-case keys: gaming, streaming, creator, rendering, "
-                    "aiml, dev, audio, productivity, nas",
+        "aiml, dev, audio, productivity, nas",
     )
     budget_usd: int = Field(..., description="Total build budget in USD")
     preferences: UserPreferences = Field(default_factory=UserPreferences)
@@ -93,6 +106,7 @@ class BuildRequest(BaseModel):
 
 class PartRecommendation(BaseModel):
     """A recommended component with pricing slots for downstream enrichment."""
+
     name: str = Field(..., description="Full product name")
     category: str = Field(..., description="Component category, e.g. 'CPU'")
     reason: str = Field(..., description="Why this part was chosen")
@@ -103,6 +117,7 @@ class PartRecommendation(BaseModel):
 
 class BuildRecommendation(BaseModel):
     """Complete build assembled by the pipeline."""
+
     cpu: PartRecommendation
     cpu_cooler: PartRecommendation
     motherboard: PartRecommendation
@@ -117,8 +132,15 @@ class BuildRecommendation(BaseModel):
 
     def compute_total_price(self) -> float | None:
         """Sum part prices. Returns None if any part is still unpriced."""
-        parts = [self.cpu, self.cpu_cooler, self.motherboard, self.ram,
-                 self.storage, self.case, self.psu]
+        parts = [
+            self.cpu,
+            self.cpu_cooler,
+            self.motherboard,
+            self.ram,
+            self.storage,
+            self.case,
+            self.psu,
+        ]
         optional = [p for p in [self.gpu, self.fans] if p is not None]
         all_parts = parts + optional
         if any(p.price_usd is None for p in all_parts):

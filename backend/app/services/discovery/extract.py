@@ -116,8 +116,16 @@ class AIModelExtraction(BaseModel):
     name: Sourced[str]
     family: Sourced[
         Literal[
-            "llm", "multimodal", "image_gen", "video_gen", "speech",
-            "audio_gen", "vision", "embedding", "classical", "rl",
+            "llm",
+            "multimodal",
+            "image_gen",
+            "video_gen",
+            "speech",
+            "audio_gen",
+            "vision",
+            "embedding",
+            "classical",
+            "rl",
         ]
     ]
     params_billions: Sourced[float]
@@ -166,7 +174,10 @@ def _user_content(doc: FetchedDoc, instruction: str) -> str | list[dict[str, Any
     if doc.kind == "markdown":
         return f"{header}\n\nPage content (markdown):\n\n{doc.text}"
     parts: list[dict[str, Any]] = [
-        {"type": "text", "text": f"{header}\n\nThe source is a PDF spec sheet, rasterized below."}
+        {
+            "type": "text",
+            "text": f"{header}\n\nThe source is a PDF spec sheet, rasterized below.",
+        }
     ]
     parts.extend(
         {"type": "image_url", "image_url": {"url": u}} for u in (doc.images or [])
@@ -188,7 +199,10 @@ async def extract_from_source(
     client = _get_client()
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": _SYSTEM_PROMPT},
-        {"role": "user", "content": _user_content(doc, f"Product to extract: {target}")},
+        {
+            "role": "user",
+            "content": _user_content(doc, f"Product to extract: {target}"),
+        },
     ]
 
     for attempt in range(2):
@@ -211,11 +225,15 @@ async def extract_from_source(
                 logger.warning(
                     "discovery: extraction from %s hit the %d-token output cap "
                     "(attempt %d) — raise _MAX_OUTPUT_TOKENS if this recurs",
-                    doc.url, _MAX_OUTPUT_TOKENS, attempt + 1,
+                    doc.url,
+                    _MAX_OUTPUT_TOKENS,
+                    attempt + 1,
                 )
             logger.warning(
                 "discovery: invalid extraction from %s (attempt %d): %s",
-                doc.url, attempt + 1, exc,
+                doc.url,
+                attempt + 1,
+                exc,
             )
             messages.append({"role": "assistant", "content": raw})
             messages.append(
@@ -247,8 +265,8 @@ class CandidateNames(BaseModel):
 # differ by design: one wants the silicon, the other the board-partner SKU.
 _CATEGORY_NOUNS = {
     "cpu": "desktop CPU models",
-    "gpu_chipset": "GPU chipsets (the silicon, e.g. \"RTX 5080\" — not board-partner cards)",
-    "gpu_variant": "board-partner graphics cards (e.g. \"ASUS ROG Astral RTX 5080 OC\")",
+    "gpu_chipset": 'GPU chipsets (the silicon, e.g. "RTX 5080" — not board-partner cards)',
+    "gpu_variant": 'board-partner graphics cards (e.g. "ASUS ROG Astral RTX 5080 OC")',
 }
 
 # A roundup listing more than this is a spec database or a category index, not
@@ -294,7 +312,10 @@ async def extract_candidate_names(
         model=ChatModelConfig.get_discovery_extract_model(),
         messages=[
             {"role": "system", "content": _SWEEP_SYSTEM_PROMPT},
-            {"role": "user", "content": _user_content(doc, f"List the {noun} on this page.")},
+            {
+                "role": "user",
+                "content": _user_content(doc, f"List the {noun} on this page."),
+            },
         ],
         response_format=_response_format(CandidateNames),
         temperature=0,

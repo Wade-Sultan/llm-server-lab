@@ -19,19 +19,20 @@ from app.db.base import Base
 
 
 class SoftwareCategory(str, enum.Enum):
-    CREATIVE = "creative" # Premiere, Resolve, Blender, etc.
-    PRODUCTIVITY = "productivity" # Office, browsers, IDEs
-    AI_ML = "ai_ml" # PyTorch, TensorFlow, llama.cpp
-    DEVELOPMENT = "development" # Compilers, Docker, local LLMs
-    STREAMING = "streaming" # OBS, vMix
+    CREATIVE = "creative"  # Premiere, Resolve, Blender, etc.
+    PRODUCTIVITY = "productivity"  # Office, browsers, IDEs
+    AI_ML = "ai_ml"  # PyTorch, TensorFlow, llama.cpp
+    DEVELOPMENT = "development"  # Compilers, Docker, local LLMs
+    STREAMING = "streaming"  # OBS, vMix
 
 
 class GpuImportance(str, enum.Enum):
     """How much a discrete GPU matters for a given software + tier."""
-    REQUIRED = "required" # Won't run / unusable without one
-    ACCELERATED = "accelerated" # Runs on CPU but massively benefits from GPU
-    OPTIONAL = "optional" # Minor benefit at best
-    IRRELEVANT = "irrelevant" # Pure CPU workload
+
+    REQUIRED = "required"  # Won't run / unusable without one
+    ACCELERATED = "accelerated"  # Runs on CPU but massively benefits from GPU
+    OPTIONAL = "optional"  # Minor benefit at best
+    IRRELEVANT = "irrelevant"  # Pure CPU workload
 
 
 class Software(Base):
@@ -64,11 +65,15 @@ class Software(Base):
     notes = Column(Text, nullable=True)
 
     created_at = Column(
-        DateTime(timezone=True), nullable=False, server_default=func.now(),
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
     )
     updated_at = Column(
-        DateTime(timezone=True), nullable=False,
-        server_default=func.now(), onupdate=func.now(),
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
     )
 
     tiers = relationship(
@@ -104,8 +109,8 @@ class SoftwareTier(Base):
         index=True,
     )
 
-    name = Column(String(100), nullable=False) # "4K editing"
-    slug = Column(String(100), nullable=False) # "4k-editing"
+    name = Column(String(100), nullable=False)  # "4K editing"
+    slug = Column(String(100), nullable=False)  # "4k-editing"
     sort_order = Column(Integer, nullable=False, default=0)
 
     # Hardware guidance
@@ -125,9 +130,10 @@ class SoftwareTier(Base):
     # CPU-side: core count / thread count guidance
     min_cores = Column(Integer, nullable=True)
     prefers_single_thread = Column(
-        Boolean, nullable=True,
+        Boolean,
+        nullable=True,
         comment="True if workload is latency-bound (IDE, light tasks); "
-                "False/NULL if it scales with core count",
+        "False/NULL if it scales with core count",
     )
 
     extra_requirements = Column(JSONB, nullable=True)
@@ -135,10 +141,16 @@ class SoftwareTier(Base):
     notes = Column(Text, nullable=True)
 
     created_at = Column(
-        DateTime(timezone=True), nullable=False, server_default=func.now(),
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
     )
-    updated_at = Column(DateTime(timezone=True), nullable=False,
-    server_default=func.now(), onupdate=func.now())
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
 
     software = relationship("Software", back_populates="tiers")
     minimum_parts = relationship(
@@ -186,10 +198,16 @@ class SoftwareMinimumPart(Base):
     published_name = Column(String(255), nullable=True)
 
     created_at = Column(
-        DateTime(timezone=True), nullable=False, server_default=func.now(),
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
     )
-    updated_at = Column(DateTime(timezone=True), nullable=False,
-    server_default=func.now(), onupdate=func.now())
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
 
     tier = relationship("SoftwareTier", back_populates="minimum_parts")
     part = relationship("PCPart")

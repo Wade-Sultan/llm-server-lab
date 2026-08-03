@@ -45,7 +45,9 @@ class BuildStatusProvider(StatusMessageProvider):
     skipped by StatusStreamingCallback.
     """
 
-    def module_start_status_message(self, instance: Any, inputs: dict[str, Any]) -> str | None:
+    def module_start_status_message(
+        self, instance: Any, inputs: dict[str, Any]
+    ) -> str | None:
         label = _COMPONENT_LABELS.get(type(instance).__name__)
         if not label:
             return None
@@ -66,7 +68,9 @@ class BuildStatusProvider(StatusMessageProvider):
 
         return f"Evaluating {label} options…"
 
-    def lm_start_status_message(self, instance: Any, inputs: dict[str, Any]) -> str | None:
+    def lm_start_status_message(
+        self, instance: Any, inputs: dict[str, Any]
+    ) -> str | None:
         return "Consulting AI…"
 
     def module_end_status_message(self, outputs: Any) -> str | None:

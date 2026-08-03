@@ -66,10 +66,12 @@ async def _relay(turn_id: str, last_id: str = "0"):
             "running this turn but its events are unreadable from this pod",
             turn_id,
         )
-        yield _sse({
-            "type": "token",
-            "text": "\n\nLost the connection to the build service. Please try again.",
-        })
+        yield _sse(
+            {
+                "type": "token",
+                "text": "\n\nLost the connection to the build service. Please try again.",
+            }
+        )
         yield "data: [DONE]\n\n"
         return
 
@@ -94,10 +96,12 @@ async def _relay(turn_id: str, last_id: str = "0"):
             "pods point at the same Valkey.",
             turn_id,
         )
-        yield _sse({
-            "type": "token",
-            "text": "\n\nThat build didn't start. Please try again.",
-        })
+        yield _sse(
+            {
+                "type": "token",
+                "text": "\n\nThat build didn't start. Please try again.",
+            }
+        )
 
     yield "data: [DONE]\n\n"
 
@@ -142,10 +146,12 @@ async def _inline_stream(
                 yield _sse(event)
     except Exception:
         logger.exception("Chat pipeline error")
-        yield _sse({
-            "type": "token",
-            "text": "\n\nSomething went wrong generating your recommendation. Please try again.",
-        })
+        yield _sse(
+            {
+                "type": "token",
+                "text": "\n\nSomething went wrong generating your recommendation. Please try again.",
+            }
+        )
 
     if user and conversation_id:
         await asyncio.get_running_loop().run_in_executor(

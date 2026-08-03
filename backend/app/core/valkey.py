@@ -124,9 +124,7 @@ async def get_client() -> Redis | RedisCluster | None:
         # in redis-py, bounded in practice by the OS) is not the problem — being
         # explicit here is, so that a future reduction is a deliberate act.
         if settings.VALKEY_CLUSTER:
-            client: Redis | RedisCluster = RedisCluster(
-                max_connections=128, **common
-            )
+            client: Redis | RedisCluster = RedisCluster(max_connections=128, **common)
         else:
             client = Redis(max_connections=128, **common)
         await client.ping()

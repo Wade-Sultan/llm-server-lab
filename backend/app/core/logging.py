@@ -30,12 +30,33 @@ _SEVERITY = {
 
 # Standard LogRecord attributes. Anything outside this set arrived via
 # logger.info(..., extra={...}) and is promoted to a top-level JSON field.
-_RESERVED_ATTRS = frozenset({
-    "args", "asctime", "created", "exc_info", "exc_text", "filename",
-    "funcName", "levelname", "levelno", "lineno", "message", "module",
-    "msecs", "msg", "name", "pathname", "process", "processName",
-    "relativeCreated", "stack_info", "taskName", "thread", "threadName",
-})
+_RESERVED_ATTRS = frozenset(
+    {
+        "args",
+        "asctime",
+        "created",
+        "exc_info",
+        "exc_text",
+        "filename",
+        "funcName",
+        "levelname",
+        "levelno",
+        "lineno",
+        "message",
+        "module",
+        "msecs",
+        "msg",
+        "name",
+        "pathname",
+        "process",
+        "processName",
+        "relativeCreated",
+        "stack_info",
+        "taskName",
+        "thread",
+        "threadName",
+    }
+)
 
 
 def set_build_session_id(session_id: str | None) -> None:
@@ -48,7 +69,9 @@ class JsonFormatter(logging.Formatter):
         payload: dict = {
             "severity": _SEVERITY.get(record.levelname, "DEFAULT"),
             "message": record.getMessage(),
-            "timestamp": datetime.fromtimestamp(record.created, timezone.utc).isoformat(),
+            "timestamp": datetime.fromtimestamp(
+                record.created, timezone.utc
+            ).isoformat(),
             "logger": record.name,
         }
 

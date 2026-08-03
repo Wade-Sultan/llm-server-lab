@@ -154,7 +154,7 @@ async def get_incomplete_items(
         .limit(limit)
     )
     rows = await db.execute(stmt)
-    return [(name, category) for name, category in rows.all()]
+    return list(rows.all())
 
 
 async def get_pending_names(db: AsyncSession, category: str) -> set[str]:
@@ -172,7 +172,9 @@ async def get_pending_names(db: AsyncSession, category: str) -> set[str]:
     return set(rows.scalars().all())
 
 
-async def get_dedup_candidates(db: AsyncSession, category: str) -> list[CatalogCandidate]:
+async def get_dedup_candidates(
+    db: AsyncSession, category: str
+) -> list[CatalogCandidate]:
     if category == "cpu":
         stmt = select(CPU.id, CPU.name, CPU.model_number).where(CPU.is_active == True)  # noqa: E712
     elif category == "gpu_variant":

@@ -91,7 +91,9 @@ async def _tavily_search(query: str, fetch_count: int) -> list[SearchResult]:
         if not url or _is_blocked(url):
             continue
         results.append(
-            SearchResult(url=url, title=r.get("title") or "", score=r.get("score") or 0.0)
+            SearchResult(
+                url=url, title=r.get("title") or "", score=r.get("score") or 0.0
+            )
         )
     return results
 
@@ -120,7 +122,11 @@ async def search_launch_pages(
     unqualified surfaces roundups from whichever year ranks best.
     """
     term = _CATEGORY_SWEEP_TERMS.get(category, "new releases")
-    query = f"{hint.strip()} {term}" if hint and hint.strip() else f"{term} {date.today().year}"
+    query = (
+        f"{hint.strip()} {term}"
+        if hint and hint.strip()
+        else f"{term} {date.today().year}"
+    )
     # Roundups repeat each other heavily, so pull a wider net than the spec-page
     # path and let the caller take the top few.
     results = await _tavily_search(query, fetch_count=8)

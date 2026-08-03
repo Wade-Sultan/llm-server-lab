@@ -17,8 +17,9 @@ from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
 from app.db.base import Base
-from app.models.software_catalog import GpuImportance  # noqa: F401 — reused by ai_workloads.gpu_importance
-
+from app.models.software_catalog import (
+    GpuImportance,  # noqa: F401 — reused by ai_workloads.gpu_importance
+)
 
 # Unlike games (one title → fixed per-tier specs), an AI workload's hardware
 # needs are a function of three orthogonal axes:
@@ -41,25 +42,35 @@ from app.models.software_catalog import GpuImportance  # noqa: F401 — reused b
 
 
 class AIModelFamily(str, enum.Enum):
-    LLM = "llm"                 # text-only language models
-    MULTIMODAL = "multimodal"   # VLMs — text + vision (LLaVA, Qwen-VL)
-    IMAGE_GEN = "image_gen"     # diffusion / flow-matching (SDXL, Flux)
-    VIDEO_GEN = "video_gen"     # video diffusion (Wan, HunyuanVideo)
-    SPEECH = "speech"           # ASR / TTS (Whisper, Piper)
-    AUDIO_GEN = "audio_gen"     # music / audio generation (MusicGen, Bark) — far heavier than ASR
-    VISION = "vision"           # CNNs / ViTs (YOLO, ResNet, SAM)
-    EMBEDDING = "embedding"     # sentence/embedding models
-    CLASSICAL = "classical"     # gradient boosting / sklearn — CPU cores + RAM, GPU irrelevant
-    RL = "rl"                   # reinforcement learning — CPU-heavy env simulation, modest GPU
+    LLM = "llm"  # text-only language models
+    MULTIMODAL = "multimodal"  # VLMs — text + vision (LLaVA, Qwen-VL)
+    IMAGE_GEN = "image_gen"  # diffusion / flow-matching (SDXL, Flux)
+    VIDEO_GEN = "video_gen"  # video diffusion (Wan, HunyuanVideo)
+    SPEECH = "speech"  # ASR / TTS (Whisper, Piper)
+    AUDIO_GEN = (
+        "audio_gen"  # music / audio generation (MusicGen, Bark) — far heavier than ASR
+    )
+    VISION = "vision"  # CNNs / ViTs (YOLO, ResNet, SAM)
+    EMBEDDING = "embedding"  # sentence/embedding models
+    CLASSICAL = (
+        "classical"  # gradient boosting / sklearn — CPU cores + RAM, GPU irrelevant
+    )
+    RL = "rl"  # reinforcement learning — CPU-heavy env simulation, modest GPU
 
 
 class AITask(str, enum.Enum):
     INFERENCE = "inference"
-    FINE_TUNE_FULL = "fine_tune_full"    # all weights updated — optimizer states dominate VRAM
-    FINE_TUNE_LORA = "fine_tune_lora"    # frozen base at native precision + low-rank adapters
+    FINE_TUNE_FULL = (
+        "fine_tune_full"  # all weights updated — optimizer states dominate VRAM
+    )
+    FINE_TUNE_LORA = (
+        "fine_tune_lora"  # frozen base at native precision + low-rank adapters
+    )
     FINE_TUNE_QLORA = "fine_tune_qlora"  # 4-bit-quantized frozen base + adapters
-    POST_TRAIN = "post_train"            # alignment passes on a tuned model (DPO / RLHF-style)
-    TRAIN_SCRATCH = "train_scratch"      # from random init (realistic for vision/classical/RL scale)
+    POST_TRAIN = "post_train"  # alignment passes on a tuned model (DPO / RLHF-style)
+    TRAIN_SCRATCH = (
+        "train_scratch"  # from random init (realistic for vision/classical/RL scale)
+    )
 
 
 class AIModel(Base):
@@ -85,8 +96,12 @@ class AIModel(Base):
     context_length = Column(Integer, nullable=True)
 
     developer = Column(String(255), nullable=True)
-    license = Column(String(100), nullable=True)  # e.g. "apache-2.0", "llama-3.1-community"
-    huggingface_id = Column(String(255), nullable=True)  # e.g. "meta-llama/Llama-3.1-70B-Instruct"
+    license = Column(
+        String(100), nullable=True
+    )  # e.g. "apache-2.0", "llama-3.1-community"
+    huggingface_id = Column(
+        String(255), nullable=True
+    )  # e.g. "meta-llama/Llama-3.1-70B-Instruct"
     website_url = Column(Text, nullable=True)
     image_url = Column(Text, nullable=True)
 
@@ -97,11 +112,15 @@ class AIModel(Base):
     notes = Column(Text, nullable=True)
 
     created_at = Column(
-        DateTime(timezone=True), nullable=False, server_default=func.now(),
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
     )
     updated_at = Column(
-        DateTime(timezone=True), nullable=False,
-        server_default=func.now(), onupdate=func.now(),
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
     )
 
     workloads = relationship(
@@ -173,15 +192,20 @@ class AIWorkload(Base):
     min_vram_gb = Column(Integer, nullable=True)  # NULL = runs fine with no GPU
     recommended_vram_gb = Column(Integer, nullable=True)
     supports_multi_gpu = Column(
-        Boolean, nullable=False, default=False, server_default="false",
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
         comment="Workload shards/splits across GPUs (tensor/pipeline parallel, "
-                "llama.cpp row split); false = must fit on one card",
+        "llama.cpp row split); false = must fit on one card",
     )
 
     # True when weights can spill to system RAM at usable speed (llama.cpp /
     # GGUF layer offload, whisper.cpp) — makes recommended_ram_gb the lever
     # when VRAM is short instead of a hard wall.
-    cpu_offload_capable = Column(Boolean, nullable=False, default=False, server_default="false")
+    cpu_offload_capable = Column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
 
     # System RAM: data pipelines, offload headroom. Rule of thumb: >= total VRAM.
     min_ram_gb = Column(Integer, nullable=True)
@@ -210,9 +234,15 @@ class AIWorkload(Base):
     notes = Column(Text, nullable=True)
 
     created_at = Column(
-        DateTime(timezone=True), nullable=False, server_default=func.now(),
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
     )
-    updated_at = Column(DateTime(timezone=True), nullable=False,
-    server_default=func.now(), onupdate=func.now())
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
 
     model = relationship("AIModel", back_populates="workloads")

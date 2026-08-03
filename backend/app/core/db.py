@@ -106,7 +106,9 @@ def _get_engine():
 def _get_session_local():
     global _session_local
     if _session_local is None:
-        _session_local = sessionmaker(bind=_get_engine(), autocommit=False, autoflush=False)
+        _session_local = sessionmaker(
+            bind=_get_engine(), autocommit=False, autoflush=False
+        )
     return _session_local
 
 
@@ -124,7 +126,9 @@ def __getattr__(name: str):
 
 # Async engine/session — used by the FastAPI app at request time.
 async_engine = _create_async_engine()
-AsyncSessionLocal = async_sessionmaker(bind=async_engine, autoflush=False, expire_on_commit=False)
+AsyncSessionLocal = async_sessionmaker(
+    bind=async_engine, autoflush=False, expire_on_commit=False
+)
 
 
 def get_db() -> Generator[Session, None, None]:

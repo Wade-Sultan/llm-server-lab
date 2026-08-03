@@ -115,7 +115,9 @@ async def _process_source(
     doc = await fetch_document(result.url)
     if doc is None:
         return None
-    extraction = await extract_from_source(doc, category, query, session_id, usage_events)
+    extraction = await extract_from_source(
+        doc, category, query, session_id, usage_events
+    )
     if extraction is None:
         return None
     values, provenance = unwrap(extraction, result.url)
@@ -155,14 +157,18 @@ async def _discover_one(
     for result, outcome in zip(results, outcomes, strict=False):
         if isinstance(outcome, BaseException):
             logger.warning(
-                "discovery run %s: source %s failed", run_id, result.url,
+                "discovery run %s: source %s failed",
+                run_id,
+                result.url,
                 exc_info=outcome,
             )
         elif outcome is not None:
             per_source.append(outcome)
 
     if not per_source:
-        return _ItemOutcome(len(results), False, "all sources failed fetch or extraction")
+        return _ItemOutcome(
+            len(results), False, "all sources failed fetch or extraction"
+        )
 
     extracted, provenance, confidence, source_urls = reconcile(per_source)
     name = extracted.get("name") or query
@@ -307,13 +313,17 @@ async def _enumerate_candidates(
         names.extend(name_list)
 
     async with AsyncSessionLocal() as db:
-        known = {_normalize(c.name) for c in await crud.get_dedup_candidates(db, category)}
+        known = {
+            _normalize(c.name) for c in await crud.get_dedup_candidates(db, category)
+        }
         known |= await crud.get_pending_names(db, category)
 
     fresh = filter_new_names(names, known, _MAX_SWEEP_CANDIDATES)
     logger.info(
         "discovery sweep: %d names from %d pages, %d new after filtering",
-        len(names), len(pages), len(fresh),
+        len(names),
+        len(pages),
+        len(fresh),
     )
     return _SweepCandidates(fresh, len(pages), len(names))
 

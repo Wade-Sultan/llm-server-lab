@@ -1,4 +1,5 @@
 from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.crud.reference_builds import get_all_active
 from app.data.refbuilds import Build
 from app.schemas.chat import BuildProfile
@@ -6,8 +7,9 @@ from app.schemas.chat import BuildProfile
 RESOLUTION_FLOOR = {
     "1080p": 1080,
     "1440p": 1440,
-    "4k":    2160,
+    "4k": 2160,
 }
+
 
 async def resolve_build(profile: BuildProfile, db: AsyncSession) -> tuple[str, Build]:
     """Map a BuildProfile to the best matching pre-defined build key."""
@@ -63,7 +65,7 @@ async def resolve_build(profile: BuildProfile, db: AsyncSession) -> tuple[str, B
 
 
 def _pick(candidates: dict, key: str) -> tuple[str, Build]:
-    """Return the requested key if it passed the resolution filter, 
+    """Return the requested key if it passed the resolution filter,
     otherwise fall back to the highest resolution candidate available."""
     if key in candidates:
         return key, candidates[key]

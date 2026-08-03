@@ -12,27 +12,45 @@ class Listing(Base):
     __tablename__ = "listings"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, index=True)
-    part_id = Column(UUID(as_uuid=True), ForeignKey("pc_parts.id", ondelete="CASCADE"),
-                     nullable=False, index=True)
+    part_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("pc_parts.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
     listing_type = Column(String(20), nullable=False)
     marketplace = Column(String(20), nullable=False)
 
     url = Column(Text, nullable=True)
-    price_amount = Column(Integer, nullable=True,
-                      comment="Price in smallest currency denomination (cents, pence, etc.)")
-    currency = Column(String(3), nullable=True, server_default="USD",
-                  comment="ISO 4217 currency code")
+    price_amount = Column(
+        Integer,
+        nullable=True,
+        comment="Price in smallest currency denomination (cents, pence, etc.)",
+    )
+    currency = Column(
+        String(3), nullable=True, server_default="USD", comment="ISO 4217 currency code"
+    )
     image_url = Column(Text, nullable=True)
     is_active = Column(Boolean, nullable=False, server_default="true")
 
-    fetched_at = Column(DateTime(timezone=True), nullable=True,
-                        comment="When this listing was last fetched from the marketplace API")
-    price_last_updated_at = Column(DateTime(timezone=True), nullable=True,
-                                   comment="When price_amount last changed")
+    fetched_at = Column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="When this listing was last fetched from the marketplace API",
+    )
+    price_last_updated_at = Column(
+        DateTime(timezone=True), nullable=True, comment="When price_amount last changed"
+    )
 
-    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), nullable=False,
-                        server_default=func.now(), onupdate=func.now())
+    created_at = Column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
 
     part = relationship("PCPart", back_populates="listings")
 
@@ -46,15 +64,22 @@ class Listing(Base):
 class AmazonListing(Listing):
     __tablename__ = "amazon_listings"
 
-    id = Column(UUID(as_uuid=True), ForeignKey("listings.id", ondelete="CASCADE"),
-                primary_key=True)
+    id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("listings.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
     asin = Column(String(32), nullable=False, index=True)
-    brand = Column(String(100), nullable=True,
-                   comment="Vendor brand for this listing, e.g. ASUS, MSI (for GPU chipset variants)")
+    brand = Column(
+        String(100),
+        nullable=True,
+        comment="Vendor brand for this listing, e.g. ASUS, MSI (for GPU chipset variants)",
+    )
     is_prime = Column(Boolean, nullable=True)
     seller_name = Column(String(255), nullable=True)
-    affiliate_tag = Column(String(100), nullable=True,
-                           comment="Tracking ID at time of fetch")
+    affiliate_tag = Column(
+        String(100), nullable=True, comment="Tracking ID at time of fetch"
+    )
 
     __mapper_args__ = {"polymorphic_identity": "amazon"}
 
@@ -62,11 +87,13 @@ class AmazonListing(Listing):
 class EbayListing(Listing):
     __tablename__ = "ebay_listings"
 
-    id = Column(UUID(as_uuid=True), ForeignKey("listings.id", ondelete="CASCADE"),
-                primary_key=True)
+    id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("listings.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
     ebay_item_id = Column(String(64), nullable=False, index=True)
-    condition = Column(String(20), nullable=True,
-                       comment="new, used, refurbished")
+    condition = Column(String(20), nullable=True, comment="new, used, refurbished")
     seller_feedback_score = Column(Integer, nullable=True)
     buy_it_now = Column(Boolean, nullable=True)
 

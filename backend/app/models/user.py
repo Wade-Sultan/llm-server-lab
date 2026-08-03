@@ -27,7 +27,7 @@ class User(Base):
     firebase_uid = Column(
         String(128),
         unique=True,
-        nullable=True,   # nullable during migration; tighten to False later
+        nullable=True,  # nullable during migration; tighten to False later
         index=True,
         comment="Firebase Auth UID",
     )
@@ -37,7 +37,9 @@ class User(Base):
 
     hashed_password = Column(Text, nullable=False)
     is_active = Column(Boolean, nullable=False, default=True, server_default="true")
-    is_superuser = Column(Boolean, nullable=False, default=False, server_default="false")
+    is_superuser = Column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
 
     created_at = Column(
         DateTime(timezone=True),

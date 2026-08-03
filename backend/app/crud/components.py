@@ -16,13 +16,13 @@ from sqlalchemy.orm import selectinload, with_polymorphic
 from app.models.pcparts import (
     CPU,
     GPU,
+    PSU,
     Case,
     CPUCooler,
     Fan,
     GPUChipset,
     Motherboard,
     PCPart,
-    PSU,
     PSUGroup,
     RAMGroup,
     RAMKit,
@@ -30,7 +30,6 @@ from app.models.pcparts import (
     StorageGroup,
 )
 from app.schemas.chat import UserPreferences
-
 
 # ---------------------------------------------------------------------------
 # Generic (polymorphic base)
@@ -44,10 +43,14 @@ _PART_POLY = with_polymorphic(PCPart, "*")
 async def get_part_by_name(db: AsyncSession, name: str) -> PCPart | None:
     """Case-insensitive lookup on the polymorphic base — any part type. Subclass
     columns (incl. the group FKs) are eager-loaded for resolve_part_price_cents."""
-    stmt = select(_PART_POLY).where(
-        func.lower(_PART_POLY.name) == name.lower(),
-        _PART_POLY.is_active == True,  # noqa: E712
-    ).limit(1)
+    stmt = (
+        select(_PART_POLY)
+        .where(
+            func.lower(_PART_POLY.name) == name.lower(),
+            _PART_POLY.is_active == True,  # noqa: E712
+        )
+        .limit(1)
+    )
     result = await db.execute(stmt)
     return result.scalars().first()
 
@@ -99,7 +102,9 @@ def _normalize(value: str) -> str:
     return v
 
 
-async def _exacts_for_group(db: AsyncSession, model, group_rel, group_name: str) -> list:
+async def _exacts_for_group(
+    db: AsyncSession, model, group_rel, group_name: str
+) -> list:
     """Active exacts belonging to a group, matched on the group's (normalized)
     name. Shared by the deterministic group→cheapest-exact resolution steps for
     RAM/Storage/PSU (GPU uses get_gpus_for_chipset). Every exact accesses its
@@ -108,7 +113,8 @@ async def _exacts_for_group(db: AsyncSession, model, group_rel, group_name: str)
     result = await db.execute(stmt)
     target = _normalize(group_name)
     return [
-        e for e in result.scalars().all()
+        e
+        for e in result.scalars().all()
         if e.group is not None and _normalize(e.group.name or "") == target
     ]
 
@@ -117,15 +123,20 @@ async def _exacts_for_group(db: AsyncSession, model, group_rel, group_name: str)
 # CPU
 # ---------------------------------------------------------------------------
 
+
 async def get_cpu_by_name(db: AsyncSession, name: str) -> CPU | None:
     # The LLM is asked to echo an exact candidate name, but it drifts on casing
     # and whitespace ("AMD Ryzen 5 7600X " vs "AMD Ryzen 5 7600X"). Match
     # case-insensitively and trimmed so a near-miss still resolves the CPU
     # instead of silently leaving socket/tdp/ddr at their defaults.
-    stmt = select(CPU).where(
-        func.lower(func.trim(CPU.name)) == name.strip().lower(),
-        CPU.is_active == True,  # noqa: E712
-    ).limit(1)
+    stmt = (
+        select(CPU)
+        .where(
+            func.lower(func.trim(CPU.name)) == name.strip().lower(),
+            CPU.is_active == True,  # noqa: E712
+        )
+        .limit(1)
+    )
     result = await db.execute(stmt)
     return result.scalars().first()
 
@@ -155,6 +166,7 @@ async def get_all_cpus_active(db: AsyncSession) -> list[CPU]:
 # GPU
 # ---------------------------------------------------------------------------
 
+
 async def get_gpu_by_name(db: AsyncSession, name: str) -> GPU | None:
     stmt = (
         select(GPU)
@@ -179,7 +191,8 @@ async def get_gpus_for_chipset(db: AsyncSession, chipset: str) -> list[GPU]:
     result = await db.execute(stmt)
     target = _normalize(chipset)
     return [
-        g for g in result.scalars().all()
+        g
+        for g in result.scalars().all()
         if g.chipset is not None and _normalize(g.chipset.name or "") == target
     ]
 
@@ -213,6 +226,7 @@ async def get_gpu_candidates(
 # CPU Cooler
 # ---------------------------------------------------------------------------
 
+
 async def get_cooler_by_name(db: AsyncSession, name: str) -> CPUCooler | None:
     stmt = select(CPUCooler).where(CPUCooler.name == name, CPUCooler.is_active == True)  # noqa: E712
     result = await db.execute(stmt)
@@ -237,7 +251,8 @@ async def get_cooler_candidates(
     result = await db.execute(stmt)
     target = _normalize(cpu_socket)
     return [
-        c for c in result.scalars().all()
+        c
+        for c in result.scalars().all()
         if target in {_normalize(s) for s in (c.supported_sockets or [])}
     ]
 
@@ -246,8 +261,17 @@ async def get_cooler_candidates(
 # Motherboard
 # ---------------------------------------------------------------------------
 
+
 async def get_motherboard_by_name(db: AsyncSession, name: str) -> Motherboard | None:
-    stmt = select(Motherboard).where(Motherboard.name == name, Motherboard.is_active == True)  # noqa: E712
+    # `.is_(True)`, not `== True`: both compile to the same predicate, but the
+    # explicit form satisfies ruff's E712 outright and needs no suppression.
+    # The suppressions that used to sit here were silently orphaned by a
+    # `ruff format` pass that moved the closing paren onto its own line — a
+    # per-line suppression only applies to the line it sits on, so reformatting
+    # can quietly detach one from the code it was written for.
+    stmt = select(Motherboard).where(
+        Motherboard.name == name, Motherboard.is_active.is_(True)
+    )
     result = await db.execute(stmt)
     return result.scalars().first()
 
@@ -302,6 +326,7 @@ async def get_all_motherboards_active(db: AsyncSession) -> list[Motherboard]:
 # RAM
 # ---------------------------------------------------------------------------
 
+
 async def get_ram_candidates(
     db: AsyncSession,
     ddr_gen: str,
@@ -332,7 +357,11 @@ async def get_ram_kits_for_group(db: AsyncSession, group_name: str) -> list[RAMK
 async def get_all_ram_active(db: AsyncSession) -> list[RAMKit]:
     """RAM kit exacts with group loaded — used by get_ddr_candidates to compare
     per-generation platform cost (price on the exact, ddr gen on the group)."""
-    stmt = select(RAMKit).where(RAMKit.is_active == True).options(selectinload(RAMKit.group))  # noqa: E712
+    stmt = (
+        select(RAMKit)
+        .where(RAMKit.is_active.is_(True))
+        .options(selectinload(RAMKit.group))
+    )  # noqa: E712
     result = await db.execute(stmt)
     return list(result.scalars().all())
 
@@ -340,6 +369,7 @@ async def get_all_ram_active(db: AsyncSession) -> list[RAMKit]:
 # ---------------------------------------------------------------------------
 # Storage
 # ---------------------------------------------------------------------------
+
 
 async def get_storage_candidates(
     db: AsyncSession,
@@ -374,7 +404,9 @@ async def get_storage_candidates(
     return list(result.scalars().all())
 
 
-async def get_storage_drives_for_group(db: AsyncSession, group_name: str) -> list[StorageDrive]:
+async def get_storage_drives_for_group(
+    db: AsyncSession, group_name: str
+) -> list[StorageDrive]:
     """Active storage drive exacts of the chosen group — for cheapest-exact resolution."""
     return await _exacts_for_group(db, StorageDrive, StorageDrive.group, group_name)
 
@@ -382,6 +414,7 @@ async def get_storage_drives_for_group(db: AsyncSession, group_name: str) -> lis
 # ---------------------------------------------------------------------------
 # PSU
 # ---------------------------------------------------------------------------
+
 
 async def get_psu_by_name(db: AsyncSession, name: str) -> PSU | None:
     stmt = (
@@ -429,6 +462,7 @@ async def get_psus_for_group(db: AsyncSession, group_name: str) -> list[PSU]:
 # Case
 # ---------------------------------------------------------------------------
 
+
 async def get_case_by_name(db: AsyncSession, name: str) -> Case | None:
     stmt = select(Case).where(Case.name == name, Case.is_active == True)  # noqa: E712
     result = await db.execute(stmt)
@@ -454,7 +488,8 @@ async def get_case_candidates(
     # CPUCooler.supported_sockets, so filter in Python against normalized values.
     target = _normalize(mobo_form_factor)
     return [
-        c for c in result.scalars().all()
+        c
+        for c in result.scalars().all()
         if target in {_normalize(f) for f in (c.supported_mobo_form_factors or [])}
     ]
 
@@ -462,6 +497,7 @@ async def get_case_candidates(
 # ---------------------------------------------------------------------------
 # Fan
 # ---------------------------------------------------------------------------
+
 
 async def get_fan_candidates(
     db: AsyncSession,

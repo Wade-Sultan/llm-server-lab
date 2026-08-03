@@ -46,14 +46,18 @@ async def _build_batch(db, limit: int, low_priority_allowed: bool) -> list[_Targ
     quota.low_priority_allowed."""
     targets: list[_Target] = []
 
-    non_grouped_types = _HIGH_NON_GROUPED + (_LOW_NON_GROUPED if low_priority_allowed else [])
+    non_grouped_types = _HIGH_NON_GROUPED + (
+        _LOW_NON_GROUPED if low_priority_allowed else []
+    )
     for part in await crud.get_part_candidates(db, non_grouped_types, limit):
         targets.append(_Target(kind="pc_part", id=part.id, queries=[part.name]))
 
     grouped_kinds = _HIGH_GROUPED + (_LOW_GROUPED if low_priority_allowed else [])
     for kind in grouped_kinds:
         for group in await crud.get_group_candidates(db, kind, limit):
-            variant_names = [v.name for v in group.variants if v.is_active][:_MAX_VARIANTS_PER_GROUP]
+            variant_names = [v.name for v in group.variants if v.is_active][
+                :_MAX_VARIANTS_PER_GROUP
+            ]
             if variant_names:
                 targets.append(_Target(kind=kind, id=group.id, queries=variant_names))
 
@@ -150,13 +154,18 @@ async def run() -> None:
                     break
                 try:
                     async with AsyncSessionLocal() as db:
-                        made, matched = await _check_target(db, run_id, target, remaining_budget)
+                        made, matched = await _check_target(
+                            db, run_id, target, remaining_budget
+                        )
                 except SerpApiConfigError:
                     raise
                 except Exception:
                     logger.warning(
                         "pricing run %s: check failed for %s %s",
-                        run_id, target.kind, target.id, exc_info=True,
+                        run_id,
+                        target.kind,
+                        target.id,
+                        exc_info=True,
                     )
                     continue
                 searches_used += made

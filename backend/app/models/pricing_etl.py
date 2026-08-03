@@ -34,7 +34,9 @@ class PricingRun(Base):
 
     error_detail = Column(Text, nullable=True)
 
-    started_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    started_at = Column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
     finished_at = Column(DateTime(timezone=True), nullable=True)
 
     checks = relationship(
@@ -80,7 +82,9 @@ class PriceCheck(Base):
 
     applied = Column(Boolean, nullable=False, server_default="false")
 
-    checked_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    checked_at = Column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
 
     run = relationship("PricingRun", back_populates="checks")
 

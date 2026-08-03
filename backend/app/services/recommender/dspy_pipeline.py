@@ -36,28 +36,44 @@ import os
 import subprocess
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any
 
 import dspy
 from dspy.streaming.messages import StatusMessage
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.crud import components as crud_components
 from app.models.build_session import BuildSessionStatus
-from app.services.recommender.recording import BuildRecorder
-from app.services.recommender.status_provider import BuildStatusProvider
-
-from app.services.recommender.components.decidecase import DecideCase, load_program as load_case
-from app.services.recommender.components.decidecpu import DecideCPU, load_program as load_cpu
-from app.services.recommender.components.decideddr import DecideDDR, load_program as load_ddr
-from app.services.recommender.components.decidecpucooler import DecideCPUCooler, load_program as load_cooler
-from app.services.recommender.components.decidefans import DecideFans, load_program as load_fans
-from app.services.recommender.components.decidegpu import DecideGPU, load_program as load_gpu
-from app.services.recommender.components.decidemotherboard import DecideMotherboard, load_program as load_motherboard
-from app.services.recommender.components.decidepsu import DecidePSU, load_program as load_psu
-from app.services.recommender.components.decideram import DecideRAM, load_program as load_ram
-from app.services.recommender.components.decidestorage import DecideStorage, load_program as load_storage
+from app.schemas.chat import BuildRequest
+from app.services.recommender.components.decidecase import DecideCase
+from app.services.recommender.components.decidecase import load_program as load_case
+from app.services.recommender.components.decidecpu import DecideCPU
+from app.services.recommender.components.decidecpu import load_program as load_cpu
+from app.services.recommender.components.decidecpucooler import DecideCPUCooler
+from app.services.recommender.components.decidecpucooler import (
+    load_program as load_cooler,
+)
+from app.services.recommender.components.decideddr import DecideDDR
+from app.services.recommender.components.decideddr import load_program as load_ddr
+from app.services.recommender.components.decidefans import DecideFans
+from app.services.recommender.components.decidefans import load_program as load_fans
+from app.services.recommender.components.decidegpu import DecideGPU
+from app.services.recommender.components.decidegpu import load_program as load_gpu
+from app.services.recommender.components.decidemotherboard import DecideMotherboard
+from app.services.recommender.components.decidemotherboard import (
+    load_program as load_motherboard,
+)
+from app.services.recommender.components.decidepsu import DecidePSU
+from app.services.recommender.components.decidepsu import load_program as load_psu
+from app.services.recommender.components.decideram import DecideRAM
+from app.services.recommender.components.decideram import load_program as load_ram
+from app.services.recommender.components.decidestorage import DecideStorage
+from app.services.recommender.components.decidestorage import (
+    load_program as load_storage,
+)
 from app.services.recommender.db.queries import (
     get_case_candidates,
     get_cooler_candidates,
@@ -70,8 +86,8 @@ from app.services.recommender.db.queries import (
     get_ram_candidates,
     get_storage_candidates,
 )
-from app.crud import components as crud_components
-from app.schemas.chat import BuildRequest
+from app.services.recommender.recording import BuildRecorder
+from app.services.recommender.status_provider import BuildStatusProvider
 
 logger = logging.getLogger(__name__)
 
@@ -86,8 +102,16 @@ RECOMMEND_MODEL = os.getenv("RECOMMEND_MODEL", "openrouter/google/gemma-4-31b-it
 # Dependency order of the Decide* steps — recorded as sequence_order so later
 # decisions (which depend on earlier ones) can be reconstructed.
 _SEQUENCE_ORDER: dict[str, int] = {
-    "ddr": 0, "cpu": 1, "cooler": 2, "motherboard": 3, "ram": 4,
-    "storage": 5, "gpu": 6, "psu": 7, "case": 8, "fans": 9,
+    "ddr": 0,
+    "cpu": 1,
+    "cooler": 2,
+    "motherboard": 3,
+    "ram": 4,
+    "storage": 5,
+    "gpu": 6,
+    "psu": 7,
+    "case": 8,
+    "fans": 9,
 }
 
 
@@ -127,11 +151,16 @@ def _resolve_pipeline_version() -> str:
     if env:
         return env
     try:
-        return subprocess.check_output(
-            ["git", "rev-parse", "--short", "HEAD"],
-            cwd=os.path.dirname(__file__),
-            stderr=subprocess.DEVNULL,
-        ).decode().strip() or "unknown"
+        return (
+            subprocess.check_output(
+                ["git", "rev-parse", "--short", "HEAD"],
+                cwd=os.path.dirname(__file__),
+                stderr=subprocess.DEVNULL,
+            )
+            .decode()
+            .strip()
+            or "unknown"
+        )
     except Exception:
         return "unknown"
 
@@ -212,12 +241,15 @@ def session_lm(session_id: str | None) -> dspy.LM:
 
     if not session_id:
         return dspy.settings.lm
-    return dspy.settings.lm.copy(extra_body={**_OPENROUTER_EXTRA_BODY, "session_id": session_id})
+    return dspy.settings.lm.copy(
+        extra_body={**_OPENROUTER_EXTRA_BODY, "session_id": session_id}
+    )
 
 
 # ---------------------------------------------------------------------------
 # Streamified execution helper
 # ---------------------------------------------------------------------------
+
 
 async def _call_streamified(
     program: dspy.Module,
@@ -261,12 +293,16 @@ async def _run_step(
     """
     lm = dspy.settings.lm
     start = time.perf_counter()
-    result = await _call_streamified(program, status_fn, candidates=candidates, **inputs)
+    result = await _call_streamified(
+        program, status_fn, candidates=candidates, **inputs
+    )
     latency_ms = int((time.perf_counter() - start) * 1000)
 
     if recorder is not None:
         try:
-            history_entry = dict(lm.history[-1]) if getattr(lm, "history", None) else None
+            history_entry = (
+                dict(lm.history[-1]) if getattr(lm, "history", None) else None
+            )
         except Exception:
             history_entry = None
         category = getattr(program, "category", "unknown")
@@ -297,45 +333,102 @@ async def _run_step(
 # LLM can and should go lower within each slot when value calls for it.
 _BUDGET_CEILINGS: dict[str, dict[str, float]] = {
     "gaming": {
-        "cpu": 0.17, "cooler": 0.05, "mobo": 0.10, "ram": 0.18,
-        "storage": 0.20, "gpu": 0.50, "psu": 0.07, "case": 0.10, "fans": 0.04,
+        "cpu": 0.17,
+        "cooler": 0.05,
+        "mobo": 0.10,
+        "ram": 0.18,
+        "storage": 0.20,
+        "gpu": 0.50,
+        "psu": 0.07,
+        "case": 0.10,
+        "fans": 0.04,
     },
     "streaming": {
         # Game + encode simultaneously: more CPU headroom than pure gaming,
         # GPU still carries the render load (and NVENC).
-        "cpu": 0.23, "cooler": 0.06, "mobo": 0.10, "ram": 0.20,
-        "storage": 0.20, "gpu": 0.38, "psu": 0.07, "case": 0.10, "fans": 0.04,
+        "cpu": 0.23,
+        "cooler": 0.06,
+        "mobo": 0.10,
+        "ram": 0.20,
+        "storage": 0.20,
+        "gpu": 0.38,
+        "psu": 0.07,
+        "case": 0.10,
+        "fans": 0.04,
     },
     "aiml": {
-        "cpu": 0.21, "cooler": 0.06, "mobo": 0.10, "ram": 0.30,
-        "storage": 0.28, "gpu": 0.80, "psu": 0.08, "case": 0.05, "fans": 0.03,
+        "cpu": 0.21,
+        "cooler": 0.06,
+        "mobo": 0.10,
+        "ram": 0.30,
+        "storage": 0.28,
+        "gpu": 0.80,
+        "psu": 0.08,
+        "case": 0.05,
+        "fans": 0.03,
     },
     "creator": {
-        "cpu": 0.23, "cooler": 0.07, "mobo": 0.10, "ram": 0.30,
-        "storage": 0.32, "gpu": 0.28, "psu": 0.08, "case": 0.07, "fans": 0.04,
+        "cpu": 0.23,
+        "cooler": 0.07,
+        "mobo": 0.10,
+        "ram": 0.30,
+        "storage": 0.32,
+        "gpu": 0.28,
+        "psu": 0.08,
+        "case": 0.07,
+        "fans": 0.04,
     },
     "rendering": {
         # 3D rendering: strong CPU and plenty of RAM, GPU sized for the
         # renderer (Cycles/OptiX etc.) rather than display output.
-        "cpu": 0.25, "cooler": 0.07, "mobo": 0.10, "ram": 0.30,
-        "storage": 0.22, "gpu": 0.35, "psu": 0.08, "case": 0.05, "fans": 0.03,
+        "cpu": 0.25,
+        "cooler": 0.07,
+        "mobo": 0.10,
+        "ram": 0.30,
+        "storage": 0.22,
+        "gpu": 0.35,
+        "psu": 0.08,
+        "case": 0.05,
+        "fans": 0.03,
     },
     "dev": {
         # Compile-heavy: cores, RAM, and fast storage; GPU nearly irrelevant.
-        "cpu": 0.29, "cooler": 0.07, "mobo": 0.12, "ram": 0.36,
-        "storage": 0.32, "gpu": 0.13, "psu": 0.07, "case": 0.09, "fans": 0.03,
+        "cpu": 0.29,
+        "cooler": 0.07,
+        "mobo": 0.12,
+        "ram": 0.36,
+        "storage": 0.32,
+        "gpu": 0.13,
+        "psu": 0.07,
+        "case": 0.09,
+        "fans": 0.03,
     },
     "audio": {
         # Music production: single-core speed, RAM for sample libraries,
         # quiet build; discrete GPU barely matters.
-        "cpu": 0.32, "cooler": 0.08, "mobo": 0.13, "ram": 0.34,
-        "storage": 0.26, "gpu": 0.06, "psu": 0.08, "case": 0.10, "fans": 0.04,
+        "cpu": 0.32,
+        "cooler": 0.08,
+        "mobo": 0.13,
+        "ram": 0.34,
+        "storage": 0.26,
+        "gpu": 0.06,
+        "psu": 0.08,
+        "case": 0.10,
+        "fans": 0.04,
     },
     "default": {
-        "cpu": 0.20, "cooler": 0.05, "mobo": 0.10, "ram": 0.20,
-        "storage": 0.22, "gpu": 0.42, "psu": 0.08, "case": 0.10, "fans": 0.04,
+        "cpu": 0.20,
+        "cooler": 0.05,
+        "mobo": 0.10,
+        "ram": 0.20,
+        "storage": 0.22,
+        "gpu": 0.42,
+        "psu": 0.08,
+        "case": 0.10,
+        "fans": 0.04,
     },
 }
+
 
 def _allocate_budget(budget_usd: int, use_cases: list[str]) -> dict[str, int]:
     """Return per-slot budget ceilings in USD."""
@@ -379,9 +472,11 @@ def _request_summary(request: BuildRequest) -> str:
 # Pipeline state
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class DSPyBuildState:
     """Accumulates decisions as the pipeline runs."""
+
     request: BuildRequest
     progress_callback: Callable[[str, str], None] | None = None
 
@@ -434,7 +529,7 @@ class DSPyBuildState:
     psu_form_factor: str = "atx"
 
     case_options: list[dict] = field(default_factory=list)
-    case_name: str = ""              # set after user picks
+    case_name: str = ""  # set after user picks
     case_max_gpu_length_mm: int | None = None
     case_included_fans: int = 0
     case_fan_slots: list[int] = field(default_factory=list)
@@ -445,6 +540,28 @@ class DSPyBuildState:
 
     # Reconsideration thresholds — surfaced to user in the build card
     thresholds: dict[str, str] = field(default_factory=dict)
+
+
+# Stand-in for an unstated form factor, applied only where a *physical size* is
+# required. UserPreferences.form_factor defaults to "no_preference", which is a
+# real and useful value to the motherboard query — crud.get_motherboard_candidates
+# reads it as "do not filter", so a user with no preference correctly sees ATX,
+# mATX and ITX boards alike. It is not a size, though, and any consumer that needs
+# to reason about clearance has to be handed one.
+#
+# ATX because it is the roomiest of the three: a part sized for it is the least
+# constrained choice, which is the right bias while nothing downstream actually
+# enforces clearance (see get_cooler_candidates in db/queries.py).
+#
+# Resolved here rather than in the schema on purpose. Defaulting
+# UserPreferences.form_factor to "atx" would silently narrow every motherboard
+# query to ATX-only for users who never expressed a preference.
+_ASSUMED_FORM_FACTOR = "atx"
+
+
+def _effective_form_factor(preference: str) -> str:
+    """Concrete form factor for size-sensitive queries."""
+    return _ASSUMED_FORM_FACTOR if preference == "no_preference" else preference
 
 
 def _emit(state: DSPyBuildState, step: str, message: str) -> None:
@@ -461,7 +578,14 @@ def _noop_status(_msg: str) -> None:
 # Pipeline steps
 # ---------------------------------------------------------------------------
 
-async def _step_ddr(state: DSPyBuildState, session: AsyncSession, budget: dict, program: DecideDDR, recorder: BuildRecorder | None) -> None:
+
+async def _step_ddr(
+    state: DSPyBuildState,
+    session: AsyncSession,
+    budget: dict,
+    program: DecideDDR,
+    recorder: BuildRecorder | None,
+) -> None:
     _emit(state, "ddr", "Building your PC…")
     candidates = await get_ddr_candidates(session, budget["cpu"])
     _ensure_candidates("ddr", candidates)
@@ -477,9 +601,17 @@ async def _step_ddr(state: DSPyBuildState, session: AsyncSession, budget: dict, 
     state.thresholds["ddr"] = result.reconsideration_threshold
 
 
-async def _step_cpu(state: DSPyBuildState, session: AsyncSession, budget: dict, program: DecideCPU, recorder: BuildRecorder | None) -> None:
+async def _step_cpu(
+    state: DSPyBuildState,
+    session: AsyncSession,
+    budget: dict,
+    program: DecideCPU,
+    recorder: BuildRecorder | None,
+) -> None:
     _emit(state, "cpu", "Choosing your CPU…")
-    candidates = await get_cpu_candidates(session, budget["cpu"], state.request.preferences)
+    candidates = await get_cpu_candidates(
+        session, budget["cpu"], state.request.preferences
+    )
     _ensure_candidates("cpu", candidates)
     result = await _run_step(
         recorder,
@@ -511,11 +643,23 @@ async def _step_cpu(state: DSPyBuildState, session: AsyncSession, budget: dict, 
             state.cpu_ddr_gen = gens[-1]
 
 
-async def _step_cooler(state: DSPyBuildState, session: AsyncSession, budget: dict, program: DecideCPUCooler, recorder: BuildRecorder | None) -> None:
+async def _step_cooler(
+    state: DSPyBuildState,
+    session: AsyncSession,
+    budget: dict,
+    program: DecideCPUCooler,
+    recorder: BuildRecorder | None,
+) -> None:
     _emit(state, "cooler", "Picking a cooler…")
     candidates = await get_cooler_candidates(
-        session, state.cpu_tdp_w, state.cpu_socket, budget["cooler"],
-        state.request.preferences.form_factor,
+        session,
+        state.cpu_tdp_w,
+        state.cpu_socket,
+        budget["cooler"],
+        # Concrete size, never "no_preference" — the cooler path needs something
+        # to size clearance against. The motherboard step below deliberately does
+        # NOT do this; there "no_preference" means "do not filter".
+        _effective_form_factor(state.request.preferences.form_factor),
     )
     _ensure_candidates("cooler", candidates)
     result = await _run_step(
@@ -532,7 +676,13 @@ async def _step_cooler(state: DSPyBuildState, session: AsyncSession, budget: dic
     state.thresholds["cooler"] = result.reconsideration_threshold
 
 
-async def _step_motherboard(state: DSPyBuildState, session: AsyncSession, budget: dict, program: DecideMotherboard, recorder: BuildRecorder | None) -> None:
+async def _step_motherboard(
+    state: DSPyBuildState,
+    session: AsyncSession,
+    budget: dict,
+    program: DecideMotherboard,
+    recorder: BuildRecorder | None,
+) -> None:
     _emit(state, "motherboard", "Selecting a motherboard…")
     candidates = await get_motherboard_candidates(
         session,
@@ -555,7 +705,9 @@ async def _step_motherboard(state: DSPyBuildState, session: AsyncSession, budget
     )
     state.mobo_name = result.motherboard_name
     state.thresholds["motherboard"] = result.reconsideration_threshold
-    mobo = await crud_components.get_motherboard_by_name(session, result.motherboard_name)
+    mobo = await crud_components.get_motherboard_by_name(
+        session, result.motherboard_name
+    )
     if mobo:
         state.mobo_form_factor = mobo.form_factor
         state.mobo_ddr_gen = mobo.ddr_generation or ""
@@ -563,7 +715,13 @@ async def _step_motherboard(state: DSPyBuildState, session: AsyncSession, budget
         state.mobo_sata_ports = mobo.sata_ports or 0
 
 
-async def _step_ram(state: DSPyBuildState, session: AsyncSession, budget: dict, program: DecideRAM, recorder: BuildRecorder | None) -> None:
+async def _step_ram(
+    state: DSPyBuildState,
+    session: AsyncSession,
+    budget: dict,
+    program: DecideRAM,
+    recorder: BuildRecorder | None,
+) -> None:
     _emit(state, "ram", "Choosing RAM…")
     # RAM must match the generation of the board that was actually chosen, not
     # the CPU's whole supported set; fall back to the platform pick if the board
@@ -583,7 +741,9 @@ async def _step_ram(state: DSPyBuildState, session: AsyncSession, budget: dict, 
     state.ram_group = result.ram_group
     state.thresholds["ram"] = result.reconsideration_threshold
     # Resolve the cheapest kit in the chosen group (deterministic; no LLM call).
-    kit = _pick_exact(await crud_components.get_ram_kits_for_group(session, result.ram_group))
+    kit = _pick_exact(
+        await crud_components.get_ram_kits_for_group(session, result.ram_group)
+    )
     if kit is not None:
         state.ram_name = kit.name
 
@@ -596,10 +756,19 @@ def _pick_exact(exacts: list):
     return exacts[0] if exacts else None
 
 
-async def _step_storage(state: DSPyBuildState, session: AsyncSession, budget: dict, program: DecideStorage, recorder: BuildRecorder | None) -> None:
+async def _step_storage(
+    state: DSPyBuildState,
+    session: AsyncSession,
+    budget: dict,
+    program: DecideStorage,
+    recorder: BuildRecorder | None,
+) -> None:
     _emit(state, "storage", "Selecting storage…")
     candidates = await get_storage_candidates(
-        session, budget["storage"], state.mobo_m2_slots, state.mobo_sata_ports,
+        session,
+        budget["storage"],
+        state.mobo_m2_slots,
+        state.mobo_sata_ports,
     )
     _ensure_candidates("storage", candidates)
     result = await _run_step(
@@ -612,17 +781,29 @@ async def _step_storage(state: DSPyBuildState, session: AsyncSession, budget: di
     )
     state.storage_group = result.storage_group
     state.thresholds["storage"] = result.reconsideration_threshold
-    drive = _pick_exact(await crud_components.get_storage_drives_for_group(session, result.storage_group))
+    drive = _pick_exact(
+        await crud_components.get_storage_drives_for_group(
+            session, result.storage_group
+        )
+    )
     if drive is not None:
         state.storage_name = drive.name
 
 
-async def _step_gpu(state: DSPyBuildState, session: AsyncSession, budget: dict, program: DecideGPU, recorder: BuildRecorder | None) -> None:
+async def _step_gpu(
+    state: DSPyBuildState,
+    session: AsyncSession,
+    budget: dict,
+    program: DecideGPU,
+    recorder: BuildRecorder | None,
+) -> None:
     _emit(state, "gpu", "Choosing GPU…")
     # The main step chooses a chipset; the exact board is resolved later, once
     # the case (length) and PSU (power) are known — see _resolve_gpu_variant.
     candidates = await get_gpu_chipset_candidates(
-        session, budget["gpu"], state.request.preferences,
+        session,
+        budget["gpu"],
+        state.request.preferences,
     )
     _ensure_candidates("gpu", candidates)
     result = await _run_step(
@@ -640,8 +821,12 @@ async def _step_gpu(state: DSPyBuildState, session: AsyncSession, budget: dict, 
         state.thresholds["gpu"] = result.reconsideration_threshold
         # Size the PSU against the chipset's TDP (intrinsic to the chip, on the
         # GPUChipset group) so there's headroom regardless of which board resolves.
-        variants = await crud_components.get_gpus_for_chipset(session, result.gpu_chipset)
-        tdps = [v.chipset.tdp_watts for v in variants if v.chipset and v.chipset.tdp_watts]
+        variants = await crud_components.get_gpus_for_chipset(
+            session, result.gpu_chipset
+        )
+        tdps = [
+            v.chipset.tdp_watts for v in variants if v.chipset and v.chipset.tdp_watts
+        ]
         if tdps:
             state.gpu_tdp_w = max(tdps)
 
@@ -664,7 +849,11 @@ async def _resolve_gpu_variant(state: DSPyBuildState, session: AsyncSession) -> 
         logger.warning("no GPU boards found for chosen chipset %r", state.gpu_chipset)
         return
 
-    psu = await crud_components.get_psu_by_name(session, state.psu_name) if state.psu_name else None
+    psu = (
+        await crud_components.get_psu_by_name(session, state.psu_name)
+        if state.psu_name
+        else None
+    )
     psu_watts = psu.group.wattage if (psu and psu.group) else None
     max_len = state.case_max_gpu_length_mm
 
@@ -681,7 +870,10 @@ async def _resolve_gpu_variant(state: DSPyBuildState, session: AsyncSession) -> 
     if not _fits(chosen):
         logger.warning(
             "no %r board fits case length %smm / PSU %sW; using variant %r",
-            state.gpu_chipset, max_len, psu_watts, chosen.name,
+            state.gpu_chipset,
+            max_len,
+            psu_watts,
+            chosen.name,
         )
     state.gpu_name = chosen.name
     tdp = chosen.chipset.tdp_watts if chosen.chipset else None
@@ -689,14 +881,22 @@ async def _resolve_gpu_variant(state: DSPyBuildState, session: AsyncSession) -> 
         state.gpu_tdp_w = tdp
 
 
-async def _step_psu(state: DSPyBuildState, session: AsyncSession, budget: dict, program: DecidePSU, recorder: BuildRecorder | None) -> None:
+async def _step_psu(
+    state: DSPyBuildState,
+    session: AsyncSession,
+    budget: dict,
+    program: DecidePSU,
+    recorder: BuildRecorder | None,
+) -> None:
     _emit(state, "psu", "Calculating power supply…")
     # Add 20% headroom over combined TDP
     system_tdp = state.cpu_tdp_w + state.gpu_tdp_w
     min_wattage = int(system_tdp * 1.20)
     # Determine PSU form factor from case
     psu_form_factor = state.psu_form_factor  # updated after case step if ITX
-    candidates = await get_psu_candidates(session, min_wattage, budget["psu"], psu_form_factor)
+    candidates = await get_psu_candidates(
+        session, min_wattage, budget["psu"], psu_form_factor
+    )
     _ensure_candidates("psu", candidates)
     result = await _run_step(
         recorder,
@@ -707,15 +907,26 @@ async def _step_psu(state: DSPyBuildState, session: AsyncSession, budget: dict, 
         candidates=candidates,
     )
     state.psu_group = result.psu_group
-    unit = _pick_exact(await crud_components.get_psus_for_group(session, result.psu_group))
+    unit = _pick_exact(
+        await crud_components.get_psus_for_group(session, result.psu_group)
+    )
     if unit is not None:
         state.psu_name = unit.name
 
 
-async def _step_case(state: DSPyBuildState, session: AsyncSession, budget: dict, program: DecideCase, recorder: BuildRecorder | None) -> None:
+async def _step_case(
+    state: DSPyBuildState,
+    session: AsyncSession,
+    budget: dict,
+    program: DecideCase,
+    recorder: BuildRecorder | None,
+) -> None:
     _emit(state, "case", "Picking case options for you…")
     candidates = await get_case_candidates(
-        session, budget["case"], state.mobo_form_factor, state.psu_form_factor,
+        session,
+        budget["case"],
+        state.mobo_form_factor,
+        state.psu_form_factor,
     )
     _ensure_candidates("case", candidates)
     result = await _run_step(
@@ -735,7 +946,13 @@ async def _step_case(state: DSPyBuildState, session: AsyncSession, budget: dict,
     # Pipeline pauses here — case_name is set externally after user picks
 
 
-async def _step_fans(state: DSPyBuildState, session: AsyncSession, budget: dict, program: DecideFans, recorder: BuildRecorder | None) -> None:
+async def _step_fans(
+    state: DSPyBuildState,
+    session: AsyncSession,
+    budget: dict,
+    program: DecideFans,
+    recorder: BuildRecorder | None,
+) -> None:
     _emit(state, "fans", "Checking airflow…")
     candidates = await get_fan_candidates(session, budget["fans"], state.case_fan_slots)
     result = await _run_step(
@@ -755,6 +972,7 @@ async def _step_fans(state: DSPyBuildState, session: AsyncSession, budget: dict,
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
+
 
 async def run_pipeline(
     request: BuildRequest,
@@ -781,7 +999,9 @@ async def run_pipeline(
     """
     state = DSPyBuildState(request=request, progress_callback=progress_callback)
     state.use_case_summary = _request_summary(request)
-    state.session_id = str(recorder.session_id) if recorder is not None else str(uuid.uuid4())
+    state.session_id = (
+        str(recorder.session_id) if recorder is not None else str(uuid.uuid4())
+    )
     budget = _allocate_budget(request.budget_usd, request.use_cases)
 
     try:
@@ -789,7 +1009,9 @@ async def run_pipeline(
             await _step_ddr(state, session, budget, load_ddr(), recorder)
             await _step_cpu(state, session, budget, load_cpu(), recorder)
             await _step_cooler(state, session, budget, load_cooler(), recorder)
-            await _step_motherboard(state, session, budget, load_motherboard(), recorder)
+            await _step_motherboard(
+                state, session, budget, load_motherboard(), recorder
+            )
             await _step_ram(state, session, budget, load_ram(), recorder)
             await _step_storage(state, session, budget, load_storage(), recorder)
             await _step_gpu(state, session, budget, load_gpu(), recorder)

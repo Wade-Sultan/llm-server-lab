@@ -40,6 +40,7 @@ logger = logging.getLogger(__name__)
 # In-memory decision record (flushed to module_decisions at finish)
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class _DecisionRecord:
     category: str
@@ -63,6 +64,7 @@ class _DecisionRecord:
 # ---------------------------------------------------------------------------
 # Usage / prompt extraction helpers
 # ---------------------------------------------------------------------------
+
 
 def _as_int(value: Any) -> int | None:
     try:
@@ -150,6 +152,7 @@ def _parse_candidates(candidates_json: str | None) -> list[dict] | None:
 # ---------------------------------------------------------------------------
 # BuildRecorder
 # ---------------------------------------------------------------------------
+
 
 class BuildRecorder:
     """Accumulates telemetry for one pipeline run and flushes it best-effort."""
@@ -247,7 +250,9 @@ class BuildRecorder:
             elif isinstance(build, dict):
                 self.reference_build = build
             else:  # pydantic model or similar
-                self.reference_build = getattr(build, "model_dump", lambda: dict(build))()
+                self.reference_build = getattr(
+                    build, "model_dump", lambda: dict(build)
+                )()
         except Exception:  # pragma: no cover - defensive
             logger.debug("set_reference_build failed", exc_info=True)
 
@@ -291,13 +296,19 @@ class BuildRecorder:
 
     def _aggregate(self) -> dict:
         total_cost = sum(
-            (Decimal(str(d.cost_usd)) for d in self._decisions if d.cost_usd is not None),
+            (
+                Decimal(str(d.cost_usd))
+                for d in self._decisions
+                if d.cost_usd is not None
+            ),
             Decimal("0"),
         )
         total_latency = sum(d.latency_ms or 0 for d in self._decisions)
         override_count = sum(1 for d in self._decisions if d.was_override)
         final_price_usd = sum(
-            d.chosen_price_usd for d in self._decisions if d.chosen_price_usd is not None
+            d.chosen_price_usd
+            for d in self._decisions
+            if d.chosen_price_usd is not None
         )
         budget_delta = None
         if self.budget_cents is not None:
@@ -365,7 +376,9 @@ class BuildRecorder:
                     )
                 await db.commit()
         except Exception:  # pragma: no cover - best-effort
-            logger.exception("build telemetry flush failed (session_id=%s)", self.session_id)
+            logger.exception(
+                "build telemetry flush failed (session_id=%s)", self.session_id
+            )
 
 
 async def _resolve_part_id(db, name: str | None) -> uuid.UUID | None:

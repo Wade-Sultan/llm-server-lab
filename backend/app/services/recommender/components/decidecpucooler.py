@@ -23,15 +23,13 @@ class CoolerSelection(dspy.Signature):
     budget_ceiling: int = dspy.InputField(desc="Maximum to spend on cooler in USD")
     candidates: str = dspy.InputField(
         desc="JSON list of compatible coolers. Fields: name, type, max_tdp_w, "
-             "noise_db, height_mm, street_price_usd"
+        "noise_db, height_mm, street_price_usd"
     )
 
-    cooler_name: str = dspy.OutputField(
-        desc="Exact product name of the chosen cooler"
-    )
+    cooler_name: str = dspy.OutputField(desc="Exact product name of the chosen cooler")
     reason: str = dspy.OutputField(
         desc="1-2 sentences. Explain why this cooling level is appropriate, "
-             "not just that it fits."
+        "not just that it fits."
     )
     reconsideration_threshold: str = dspy.OutputField(
         desc="Price point at which upgrading to a better cooler becomes worth it."

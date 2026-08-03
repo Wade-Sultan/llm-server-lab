@@ -1,13 +1,13 @@
 from __future__ import annotations
- 
+
 from functools import lru_cache
 from pathlib import Path
- 
+
 import dspy
- 
+
 WEIGHTS_PATH = Path(__file__).parent / "weights" / "decidestorage.json"
- 
- 
+
+
 class StorageSelection(dspy.Signature):
     """
     Select the best storage *group* (spec) for this build from the candidates.
@@ -24,19 +24,21 @@ class StorageSelection(dspy.Signature):
     budget_ceiling: int = dspy.InputField(desc="Maximum to spend on storage in USD")
     candidates: str = dspy.InputField(
         desc="JSON list of storage groups with the group's street price. Fields: "
-             "storage_group, type, interface, capacity_gb, seq_read_mbs, "
-             "seq_write_mbs, street_price_usd"
+        "storage_group, type, interface, capacity_gb, seq_read_mbs, "
+        "seq_write_mbs, street_price_usd"
     )
 
-    storage_group: str = dspy.OutputField(desc="Exact storage_group label of the chosen spec, matching a candidate")
+    storage_group: str = dspy.OutputField(
+        desc="Exact storage_group label of the chosen spec, matching a candidate"
+    )
     reason: str = dspy.OutputField(
         desc="1-2 sentences. Address whether the interface tier is justified."
     )
     reconsideration_threshold: str = dspy.OutputField(
         desc="Capacity or price point at which a different option becomes worth it."
     )
- 
- 
+
+
 class DecideStorage(dspy.Module):
     # Telemetry metadata — bump signature_version only when this signature's
     # input/output fields change shape (GEPA needs a consistent field shape).
@@ -49,23 +51,23 @@ class DecideStorage(dspy.Module):
 
     def __init__(self) -> None:
         self.chain = dspy.ChainOfThought(StorageSelection)
- 
+
     def forward(self, use_cases, budget_ceiling, candidates):
         return self.chain(
             use_cases=use_cases,
             budget_ceiling=budget_ceiling,
             candidates=candidates,
         )
- 
- 
+
+
 @lru_cache(maxsize=1)
 def load_program() -> DecideStorage:
     module = DecideStorage()
     if WEIGHTS_PATH.exists():
         module.load(str(WEIGHTS_PATH))
     return module
- 
- 
+
+
 def optimize(trainset, metric, num_iterations=10, save=True) -> DecideStorage:
     module = DecideStorage()
     optimizer = dspy.GEPA(metric=metric, num_iterations=num_iterations)

@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from functools import lru_cache
- 
+
 import dspy
- 
- 
+
+
 class PSUSelection(dspy.Signature):
     """
     Select the best PSU *group* (spec) for this build from the candidates.
@@ -18,17 +18,21 @@ class PSUSelection(dspy.Signature):
     reasonable minimum.
     """
 
-    required_wattage: int = dspy.InputField(desc="Minimum wattage required by the system in watts")
+    required_wattage: int = dspy.InputField(
+        desc="Minimum wattage required by the system in watts"
+    )
     budget_ceiling: int = dspy.InputField(desc="Maximum to spend on PSU in USD")
     candidates: str = dspy.InputField(
         desc="JSON list of PSU groups with the group's street price. Fields: "
-             "psu_group, wattage, efficiency, form_factor, modular, street_price_usd"
+        "psu_group, wattage, efficiency, form_factor, modular, street_price_usd"
     )
 
-    psu_group: str = dspy.OutputField(desc="Exact psu_group label of the chosen spec, matching a candidate")
+    psu_group: str = dspy.OutputField(
+        desc="Exact psu_group label of the chosen spec, matching a candidate"
+    )
     reason: str = dspy.OutputField(desc="One sentence justification.")
- 
- 
+
+
 class DecidePSU(dspy.Module):
     # Telemetry metadata — bump signature_version only when this signature's
     # input/output fields change shape (GEPA needs a consistent field shape).
@@ -42,15 +46,15 @@ class DecidePSU(dspy.Module):
     def __init__(self) -> None:
         # Plain Predict — no chain-of-thought needed for this slot
         self.predict = dspy.Predict(PSUSelection)
- 
+
     def forward(self, required_wattage, budget_ceiling, candidates):
         return self.predict(
             required_wattage=required_wattage,
             budget_ceiling=budget_ceiling,
             candidates=candidates,
         )
- 
- 
+
+
 @lru_cache(maxsize=1)
 def load_program() -> DecidePSU:
     # No saved weights — PSU selection doesn't benefit from GEPA optimization

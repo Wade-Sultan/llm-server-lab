@@ -50,7 +50,9 @@ logger = logging.getLogger(__name__)
 WORKER_ID = os.getenv("HOSTNAME") or f"worker-{uuid.uuid4().hex[:8]}"
 
 
-def _decode(message: Any) -> tuple[str, list[ChatMessage], dict | None, str | None] | None:
+def _decode(
+    message: Any,
+) -> tuple[str, list[ChatMessage], dict | None, str | None] | None:
     """Parse a Pub/Sub message into run_turn's arguments, or None if malformed.
 
     A malformed message is permanent: it will decode exactly as badly on every
@@ -106,7 +108,9 @@ async def _handle(
     user: dict | None,
     conversation_id: str | None,
 ) -> None:
-    if not await turn_stream.claim(turn_id, WORKER_ID, settings.PUBSUB_ACK_EXTENSION_S * 2):
+    if not await turn_stream.claim(
+        turn_id, WORKER_ID, settings.PUBSUB_ACK_EXTENSION_S * 2
+    ):
         logger.info("turn %s already claimed; skipping duplicate delivery", turn_id)
         return
 
@@ -220,7 +224,9 @@ class Worker:
                 # waiting for get redelivered anyway.
                 self._pull.result(timeout=60)
             except Exception:
-                logger.info("drain finished with turns still in flight; they will redeliver")
+                logger.info(
+                    "drain finished with turns still in flight; they will redeliver"
+                )
 
         if self._gauge_task is not None:
             self._gauge_task.cancel()

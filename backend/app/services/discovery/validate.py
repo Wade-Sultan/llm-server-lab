@@ -6,7 +6,16 @@ from typing import Any
 # (validation_status='failed') so extraction bugs stay visible in the queue.
 
 REQUIRED_FIELDS: dict[str, list[str]] = {
-    "cpu": ["name", "brand", "socket", "tdp_watts", "has_igpu", "ddr_generation", "cores", "threads"],
+    "cpu": [
+        "name",
+        "brand",
+        "socket",
+        "tdp_watts",
+        "has_igpu",
+        "ddr_generation",
+        "cores",
+        "threads",
+    ],
     "gpu_chipset": ["name", "vram_gb", "tdp_watts"],
     "gpu_variant": ["name", "chipset_name", "brand", "length_mm"],
 }
@@ -18,7 +27,17 @@ ENUM_VOCAB: dict[str, dict[str, frozenset[str]]] = {
     },
     "gpu_chipset": {
         "vram_type": frozenset(
-            {"gddr5", "gddr5x", "gddr6", "gddr6x", "gddr7", "hbm2", "hbm2e", "hbm3", "hbm3e"}
+            {
+                "gddr5",
+                "gddr5x",
+                "gddr6",
+                "gddr6x",
+                "gddr7",
+                "hbm2",
+                "hbm2e",
+                "hbm3",
+                "hbm3e",
+            }
         ),
     },
     "gpu_variant": {
@@ -61,7 +80,9 @@ def _err(field: str, rule: str, detail: str) -> dict[str, str]:
     return {"field": field, "rule": rule, "detail": detail}
 
 
-def validate_item(category: str, fields: dict[str, Any]) -> tuple[str, list[dict] | None]:
+def validate_item(
+    category: str, fields: dict[str, Any]
+) -> tuple[str, list[dict] | None]:
     """Returns ('passed'|'failed', errors). Unknown categories fail outright."""
     if category not in REQUIRED_FIELDS:
         return "failed", [_err("category", "enum", f"unknown category {category!r}")]
@@ -79,27 +100,25 @@ def validate_item(category: str, fields: dict[str, Any]) -> tuple[str, list[dict
         candidates = value if isinstance(value, list) else [value]
         for v in candidates:
             if not isinstance(v, str) or v not in vocab:
-                errors.append(
-                    _err(field, "enum", f"{v!r} not in {sorted(vocab)}")
-                )
+                errors.append(_err(field, "enum", f"{v!r} not in {sorted(vocab)}"))
 
     for field, (lo, hi) in RANGES[category].items():
         value = fields.get(field)
         if value is None:
             continue
         if isinstance(value, bool) or not isinstance(value, int | float):
-            errors.append(_err(field, "type", f"expected number, got {type(value).__name__}"))
+            errors.append(
+                _err(field, "type", f"expected number, got {type(value).__name__}")
+            )
             continue
         if not lo <= value <= hi:
             errors.append(_err(field, "range", f"{value} outside [{lo}, {hi}]"))
 
     if category == "cpu":
         cores, threads = fields.get("cores"), fields.get("threads")
-        if (
-            isinstance(cores, int)
-            and isinstance(threads, int)
-            and threads < cores
-        ):
-            errors.append(_err("threads", "range", f"threads ({threads}) < cores ({cores})"))
+        if isinstance(cores, int) and isinstance(threads, int) and threads < cores:
+            errors.append(
+                _err("threads", "range", f"threads ({threads}) < cores ({cores})")
+            )
 
     return ("failed", errors) if errors else ("passed", None)
