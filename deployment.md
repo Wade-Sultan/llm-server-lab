@@ -1,309 +1,201 @@
-# FastAPI Project - Deployment
+# Deployment
 
-You can deploy the project using Docker Compose to a remote server.
+Production runs on **GKE Autopilot** in `us-central1`, deployed by a single
+Cloud Build pipeline: [`deploy/cloudbuild.yaml`](deploy/cloudbuild.yaml).
 
-This project expects you to have a Traefik proxy handling communication to the outside world and HTTPS certificates.
+There is one pipeline and one trigger. The three per-service pipelines that
+predated it — two deploying to Cloud Run, one to a GCE VM — are gone, along with
+the services themselves. If you find a reference to `backend/cloudbuild.yaml`,
+`commerce/cloudbuild.yaml` or `admin/cloudbuild.yaml` anywhere, it is stale.
 
-You can use CI/CD (continuous integration and continuous deployment) systems to deploy automatically, there are already configurations to do it with GitHub Actions.
+## What runs where
 
-But you have to configure a couple things first. 🤓
+| Component | Where | Reached by |
+|---|---|---|
+| `builder` (FastAPI) | GKE Deployment, 2–4 replicas (HPA) | `https://api.palladiumtech.ai` |
+| `worker` (Pub/Sub subscriber) | GKE Deployment, 2 replicas | nothing — it pulls its own work |
+| `commerce` (Go) | GKE Deployment, 1 replica | `https://commerce.palladiumtech.ai` |
+| `admin` (Next.js) | GKE Deployment, 1 replica | `kubectl port-forward svc/admin 3000:3000` only |
+| `frontend` (Next.js) | **Vercel**, not GKE | `https://palladiumtech.ai` |
 
-## Preparation
+Both public hostnames resolve to one reserved static IP fronting a single GKE
+Gateway. The frontend is deployed by Vercel on its own push, and is **not** part
+of this pipeline — which is why the trigger below filters it out.
 
-* Have a remote server ready and available.
-* Configure the DNS records of your domain to point to the IP of the server you just created.
-* Configure a wildcard subdomain for your domain, so that you can have multiple subdomains for different services, e.g. `*.fastapi-project.example.com`. This will be useful for accessing different components, like `dashboard.fastapi-project.example.com`, `api.fastapi-project.example.com`, `traefik.fastapi-project.example.com`, `adminer.fastapi-project.example.com`, etc. And also for `staging`, like `dashboard.staging.fastapi-project.example.com`, `adminer.staging.fastapi-project.example.com`, etc.
-* Install and configure [Docker](https://docs.docker.com/engine/install/) on the remote server (Docker Engine, not Docker Desktop).
+Postgres is Cloud SQL, reached over the VPC by private IP. Valkey is Memorystore,
+also private IP. Neither is in the cluster.
 
-## Public Traefik
+## The trigger
 
-We need a Traefik proxy to handle incoming connections and HTTPS certificates.
-
-You need to do these next steps only once.
-
-### Traefik Docker Compose
-
-* Create a remote directory to store your Traefik Docker Compose file:
-
-```bash
-mkdir -p /root/code/traefik-public/
-```
-
-Copy the Traefik Docker Compose file to your server. You could do it by running the command `rsync` in your local terminal:
+One trigger, on pushes to `main`:
 
 ```bash
-rsync -a docker-compose.traefik.yml root@your-server.example.com:/root/code/traefik-public/
+export PROJECT_ID=project-b8abf13d-d1ce-43f1-837
+
+gcloud builds triggers create github \
+  --project="$PROJECT_ID" \
+  --region=us-central1 \
+  --name=palladium-gke-deploy \
+  --repo-owner=Wade-Sultan \
+  --repo-name=palladium-pc \
+  --branch-pattern='^main$' \
+  --build-config=deploy/cloudbuild.yaml \
+  --included-files='backend/**,commerce/**,admin/**,deploy/**' \
+  --service-account="projects/${PROJECT_ID}/serviceAccounts/<BUILD_SA>@${PROJECT_ID}.iam.gserviceaccount.com"
 ```
 
-### Traefik Public Network
+Three details that are easy to get wrong:
 
-This Traefik will expect a Docker "public network" named `traefik-public` to communicate with your stack(s).
+- **No `SHORT_SHA` substitution.** Cloud Build populates `$SHORT_SHA` for
+  trigger-driven builds automatically. Only manual runs need it passed (see
+  below) — and the `render` step fails loudly rather than shipping `:latest` if
+  it is ever missing.
+- **`--included-files` is not an optimisation, it is correctness.** The frontend
+  deploys on Vercel. Without this filter, a frontend-only push would rebuild
+  three images, run a migration Job and roll production for a change that cannot
+  affect any of them.
+- **The build service account needs three roles**, and the first is the one
+  people miss — `deploy/cloudbuild.yaml` sets `options.logging:
+  CLOUD_LOGGING_ONLY` precisely because a user-specified SA requires it, and
+  without the role the build fails before its first step:
 
-This way, there will be a single public Traefik proxy that handles the communication (HTTP and HTTPS) with the outside world, and then behind that, you could have one or more stacks with different domains, even if they are on the same single server.
+  ```
+  roles/logging.logWriter        mandatory with CLOUD_LOGGING_ONLY
+  roles/artifactregistry.writer  push images
+  roles/container.developer      get-credentials + kubectl apply
+  ```
 
-To create a Docker "public network" named `traefik-public` run the following command in your remote server:
+### Manual run
+
+Same pipeline, but `SHORT_SHA` must be supplied:
 
 ```bash
-docker network create traefik-public
+gcloud builds submit --config=deploy/cloudbuild.yaml \
+  --substitutions=SHORT_SHA=$(git rev-parse --short HEAD)
 ```
 
-### Traefik Environment Variables
+## Pipeline stages
 
-The Traefik Docker Compose file expects some environment variables to be set in your terminal before starting it. You can do it by running the following commands in your remote server.
+```
+build-builder ─┐
+build-commerce ─┼─► push-* ─┐
+build-admin    ─┘           │
+                            ├─► migrate ──► deploy ──► rollout
+render ──► credentials ─────┘
+```
 
-* Create the username for HTTP Basic Auth, e.g.:
+| Stage | What it does | Fails the build when |
+|---|---|---|
+| `build-*` | Three images in parallel, `--cache-from :latest` | a Dockerfile breaks |
+| `push-*` | Pushes `:$SHORT_SHA` and `:latest` | registry auth |
+| `render` | `kustomize build` the prod overlay, substitutes `PROJECT_ID` and the SHA, splits the migration Job out | substitution incomplete, or `POSTGRES_SERVER` leaked into the ConfigMap |
+| `credentials` | Cluster auth, then preflights the Secrets | a `palladium-secrets-*` Secret is missing, or `POSTGRES_SERVER` is not an RFC1918 address |
+| `migrate` | `alembic upgrade head` as Job `migrate-$SHORT_SHA` | the migration raises |
+| `deploy` | `kubectl apply` everything else | invalid manifests |
+| `rollout` | waits on all four Deployments | a Deployment does not become ready in 600s |
+
+Two design points worth knowing:
+
+**The migration is a gate, not a step.** It runs as its own Job and must complete
+before any Deployment rolls. Re-running the same commit is safe: a Job that
+already succeeded is skipped, one that failed *before alembic started*
+(`ImagePullBackOff`, eviction) is recreated, and one where alembic actually ran
+and raised blocks the build with its logs. That last case does not auto-retry on
+purpose — the failure is deterministic, and re-running would bury the real error
+under a second identical one.
+
+**`rollout` includes `worker` even though nothing routes to it.** A worker that
+cannot start is invisible from outside — `/chat` keeps answering by running turns
+inline — so without that check the build would go green while turns silently
+stopped surviving client disconnects.
+
+### Warnings that do not fail the build
+
+`credentials` warns rather than fails when `VALKEY_HOST` is missing from
+`palladium-secrets-builder`. That is a valid, degraded configuration: `/chat`
+falls back to inline streaming and the site works. But the `worker` Deployment
+can do nothing useful in that state, so **read the build log** — a green build
+with that warning means durability is off.
+
+## Rollback
+
+**Check whether the bad deploy included a migration first.** This is the only
+question that changes the answer:
 
 ```bash
-export USERNAME=admin
+kubectl -n palladium get jobs -l app.kubernetes.io/part-of=palladium | grep migrate
 ```
 
-* Create an environment variable with the password for HTTP Basic Auth, e.g.:
+### No schema change — roll the pods back
+
+Fastest path, no rebuild. `maxUnavailable: 0` means the old pods keep serving
+throughout:
 
 ```bash
-export PASSWORD=changethis
+kubectl -n palladium rollout undo deployment/builder
+kubectl -n palladium rollout undo deployment/worker
+kubectl -n palladium rollout status deployment/builder --timeout=300s
 ```
 
-* Use openssl to generate the "hashed" version of the password for HTTP Basic Auth and store it in an environment variable:
+Or pin an explicit known-good SHA — legible in `kubectl describe`, unlike
+`undo`, which silently means "whatever was there before":
 
 ```bash
-export HASHED_PASSWORD=$(openssl passwd -apr1 $PASSWORD)
+SHA=<known-good-short-sha>
+REG=us-central1-docker.pkg.dev/project-b8abf13d-d1ce-43f1-837/palladium
+kubectl -n palladium set image deployment/builder builder=$REG/backend:$SHA
+kubectl -n palladium set image deployment/worker  worker=$REG/backend:$SHA
 ```
 
-To verify that the hashed password is correct, you can print it:
+This works because every build pushes an immutable `:$SHORT_SHA` tag alongside
+`:latest`. Never roll back to `:latest` — it moves.
+
+### The deploy included a migration
+
+**Do not just roll the pods back.** Old code against a migrated schema fails in
+whatever way the migration happened to change, which is usually worse and
+always less obvious than the bug you are rolling back from.
+
+Write and apply a down-migration, or roll forward with a fix. Alembic's
+`downgrade` exists but is only as good as the specific revision's `downgrade()`
+— check that it is actually implemented before relying on it.
+
+### The Gateway is not serving
+
+Deployments are healthy but requests fail:
 
 ```bash
-echo $HASHED_PASSWORD
+kubectl -n palladium get gateway palladium \
+  -o jsonpath='{.status.conditions[?(@.type=="Programmed")].status}{"\n"}'
 ```
 
-* Create an environment variable with the domain name for your server, e.g.:
-
-```bash
-export DOMAIN=fastapi-project.example.com
-```
-
-* Create an environment variable with the email for Let's Encrypt, e.g.:
-
-```bash
-export EMAIL=admin@example.com
-```
-
-**Note**: you need to set a different email, an email `@example.com` won't work.
-
-### Start the Traefik Docker Compose
-
-Go to the directory where you copied the Traefik Docker Compose file in your remote server:
-
-```bash
-cd /root/code/traefik-public/
-```
-
-Now with the environment variables set and the `docker-compose.traefik.yml` in place, you can start the Traefik Docker Compose running the following command:
-
-```bash
-docker compose -f docker-compose.traefik.yml up -d
-```
-
-## Deploy the FastAPI Project
-
-Now that you have Traefik in place you can deploy your FastAPI project with Docker Compose.
-
-**Note**: You might want to jump ahead to the section about Continuous Deployment with GitHub Actions.
-
-## Environment Variables
-
-You need to set some environment variables first.
-
-Set the `ENVIRONMENT`, by default `local` (for development), but when deploying to a server you would put something like `staging` or `production`:
-
-```bash
-export ENVIRONMENT=production
-```
-
-Set the `DOMAIN`, by default `localhost` (for development), but when deploying you would use your own domain, for example:
-
-```bash
-export DOMAIN=fastapi-project.example.com
-```
-
-You can set several variables, like:
-
-* `PROJECT_NAME`: The name of the project, used in the API for the docs and emails.
-* `STACK_NAME`: The name of the stack used for Docker Compose labels and project name, this should be different for `staging`, `production`, etc. You could use the same domain replacing dots with dashes, e.g. `fastapi-project-example-com` and `staging-fastapi-project-example-com`.
-* `BACKEND_CORS_ORIGINS`: A list of allowed CORS origins separated by commas.
-* `SECRET_KEY`: The secret key for the FastAPI project, used to sign tokens.
-* `FIRST_SUPERUSER`: The email of the first superuser, this superuser will be the one that can create new users.
-* `FIRST_SUPERUSER_PASSWORD`: The password of the first superuser.
-* `SMTP_HOST`: The SMTP server host to send emails, this would come from your email provider (E.g. Mailgun, Sparkpost, Sendgrid, etc).
-* `SMTP_USER`: The SMTP server user to send emails.
-* `SMTP_PASSWORD`: The SMTP server password to send emails.
-* `EMAILS_FROM_EMAIL`: The email account to send emails from.
-* `POSTGRES_SERVER`: The hostname of the PostgreSQL server. You can leave the default of `db`, provided by the same Docker Compose. You normally wouldn't need to change this unless you are using a third-party provider.
-* `POSTGRES_PORT`: The port of the PostgreSQL server. You can leave the default. You normally wouldn't need to change this unless you are using a third-party provider.
-* `POSTGRES_PASSWORD`: The Postgres password.
-* `POSTGRES_USER`: The Postgres user, you can leave the default.
-* `POSTGRES_DB`: The database name to use for this application. You can leave the default of `app`.
-* `SENTRY_DSN`: The DSN for Sentry, if you are using it.
-
-## GitHub Actions Environment Variables
-
-There are some environment variables only used by GitHub Actions that you can configure:
-
-* `LATEST_CHANGES`: Used by the GitHub Action [latest-changes](https://github.com/tiangolo/latest-changes) to automatically add release notes based on the PRs merged. It's a personal access token, read the docs for details.
-* `SMOKESHOW_AUTH_KEY`: Used to handle and publish the code coverage using [Smokeshow](https://github.com/samuelcolvin/smokeshow), follow their instructions to create a (free) Smokeshow key.
-
-### Generate secret keys
-
-Some environment variables in the `.env` file have a default value of `changethis`.
-
-You have to change them with a secret key, to generate secret keys you can run the following command:
-
-```bash
-python -c "import secrets; print(secrets.token_urlsafe(32))"
-```
-
-Copy the content and use that as password / secret key. And run that again to generate another secure key.
-
-### Deploy with Docker Compose
-
-With the environment variables in place, you can deploy with Docker Compose:
-
-```bash
-docker compose -f docker-compose.yml up -d
-```
-
-For production you wouldn't want to have the overrides in `docker-compose.override.yml`, that's why we explicitly specify `docker-compose.yml` as the file to use.
-
-## Continuous Deployment (CD)
-
-You can use GitHub Actions to deploy your project automatically. 😎
-
-You can have multiple environment deployments.
-
-There are already two environments configured, `staging` and `production`. 🚀
-
-### Install GitHub Actions Runner
-
-* On your remote server, create a user for your GitHub Actions:
-
-```bash
-sudo adduser github
-```
-
-* Add Docker permissions to the `github` user:
-
-```bash
-sudo usermod -aG docker github
-```
-
-* Temporarily switch to the `github` user:
-
-```bash
-sudo su - github
-```
-
-* Go to the `github` user's home directory:
-
-```bash
-cd
-```
-
-* [Install a GitHub Action self-hosted runner following the official guide](https://docs.github.com/en/actions/hosting-your-own-runners/managing-self-hosted-runners/adding-self-hosted-runners#adding-a-self-hosted-runner-to-a-repository).
-
-* When asked about labels, add a label for the environment, e.g. `production`. You can also add labels later.
-
-After installing, the guide would tell you to run a command to start the runner. Nevertheless, it would stop once you terminate that process or if your local connection to your server is lost.
-
-To make sure it runs on startup and continues running, you can install it as a service. To do that, exit the `github` user and go back to the `root` user:
-
-```bash
-exit
-```
-
-After you do it, you will be on the previous user again. And you will be on the previous directory, belonging to that user.
-
-Before being able to go the `github` user directory, you need to become the `root` user (you might already be):
-
-```bash
-sudo su
-```
-
-* As the `root` user, go to the `actions-runner` directory inside of the `github` user's home directory:
-
-```bash
-cd /home/github/actions-runner
-```
-
-* Install the self-hosted runner as a service with the user `github`:
-
-```bash
-./svc.sh install github
-```
-
-* Start the service:
-
-```bash
-./svc.sh start
-```
-
-* Check the status of the service:
-
-```bash
-./svc.sh status
-```
-
-You can read more about it in the official guide: [Configuring the self-hosted runner application as a service](https://docs.github.com/en/actions/hosting-your-own-runners/managing-self-hosted-runners/configuring-the-self-hosted-runner-application-as-a-service).
-
-### Set Secrets
-
-On your repository, configure secrets for the environment variables you need, the same ones described above, including `SECRET_KEY`, etc. Follow the [official GitHub guide for setting repository secrets](https://docs.github.com/en/actions/security-guides/using-secrets-in-github-actions#creating-secrets-for-a-repository).
-
-The current Github Actions workflows expect these secrets:
-
-* `DOMAIN_PRODUCTION`
-* `DOMAIN_STAGING`
-* `STACK_NAME_PRODUCTION`
-* `STACK_NAME_STAGING`
-* `EMAILS_FROM_EMAIL`
-* `FIRST_SUPERUSER`
-* `FIRST_SUPERUSER_PASSWORD`
-* `POSTGRES_PASSWORD`
-* `SECRET_KEY`
-* `LATEST_CHANGES`
-* `SMOKESHOW_AUTH_KEY`
-
-## GitHub Action Deployment Workflows
-
-There are GitHub Action workflows in the `.github/workflows` directory already configured for deploying to the environments (GitHub Actions runners with the labels):
-
-* `staging`: after pushing (or merging) to the branch `master`.
-* `production`: after publishing a release.
-
-If you need to add extra environments you could use those as a starting point.
-
-## URLs
-
-Replace `fastapi-project.example.com` with your domain.
-
-### Main Traefik Dashboard
-
-Traefik UI: `https://traefik.fastapi-project.example.com`
-
-### Production
-
-Frontend: `https://dashboard.fastapi-project.example.com`
-
-Backend API docs: `https://api.fastapi-project.example.com/docs`
-
-Backend API base URL: `https://api.fastapi-project.example.com`
-
-Adminer: `https://adminer.fastapi-project.example.com`
-
-### Staging
-
-Frontend: `https://dashboard.staging.fastapi-project.example.com`
-
-Backend API docs: `https://api.staging.fastapi-project.example.com/docs`
-
-Backend API base URL: `https://api.staging.fastapi-project.example.com`
-
-Adminer: `https://adminer.staging.fastapi-project.example.com`
+`False` means a route or listener is invalid — and **one bad route invalidates
+the entire Gateway**, taking every hostname down, not just the broken one. The
+usual cause is an HTTPRoute referencing a listener `sectionName` that does not
+exist, or an `httpRoute.timeouts` field, which the GKE controller rejects
+outright (use `GCPBackendPolicy` instead — see
+[`deploy/overlays/prod/backend-policies.yaml`](deploy/overlays/prod/backend-policies.yaml)).
+
+## Prerequisites the pipeline cannot create
+
+These exist outside the repo and are asserted, not provisioned, by `credentials`:
+
+- **`palladium-secrets-builder` / `-commerce` / `-admin`** — created out of band
+  from Secret Manager so no production credential is ever on a developer's disk
+  or in a `kustomize build` output.
+- **Workload Identity bindings** — the KSA annotation is in the overlay; the
+  matching `roles/iam.workloadIdentityUser` binding is not.
+- **The reserved IP `palladium-ingress-ip`** and the `palladium-certs`
+  certificate map. Both are referenced by the Gateway and must pre-exist.
+- **Pub/Sub topic, subscription and Memorystore instance** — see
+  `deploy/messaging.md`, which is deliberately untracked (operator runbook, not
+  a build dependency).
+
+## Local and non-production
+
+`deploy/overlays/local/` targets minikube + Cilium and is not deployed by this
+pipeline. The `worker` is scaled to 0 there — it needs Pub/Sub, which local does
+not have — so `/chat` takes the inline path. That fallback therefore has to keep
+working: it is the only chat path exercised in development.
+
+See [`development.md`](development.md) for the local loop.

@@ -1,0 +1,46 @@
+name: Lint Frontend
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  lint-frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          # From frontend/.nvmrc rather than pinned here, so the version cannot
+          # drift away from what developers run locally.
+          node-version-file: frontend/.nvmrc
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - run: npm ci
+
+      # `biome ci`, NOT `npm run lint`. The package script is
+      #   biome check --write --unsafe ...
+      # which REWRITES files and then exits 0 — in CI that silently "fixes"
+      # problems into a checkout nobody keeps and reports success, so the gate
+      # would pass no matter what was committed. `biome ci` is the read-only
+      # variant: same rules, no writes, non-zero exit on any finding.
+      - name: Biome (lint + format)
+        run: npx biome ci ./
+
+      # Type errors would eventually surface as a failed Vercel build, but that
+      # happens after merge. Catching them here is the difference between a red
+      # PR and a red production deploy.
+      #
+      # Uses the app tsconfig, not tsconfig.build.json — the latter excludes
+      # test files, and a type error in a test is still a type error.
+      - name: TypeScript
+        run: npx tsc --noEmit

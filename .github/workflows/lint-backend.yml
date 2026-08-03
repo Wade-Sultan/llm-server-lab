@@ -1,13 +1,14 @@
 name: Lint Backend
 
+# `main`, not `master`. The repo's default branch is main, so the previous
+# `branches: [master]` meant this job had never once run on a push — only on
+# pull requests. Worth checking whenever a workflow looks healthy but has no
+# history.
 on:
   push:
     branches:
-      - master
+      - main
   pull_request:
-    types:
-      - opened
-      - synchronize
 
 jobs:
   lint-backend:
@@ -18,6 +19,9 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
+          # Matches requires-python in backend/pyproject.toml (>=3.10). Linting
+          # on a newer interpreter than production runs would let syntax through
+          # that fails at import time in the container.
           python-version: "3.10"
       - name: Install uv
         uses: astral-sh/setup-uv@v7
