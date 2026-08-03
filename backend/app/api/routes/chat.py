@@ -10,7 +10,7 @@ from fastapi.responses import StreamingResponse
 
 from app.core import pubsub
 from app.core.auth import optional_firebase_token
-from app.core.valkey import is_enabled as valkey_enabled
+from app.core.valkey import is_available as valkey_available
 from app.schemas.chat import ChatMessage, ChatRequest
 from app.services import turn_stream
 from app.services.chat_pipeline import run_chat_turn
@@ -56,6 +56,24 @@ async def _relay(turn_id: str, last_id: str = "0"):
     # progress event would leave the browser with no handle on the running turn.
     yield _sse({"type": "turn", "turn_id": turn_id})
 
+    # An unreachable Valkey ends tail() immediately, which would otherwise send
+    # [DONE] with no content — a blank reply, no error, and nothing in any log
+    # to explain it, while the worker completes the turn perfectly. Refuse to
+    # fail that quietly.
+    if not await valkey_available():
+        logger.error(
+            "relay for turn %s cannot reach Valkey; the worker may still be "
+            "running this turn but its events are unreadable from this pod",
+            turn_id,
+        )
+        yield _sse({
+            "type": "token",
+            "text": "\n\nLost the connection to the build service. Please try again.",
+        })
+        yield "data: [DONE]\n\n"
+        return
+
+    saw_event = False
     async for item in turn_stream.tail(turn_id, last_id=last_id):
         if item is None:
             # Comment frame. Keeps the connection warm through the Gateway's idle
@@ -63,7 +81,23 @@ async def _relay(turn_id: str, last_id: str = "0"):
             yield ": ping\n\n"
             continue
         entry_id, event = item
+        saw_event = True
         yield _sse(event, entry_id)
+
+    # tail() also returns when it gives up waiting for a terminal entry, which
+    # means the worker died mid-turn (or never picked it up). Distinguishable
+    # from a normal finish only by having produced nothing.
+    if not saw_event:
+        logger.warning(
+            "relay for turn %s produced no events — no worker wrote to this "
+            "stream. Check that the worker Deployment is running and that both "
+            "pods point at the same Valkey.",
+            turn_id,
+        )
+        yield _sse({
+            "type": "token",
+            "text": "\n\nThat build didn't start. Please try again.",
+        })
 
     yield "data: [DONE]\n\n"
 
@@ -155,8 +189,13 @@ async def chat(
     # their own claim.
     turn_id = uuid.uuid4().hex
 
+    # Reachability, not configuration. A builder pod that cannot read Valkey
+    # must not hand the turn to a worker it then cannot hear back from — see
+    # app/core/valkey.py::is_available.
+    valkey_up = await valkey_available()
+
     dispatched = False
-    if valkey_enabled() and pubsub.is_enabled():
+    if valkey_up and pubsub.is_enabled():
         dispatched = await pubsub.publish_turn(
             turn_id,
             req.conversation_id,
@@ -173,7 +212,7 @@ async def chat(
             _relay(turn_id), media_type="text/event-stream", headers=_SSE_HEADERS
         )
 
-    if valkey_enabled():
+    if valkey_up:
         # Valkey but no Pub/Sub: still worth running through the stream, because
         # resumption works and the pod is no longer the only place the events
         # exist. The task is not awaited here — _relay consumes what it writes.
@@ -214,10 +253,10 @@ async def chat_stream(
     using fetch() rather than EventSource — fetch has no automatic Last-Event-ID
     handling, and the frontend adapter tracks the id itself.
     """
-    if not valkey_enabled():
+    if not await valkey_available():
         raise HTTPException(
             status_code=503,
-            detail="Turn streams are not available (Valkey is not configured).",
+            detail="Turn streams are not available (Valkey is unreachable).",
         )
 
     resume_from = request.query_params.get("resume") or last_event_id or "0"

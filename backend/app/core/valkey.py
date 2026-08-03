@@ -50,8 +50,36 @@ _unavailable = False
 
 
 def is_enabled() -> bool:
-    """Whether Valkey is configured at all. Cheap; safe to call per request."""
+    """Whether Valkey is *configured*. A config check, NOT a health check.
+
+    Returns True before the first connection is ever attempted, so it cannot be
+    used to decide whether streaming will actually work. Use is_available() for
+    that — see the note there for what goes wrong otherwise.
+    """
     return bool(settings.VALKEY_HOST) and not _unavailable
+
+
+async def is_available() -> bool:
+    """Whether Valkey is configured AND reachable. Connects on first call.
+
+    THE DISTINCTION FROM is_enabled() IS LOAD-BEARING, and getting it wrong
+    produces the least debuggable failure this system has. `/chat` decides
+    between dispatching a turn to a worker and running it inline. If that
+    decision is made on configuration alone, then a builder pod that cannot
+    reach Valkey will still publish to Pub/Sub — the worker picks the turn up,
+    runs it, bills OpenRouter and commits it to Postgres, all perfectly — while
+    the pod holding the browser connection has no way to read the events back.
+    The user gets an empty response, and nothing in either pod's log says why,
+    because nothing failed.
+
+    Checking reachability first means that pod falls back to inline streaming
+    instead: the turn still works, it just isn't durable across a disconnect.
+
+    Cheap after the first call — get_client() caches the client, and the
+    unavailable latch means a broken deployment pays one timeout per process
+    rather than one per request.
+    """
+    return await get_client() is not None
 
 
 async def get_client() -> Redis | RedisCluster | None:
