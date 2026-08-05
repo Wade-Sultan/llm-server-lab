@@ -21,7 +21,7 @@ Create Date: 2026-08-04 00:00:00.000000
 """
 from alembic import op
 import sqlalchemy as sa
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import ARRAY, UUID
 
 revision = "a2b4c6d8e0f1"
 down_revision = "a1b2c3d4e5f6"
