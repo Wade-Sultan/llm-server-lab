@@ -1,4 +1,6 @@
 import asyncio
+import logging
+import re
 from collections.abc import AsyncGenerator, Generator
 
 from sqlalchemy import create_engine
@@ -7,10 +9,87 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import settings
 
+logger = logging.getLogger(__name__)
+
+
+class DatabaseConfigError(RuntimeError):
+    """The database connection settings are ambiguous or incomplete."""
+
+
+def _redact(url: str) -> str:
+    """Strip credentials from a connection URL so it can be logged."""
+    return re.sub(r"//[^/@]*@", "//***@", url)
+
+
+def _resolve_db_target() -> str:
+    """Decide how to reach the database, and say so out loud.
+
+    Returns "cloud_sql" or "url". Both engine factories go through here so the
+    decision is made the same way for each, is logged whenever it is made, and
+    cannot silently differ between the sync and async engines.
+
+    Refusing when both are set is the point. CLOUD_SQL_INSTANCE used to win
+    unconditionally, so exporting POSTGRES_DB_URL to aim a script at a scratch
+    database did nothing at all and the script wrote to Cloud SQL instead —
+    with no error and no log line saying which target it picked. That is a bad
+    way to find out, and every environment here sets exactly one of the two:
+    GKE and docker-compose.dev pass POSTGRES_DB_URL only, a bare-metal local
+    checkout has CLOUD_SQL_INSTANCE only. Two contradictory instructions is a
+    mistake, not a preference to resolve silently.
+
+    DB_TARGET is the way to resolve it deliberately. It is needed because
+    Settings sets env_ignore_empty=True, so blanking one of the two on the
+    command line does nothing — the .env value survives, and the obvious
+    workaround silently fails.
+    """
+    instance = settings.CLOUD_SQL_INSTANCE
+    url = settings.SQLALCHEMY_DATABASE_URI
+    target = settings.DB_TARGET
+
+    if target == "cloud_sql":
+        if not instance:
+            raise DatabaseConfigError(
+                "DB_TARGET=cloud_sql but CLOUD_SQL_INSTANCE is not set."
+            )
+        logger.info("database target: Cloud SQL connector (%s) [DB_TARGET]", instance)
+        return "cloud_sql"
+
+    if target == "url":
+        if not url:
+            raise DatabaseConfigError("DB_TARGET=url but POSTGRES_DB_URL is not set.")
+        logger.info("database target: direct URL (%s) [DB_TARGET]", _redact(url))
+        return "url"
+
+    if instance and url:
+        raise DatabaseConfigError(
+            "CLOUD_SQL_INSTANCE and POSTGRES_DB_URL are both set, which "
+            "specifies two different databases:\n"
+            f"  CLOUD_SQL_INSTANCE = {instance}\n"
+            f"  POSTGRES_DB_URL    = {_redact(url)}\n"
+            "Unset whichever one you did not mean, or say which to use. "
+            "Blanking one on the command line will NOT work — Settings uses "
+            "env_ignore_empty, so the .env value survives. To aim one command "
+            "at the database in POSTGRES_DB_URL:\n"
+            '  DB_TARGET=url POSTGRES_DB_URL="postgresql://..." <command>'
+        )
+
+    if instance:
+        logger.info("database target: Cloud SQL connector (%s)", instance)
+        return "cloud_sql"
+
+    if url:
+        logger.info("database target: direct URL (%s)", _redact(url))
+        return "url"
+
+    raise DatabaseConfigError(
+        "No database configured — set CLOUD_SQL_INSTANCE (to use the Cloud SQL "
+        "connector) or POSTGRES_DB_URL (to connect directly), but not both."
+    )
+
 
 def _create_engine():
     """Sync engine — used by Alembic, prestart checks, and one-off scripts only."""
-    if settings.CLOUD_SQL_INSTANCE:
+    if _resolve_db_target() == "cloud_sql":
         from google.cloud.sql.connector import Connector, IPTypes
 
         connector = Connector()
@@ -47,7 +126,7 @@ def _create_async_engine():
     I/O instead of blocking the event loop. This is what lets a single Cloud
     Run instance actually serve concurrent requests off one process/thread.
     """
-    if settings.CLOUD_SQL_INSTANCE:
+    if _resolve_db_target() == "cloud_sql":
         from google.cloud.sql.connector import Connector, IPTypes
 
         connector: Connector | None = None

@@ -58,6 +58,18 @@ class Settings(BaseSettings):
 
     POSTGRES_DB_URL: PostgresDsn | None = None
 
+    # Which of the two above to use, when both are set. Normally unset: every
+    # environment configures exactly one (GKE and docker-compose.dev pass
+    # POSTGRES_DB_URL, a bare-metal checkout has CLOUD_SQL_INSTANCE), and
+    # app.core.db refuses to guess when both are present.
+    #
+    # This exists because env_ignore_empty=True above means a blank override
+    # (CLOUD_SQL_INSTANCE=) is discarded rather than applied, so there is
+    # otherwise no way to aim one command at a scratch database without
+    # editing .env. Set DB_TARGET=url to do that:
+    #   DB_TARGET=url POSTGRES_DB_URL="postgresql://..." alembic upgrade head
+    DB_TARGET: Literal["cloud_sql", "url"] | None = None
+
     @computed_field
     @property
     def SQLALCHEMY_DATABASE_URI(self) -> str:
