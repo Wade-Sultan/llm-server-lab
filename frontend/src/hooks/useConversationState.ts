@@ -55,11 +55,13 @@ const INITIAL: Pick<
   buildData: null,
 }
 
-export const useConversationStateStore = create<ConversationStateStore>((set) => ({
-  ...INITIAL,
-  setTurn: (turn) => set({ turn }),
-  setPhase: (phase) => set({ phase }),
-  setAiHasSpoken: (aiHasSpoken: boolean) => set({ aiHasSpoken }),
-  setBuildData: (data: BuildData) => set({ buildData: data }),
-  reset: () => set(INITIAL),
-}))
+export const useConversationStateStore = create<ConversationStateStore>(
+  (set) => ({
+    ...INITIAL,
+    setTurn: (turn) => set({ turn }),
+    setPhase: (phase) => set({ phase }),
+    setAiHasSpoken: (aiHasSpoken: boolean) => set({ aiHasSpoken }),
+    setBuildData: (data: BuildData) => set({ buildData: data }),
+    reset: () => set(INITIAL),
+  }),
+)

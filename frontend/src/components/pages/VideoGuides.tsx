@@ -45,7 +45,7 @@ export function VideoGuides() {
   const [searchQuery, setSearchQuery] = useState("")
 
   const filteredVideos = videos.filter((video) =>
-    video.title.toLowerCase().includes(searchQuery.toLowerCase())
+    video.title.toLowerCase().includes(searchQuery.toLowerCase()),
   )
 
   return (
@@ -63,7 +63,11 @@ export function VideoGuides() {
       {/* 3-Column Scrollable Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 max-h-[75vh] overflow-y-auto px-2 pb-4">
         {filteredVideos.map((video) => (
-          <VideoCard key={video.videoId} videoId={video.videoId} title={video.title} />
+          <VideoCard
+            key={video.videoId}
+            videoId={video.videoId}
+            title={video.title}
+          />
         ))}
       </div>
 

@@ -2,7 +2,7 @@
 
 import type { DataMessagePartComponent } from "@assistant-ui/react"
 import { useEffect, useState } from "react"
-import { type IconType } from "react-icons"
+import type { IconType } from "react-icons"
 import { FaAmazon, FaEbay } from "react-icons/fa6"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -72,9 +72,11 @@ function usePartListings(parts: BuildData["parts"]) {
 
   useEffect(() => {
     let cancelled = false
-    fetchListingsByPart(partIdsKey.split(",").filter(Boolean)).then((results) => {
-      if (!cancelled) setListings(results)
-    })
+    fetchListingsByPart(partIdsKey.split(",").filter(Boolean)).then(
+      (results) => {
+        if (!cancelled) setListings(results)
+      },
+    )
     return () => {
       cancelled = true
     }
@@ -127,7 +129,9 @@ export const BuildCard: DataMessagePartComponent<BuildData> = (props) => {
                   </p>
                   <p className="truncate text-sm font-medium">
                     {quantity > 1 && (
-                      <span className="text-muted-foreground">{quantity}× </span>
+                      <span className="text-muted-foreground">
+                        {quantity}×{" "}
+                      </span>
                     )}
                     {part.brand} {part.model}
                   </p>

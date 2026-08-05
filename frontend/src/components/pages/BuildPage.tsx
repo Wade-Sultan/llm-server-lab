@@ -374,8 +374,8 @@ interface CheckboxProps {
 
 function Checkbox({ checked, onChange, label }: CheckboxProps) {
   return (
-    <div
-      onClick={onChange}
+    <label
+      className="build-option"
       style={{
         display: "flex",
         alignItems: "center",
@@ -389,8 +389,15 @@ function Checkbox({ checked, onChange, label }: CheckboxProps) {
         cursor: "pointer",
         transition: "all 0.2s ease",
         userSelect: "none",
+        position: "relative",
       }}
     >
+      <input
+        type="checkbox"
+        className="build-option-input"
+        checked={checked}
+        onChange={onChange}
+      />
       <div
         style={{
           width: 20,
@@ -408,7 +415,15 @@ function Checkbox({ checked, onChange, label }: CheckboxProps) {
         }}
       >
         {checked && (
-          <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+          // Decorative: the checked state is already carried by the real
+          // <input> above, so announcing the tick again would just be noise.
+          <svg
+            width="12"
+            height="12"
+            viewBox="0 0 12 12"
+            fill="none"
+            aria-hidden="true"
+          >
             <path
               d="M2.5 6L5 8.5L9.5 3.5"
               stroke="white"
@@ -422,7 +437,7 @@ function Checkbox({ checked, onChange, label }: CheckboxProps) {
       <span style={{ fontSize: 14.5, color: "#3d3529", lineHeight: 1.3 }}>
         {label}
       </span>
-    </div>
+    </label>
   )
 }
 
@@ -430,12 +445,15 @@ interface RadioOptionProps {
   selected: boolean
   onChange: () => void
   label: string
+  /** Shared across one question's options so the browser groups them and
+   *  arrow keys move between them. */
+  name: string
 }
 
-function RadioOption({ selected, onChange, label }: RadioOptionProps) {
+function RadioOption({ selected, onChange, label, name }: RadioOptionProps) {
   return (
-    <div
-      onClick={onChange}
+    <label
+      className="build-option"
       style={{
         display: "flex",
         alignItems: "center",
@@ -449,8 +467,16 @@ function RadioOption({ selected, onChange, label }: RadioOptionProps) {
         cursor: "pointer",
         transition: "all 0.2s ease",
         userSelect: "none",
+        position: "relative",
       }}
     >
+      <input
+        type="radio"
+        className="build-option-input"
+        name={name}
+        checked={selected}
+        onChange={onChange}
+      />
       <div
         style={{
           width: 20,
@@ -480,7 +506,7 @@ function RadioOption({ selected, onChange, label }: RadioOptionProps) {
       <span style={{ fontSize: 14.5, color: "#3d3529", lineHeight: 1.3 }}>
         {label}
       </span>
-    </div>
+    </label>
   )
 }
 
@@ -699,7 +725,15 @@ export default function BuildConfigurator({
             {(Object.entries(USE_CASES) as [UseCaseKey, UseCase][]).map(
               ([key, val], i) => (
                 <FadeIn key={key} delay={80 + i * 50}>
+                  {/*
+                    The label now wraps a real checkbox instead of carrying
+                    onClick handlers on two inner divs. Those existed only
+                    because the label had no control to drive; with one there,
+                    the browser supplies the toggle, the tab stop, keyboard
+                    activation and the checked state announcement.
+                  */}
                   <label
+                    className="build-option"
                     style={{
                       display: "flex",
                       alignItems: "center",
@@ -715,8 +749,15 @@ export default function BuildConfigurator({
                       cursor: "pointer",
                       transition: "all 0.25s ease",
                       userSelect: "none",
+                      position: "relative",
                     }}
                   >
+                    <input
+                      type="checkbox"
+                      className="build-option-input"
+                      checked={selectedUseCases.includes(key)}
+                      onChange={() => toggleUseCase(key)}
+                    />
                     <div
                       style={{
                         width: 22,
@@ -734,10 +775,6 @@ export default function BuildConfigurator({
                         transition: "all 0.2s ease",
                         flexShrink: 0,
                       }}
-                      onClick={(e) => {
-                        e.preventDefault()
-                        toggleUseCase(key)
-                      }}
                     >
                       {selectedUseCases.includes(key) && (
                         <svg
@@ -745,6 +782,7 @@ export default function BuildConfigurator({
                           height="13"
                           viewBox="0 0 12 12"
                           fill="none"
+                          aria-hidden="true"
                         >
                           <path
                             d="M2.5 6L5 8.5L9.5 3.5"
@@ -756,13 +794,7 @@ export default function BuildConfigurator({
                         </svg>
                       )}
                     </div>
-                    <div
-                      style={{ flex: 1 }}
-                      onClick={(e) => {
-                        e.preventDefault()
-                        toggleUseCase(key)
-                      }}
-                    >
+                    <div style={{ flex: 1 }}>
                       <div
                         style={{
                           display: "flex",
@@ -809,6 +841,7 @@ export default function BuildConfigurator({
               }}
             >
               <button
+                type="button"
                 style={{
                   ...buttonPrimary,
                   opacity: selectedUseCases.length === 0 ? 0.4 : 1,
@@ -901,6 +934,7 @@ export default function BuildConfigurator({
                     <RadioOption
                       key={opt}
                       label={opt}
+                      name={`${currentUseCase}-${currentQuestion.id}`}
                       selected={currentAnswer === opt}
                       onChange={() =>
                         setAnswer(currentUseCase, currentQuestion.id, opt)
@@ -935,10 +969,11 @@ export default function BuildConfigurator({
               alignItems: "center",
             }}
           >
-            <button style={buttonSecondary} onClick={handleBack}>
+            <button type="button" style={buttonSecondary} onClick={handleBack}>
               ← Back
             </button>
             <button
+              type="button"
               style={{
                 ...buttonPrimary,
                 opacity: canProceed() ? 1 : 0.4,
@@ -1060,7 +1095,11 @@ export default function BuildConfigurator({
             </div>
 
             <div style={{ marginTop: 28 }}>
-              <button style={buttonSecondary} onClick={handleStartOver}>
+              <button
+                type="button"
+                style={buttonSecondary}
+                onClick={handleStartOver}
+              >
                 Start Over
               </button>
             </div>
@@ -1089,6 +1128,7 @@ export default function BuildConfigurator({
                     JSON Payload
                   </div>
                   <button
+                    type="button"
                     style={{
                       ...buttonSecondary,
                       padding: "4px 12px",

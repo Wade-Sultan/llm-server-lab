@@ -23,10 +23,14 @@ jobs:
           # on a newer interpreter than production runs would let syntax through
           # that fails at import time in the container.
           python-version: "3.10"
+      # See the note in test-backend.yml: uv 0.4.15 does not sync
+      # `[dependency-groups]`, and ruff lives in the dev group — so
+      # scripts/lint.sh would fail with `ruff: command not found` for the same
+      # reason the test job could not find coverage. Keep the two in step.
       - name: Install uv
         uses: astral-sh/setup-uv@v7
         with:
-          version: "0.4.15"
+          version: "0.9.28"
           enable-cache: true
       - run: uv run bash scripts/lint.sh
         working-directory: backend

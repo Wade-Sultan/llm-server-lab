@@ -1,4 +1,5 @@
 import { create } from "zustand"
+
 const MIN_DISPLAY_MS = 450
 
 interface PipelineStatusStore {

@@ -43,8 +43,10 @@ export async function* parseSSE(
 
       // A frame ends at a blank line. Everything after the last one stays in the
       // buffer until the bytes completing it arrive.
-      let sep: number
-      while ((sep = buffer.indexOf("\n\n")) !== -1) {
+      while (true) {
+        const sep = buffer.indexOf("\n\n")
+        if (sep === -1) break
+
         const raw = buffer.slice(0, sep)
         buffer = buffer.slice(sep + 2)
 

@@ -31,9 +31,26 @@ export default function RootLayout({
   children: React.ReactNode
 }) {
   return (
-    <html lang="en" suppressHydrationWarning className={`${raleway.variable} ${dmSans.variable}`}>
+    <html
+      lang="en"
+      suppressHydrationWarning
+      className={`${raleway.variable} ${dmSans.variable}`}
+    >
       <head>
+        {/*
+          Applies the stored theme before first paint, so a dark-mode user does
+          not get a white flash while React hydrates. It has to be an inline
+          blocking script in <head> for that ordering; a component effect runs
+          too late by definition.
+
+          The XSS the rule guards against needs attacker-controlled input in the
+          string. This one is a build-time constant: nothing is interpolated,
+          and the only value it reads (localStorage) is used in string
+          comparisons, never written to the DOM. Keep it that way — the moment
+          this template gains a `${...}`, the suppression stops being true.
+        */}
         <script
+          // biome-ignore lint/security/noDangerouslySetInnerHtml: static, non-interpolated anti-FOUC script; see comment above
           dangerouslySetInnerHTML={{
             __html: `(function(){try{var t=localStorage.getItem('app-theme');var d=document.documentElement;if(t==='dark'){d.classList.add('dark')}else if(t==='light'){d.classList.add('light')}else{if(window.matchMedia('(prefers-color-scheme: dark)').matches){d.classList.add('dark')}else{d.classList.add('light')}}}catch(e){}})()`,
           }}

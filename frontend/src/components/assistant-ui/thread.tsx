@@ -23,16 +23,16 @@ import {
   RefreshCwIcon,
   SquareIcon,
 } from "lucide-react"
-import { type FC } from "react"
+import type { FC } from "react"
 import {
   ComposerAddAttachment,
   ComposerAttachments,
   UserMessageAttachments,
 } from "@/components/assistant-ui/attachment"
-import { LoadingIndicator } from "@/components/Common/LoadingIndicator"
 import { MarkdownText } from "@/components/assistant-ui/markdown-text"
 import { ToolFallback } from "@/components/assistant-ui/tool-fallback"
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button"
+import { LoadingIndicator } from "@/components/Common/LoadingIndicator"
 import { Button } from "@/components/ui/button"
 import { usePipelineStatusStore } from "@/hooks/usePipelineStatus"
 import { cn } from "@/lib/utils"
@@ -63,7 +63,8 @@ export const Thread: FC = () => {
           <ThreadScrollToBottom />
           <Composer />
           <p className="text-center text-xs text-muted-foreground">
-            Palladium is powered by AI (Gemma 4) and can make mistakes. Compatability is checked using a database without AI.
+            Palladium is powered by AI (Gemma 4) and can make mistakes.
+            Compatability is checked using a database without AI.
           </p>
         </ThreadPrimitive.ViewportFooter>
       </ThreadPrimitive.Viewport>
@@ -219,9 +220,7 @@ const AssistantMessage: FC = () => {
         {isRunning && statusMessage && (
           <LoadingIndicator message={statusMessage} />
         )}
-        {isRunning && !statusMessage && (
-          <LoadingIndicator message="" />
-        )}
+        {isRunning && !statusMessage && <LoadingIndicator message="" />}
         <MessagePrimitive.Parts>
           {({ part }) => {
             if (part.type === "text") return <MarkdownText />

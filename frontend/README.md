@@ -122,6 +122,25 @@ The frontend code is structured as follows:
 * `frontend/src/hooks` - Custom hooks.
 * `frontend/src/routes` - The different routes of the frontend which include the pages.
 
+## Linting
+
+CI runs `npx biome ci ./` (read-only) and `npx tsc --noEmit`. Run the same
+locally with `npx biome ci ./` — note that `npm run lint` uses
+`biome check --write --unsafe`, which rewrites files and always exits 0, so it
+tells you nothing about whether the gate will pass.
+
+Two notes on `biome.json`:
+
+* **Do not put comments in it.** Biome does not reject an unparseable config —
+  it silently falls back to defaults. The visible symptom is not an error
+  message but the opposite: `biome ci` walking `.next` (>1GB), running out of
+  memory, and exiting **0** having printed nothing. A silent, clean-looking
+  local run is the signature of a broken config, not a passing one.
+* The ignore list covers build output (`.next`, `.vercel`, `dist`,
+  `blob-report`, `test-results`) and generated files (`next-env.d.ts`,
+  `src/client`). None of these are committed, so CI never sees them; they only
+  ever cause a local-vs-CI mismatch in one direction or the other.
+
 ## End-to-End Testing with Playwright
 
 The frontend includes initial end-to-end tests using Playwright. To run the tests, you need to have the Docker Compose stack running. Start the stack with the following command:

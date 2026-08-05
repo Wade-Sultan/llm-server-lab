@@ -44,9 +44,7 @@ const releases: Release[] = [
   {
     date: "July 2026",
     label: "Performance Improvements",
-    changes: [
-      { type: "improved", text: "First chat turn load time" },
-    ],
+    changes: [{ type: "improved", text: "First chat turn load time" }],
   },
   {
     date: "June 2026",

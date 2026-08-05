@@ -1,9 +1,9 @@
 "use client"
 
-import Link from "next/link"
 import { Lock } from "lucide-react"
-import useAuth from "@/hooks/useAuth"
+import Link from "next/link"
 import { UnderConstruction } from "@/components/Common/UnderConstruction"
+import useAuth from "@/hooks/useAuth"
 
 export default function FindBuilderPage() {
   const { user, loading } = useAuth()
@@ -18,9 +18,12 @@ export default function FindBuilderPage() {
             <Lock className="h-6 w-6 text-muted-foreground" />
           </div>
           <div className="space-y-1">
-            <h1 className="text-lg font-medium tracking-tight">Sign in to find a builder</h1>
+            <h1 className="text-lg font-medium tracking-tight">
+              Sign in to find a builder
+            </h1>
             <p className="text-sm text-muted-foreground">
-              Create an account or sign in to browse and connect with local PC builders.
+              Create an account or sign in to browse and connect with local PC
+              builders.
             </p>
           </div>
           <div className="flex gap-3">

@@ -67,9 +67,14 @@ type AttachmentPreviewProps = {
 const AttachmentPreview: FC<AttachmentPreviewProps> = ({ src }) => {
   const [isLoaded, setIsLoaded] = useState(false)
   return (
+    // next/image is the wrong tool here: `src` is a blob: URL minted by
+    // URL.createObjectURL for a file the user just picked, so there is nothing
+    // on an origin for the optimizer to fetch and resize. <Image unoptimized>
+    // would render the same bytes with extra machinery around it.
+    // biome-ignore lint/performance/noImgElement: blob: URL from a local File, not an optimizable asset
     <img
       src={src}
-      alt="Image Preview"
+      alt="Attachment preview"
       className={cn(
         "block h-auto max-h-[80vh] w-auto max-w-full object-contain",
         isLoaded
@@ -153,13 +158,13 @@ const AttachmentUI: FC = () => {
       >
         <AttachmentPreviewDialog>
           <TooltipTrigger asChild>
-            <div
+            <button
+              type="button"
               className="aui-attachment-tile size-14 cursor-pointer overflow-hidden rounded-[calc(var(--composer-radius)-var(--composer-padding))] border bg-muted transition-opacity hover:opacity-75"
-              role="button"
               aria-label={`${typeLabel} attachment`}
             >
               <AttachmentThumb />
-            </div>
+            </button>
           </TooltipTrigger>
         </AttachmentPreviewDialog>
         {isComposer && <AttachmentRemove />}

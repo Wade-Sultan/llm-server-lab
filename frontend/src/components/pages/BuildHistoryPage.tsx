@@ -1,10 +1,10 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { ArrowRight, Lock, MessageSquare } from "lucide-react"
 import Link from "next/link"
-import { ArrowRight, MessageSquare, Lock } from "lucide-react"
-import useAuth, { getAccessToken } from "@/hooks/useAuth"
+import { useEffect, useState } from "react"
 import { LoadingIndicator } from "@/components/Common/LoadingIndicator"
+import useAuth, { getAccessToken } from "@/hooks/useAuth"
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"
 
@@ -54,9 +54,12 @@ export default function BuildHistoryPage() {
             <Lock className="h-6 w-6 text-muted-foreground" />
           </div>
           <div className="space-y-1">
-            <h1 className="text-lg font-medium tracking-tight">Sign in to view your builds</h1>
+            <h1 className="text-lg font-medium tracking-tight">
+              Sign in to view your builds
+            </h1>
             <p className="text-sm text-muted-foreground">
-              Your chat history is saved to your account. Create an account or sign in to access it.
+              Your chat history is saved to your account. Create an account or
+              sign in to access it.
             </p>
           </div>
           <div className="flex gap-3">
@@ -84,9 +87,7 @@ export default function BuildHistoryPage() {
 
       {fetching && <LoadingIndicator message="Loading your builds" />}
 
-      {error && (
-        <p className="text-sm text-destructive">{error}</p>
-      )}
+      {error && <p className="text-sm text-destructive">{error}</p>}
 
       {!fetching && !error && conversations.length === 0 && (
         <div className="flex flex-col items-center gap-4 py-16 text-center">
@@ -124,7 +125,8 @@ export default function BuildHistoryPage() {
                       day: "numeric",
                     })}
                     {" · "}
-                    {conv.message_count} {conv.message_count === 1 ? "message" : "messages"}
+                    {conv.message_count}{" "}
+                    {conv.message_count === 1 ? "message" : "messages"}
                   </p>
                 </div>
                 <Link
