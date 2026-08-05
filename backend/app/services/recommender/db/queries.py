@@ -44,6 +44,11 @@ def _serialize_cpu(p: CPU) -> dict:
         "socket": p.socket,
         "ddr_gen": p.ddr_generation,
         "has_integrated_graphics": p.has_igpu,
+        # Server-platform spec. Null on consumer parts, which is itself the
+        # signal — a server build needs the CPU that *has* these numbers.
+        "pcie_lanes": p.pcie_lanes,
+        "memory_channels": p.memory_channels,
+        "supports_ecc": p.supports_ecc,
         "street_price_usd": _price(p),
     }
 
@@ -70,6 +75,12 @@ def _serialize_motherboard(p: Motherboard) -> dict:
         "m2_slots": p.m2_slots,
         "sata_ports": p.sata_ports,
         "has_wifi": p.has_wifi,
+        # pcie_x16_slots is what caps a multi-GPU build in practice, and the
+        # rest is the board's half of the server-platform story.
+        "pcie_x16_slots": p.pcie_x16_slots,
+        "memory_channels": p.memory_channels,
+        "supports_ecc": p.supports_ecc,
+        "has_ipmi": p.has_ipmi,
         "street_price_usd": _price(p),
     }
 
@@ -100,6 +111,8 @@ def _serialize_ram_group(g) -> dict:  # g: RAMGroup
         "speed_mhz": g.speed_mhz,
         "kit_count": g.modules,
         "cas_latency": g.cas_latency,
+        "is_ecc": g.is_ecc,
+        "module_type": g.module_type,
         "street_price_usd": _price(g),
     }
 
@@ -123,6 +136,12 @@ def _serialize_psu_group(g) -> dict:  # g: PSUGroup
         "efficiency": g.efficiency_rating,
         "form_factor": g.form_factor,
         "modular": g.modular,
+        # Wattage alone doesn't say whether a supply can physically feed four
+        # GPUs and a two-EPS workstation board — the connector counts do.
+        "pcie_8pin": g.pcie_8pin_connectors,
+        "pcie_12pin": g.pcie_12pin_connectors,
+        "pcie_16pin": g.pcie_16pin_connectors,
+        "eps_connectors": g.eps_connectors,
         "street_price_usd": _price(g),
     }
 
@@ -247,10 +266,16 @@ async def get_ram_candidates(
     session: AsyncSession,
     ddr_gen: str,
     budget_ceiling_usd: int,
+    module_types: list[str] | None = None,
 ) -> str:
     """One candidate per RAM group (deduped intrinsic spec); the exact kit is
-    resolved deterministically after the group is chosen."""
-    exacts = await crud.get_ram_candidates(session, ddr_gen, budget_ceiling_usd)
+    resolved deterministically after the group is chosen.
+
+    module_types comes from the chosen board and is a hard compatibility
+    filter, not a preference — see crud.get_ram_candidates."""
+    exacts = await crud.get_ram_candidates(
+        session, ddr_gen, budget_ceiling_usd, module_types
+    )
     rows = _aggregate_groups(exacts, lambda e: e.group, _serialize_ram_group)
     return json.dumps(rows, indent=None)
 

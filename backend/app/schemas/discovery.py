@@ -7,17 +7,37 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+# Kept in lockstep with models.discovery.DiscoveryCategory. Spelled out as a
+# Literal rather than derived from the enum so FastAPI renders the actual
+# values in the OpenAPI schema and the 422 body names them.
+DiscoveryCategoryLiteral = Literal[
+    "cpu",
+    "gpu_chipset",
+    "gpu_variant",
+    "motherboard",
+    "cpu_cooler",
+    "ram_kit",
+    "storage_drive",
+    "psu",
+    "case",
+    "fan",
+    "ai_model",
+]
+
 
 class DiscoveryTriggerRequest(BaseModel):
     query: str = Field(min_length=3, max_length=200)
-    category: Literal["cpu", "gpu_chipset", "gpu_variant"]
+    category: DiscoveryCategoryLiteral
 
 
 class DiscoverySweepRequest(BaseModel):
     """A sweep names a category, not a part. `hint` narrows the search ("2026
-    Nvidia", "budget AM5"); omitted, the search pins the current year."""
+    Nvidia", "budget AM5"); omitted, the search pins the current year.
 
-    category: Literal["cpu", "gpu_chipset", "gpu_variant"]
+    For ai_model the hint is a Hub search term ("qwen", "flux") — that sweep
+    queries the Hugging Face API rather than searching the open web."""
+
+    category: DiscoveryCategoryLiteral
     hint: str | None = Field(default=None, max_length=200)
 
 
@@ -39,6 +59,7 @@ class DiscoveredItemOut(BaseModel):
     source_urls: list[str]
     matched_part_id: uuid.UUID | None
     matched_chipset_id: uuid.UUID | None
+    matched_ai_model_id: uuid.UUID | None
     match_method: str | None
     match_score: float | None
     validation_status: str

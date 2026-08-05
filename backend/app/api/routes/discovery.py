@@ -16,6 +16,21 @@ from app.services.discovery.runner import start_discovery_run, start_sweep_run
 router = APIRouter(tags=["discovery"])
 
 
+def _require_search_config(category: str) -> None:
+    """Fail before creating a run row — a run that can't search is noise.
+
+    ai_model is exempt: it reads the Hugging Face Hub API directly and never
+    touches Tavily, so gating it on a search key would block the one category
+    that needs no search key at all.
+    """
+    if category == "ai_model":
+        return
+    if not settings.TAVILY_API_KEY:
+        raise HTTPException(
+            status_code=503, detail="TAVILY_API_KEY is not configured on this server"
+        )
+
+
 @router.post(
     "/discovery/runs",
     status_code=202,
@@ -25,11 +40,7 @@ router = APIRouter(tags=["discovery"])
 async def trigger_discovery_run(
     payload: DiscoveryTriggerRequest,
 ) -> DiscoveryTriggerResponse:
-    # Fail before creating a run row — a run that can't search is noise.
-    if not settings.TAVILY_API_KEY:
-        raise HTTPException(
-            status_code=503, detail="TAVILY_API_KEY is not configured on this server"
-        )
+    _require_search_config(payload.category)
     run_id = await start_discovery_run(payload.query, payload.category)
     return DiscoveryTriggerResponse(run_id=run_id, status="running")
 
@@ -49,10 +60,7 @@ async def trigger_discovery_sweep(
     `query` is a required part name, and a sweep has no part name at all.
     Polled through the same GET — a sweep is one run row carrying N items.
     """
-    if not settings.TAVILY_API_KEY:
-        raise HTTPException(
-            status_code=503, detail="TAVILY_API_KEY is not configured on this server"
-        )
+    _require_search_config(payload.category)
     run_id = await start_sweep_run(payload.hint, payload.category)
     return DiscoveryTriggerResponse(run_id=run_id, status="running")
 

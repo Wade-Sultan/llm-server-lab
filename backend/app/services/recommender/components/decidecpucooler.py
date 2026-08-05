@@ -20,7 +20,9 @@ class CoolerSelection(dspy.Signature):
     use_cases: str = dspy.InputField(desc="User's use cases and preferences summary")
     cpu_name: str = dspy.InputField(desc="The chosen CPU (drives TDP expectations)")
     cpu_tdp_w: int = dspy.InputField(desc="CPU TDP in watts")
-    budget_ceiling: int = dspy.InputField(desc="Maximum to spend on cooler in USD")
+    budget_ceiling: int = dspy.InputField(
+        desc="Maximum to spend on cooler in USD; -1 means no ceiling — the user has said cost is not a constraint"
+    )
     candidates: str = dspy.InputField(
         desc="JSON list of compatible coolers. Fields: name, type, max_tdp_w, "
         "noise_db, height_mm, street_price_usd"

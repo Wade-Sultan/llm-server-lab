@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import threading
 import time
 import uuid
@@ -14,7 +15,12 @@ import openai
 from app.core.config import settings
 from app.core.db import AsyncSessionLocal
 from app.data.refbuilds import Build
-from app.schemas.chat import BuildProfile, BuildRequest, ChatMessage
+from app.schemas.chat import (
+    NO_BUDGET_CEILING,
+    BuildProfile,
+    BuildRequest,
+    ChatMessage,
+)
 from app.services.chat_models import ChatModelConfig
 from app.services.resolver import resolve_build
 
@@ -185,6 +191,60 @@ def _format_conversation(messages: list[ChatMessage]) -> str:
     return "\n".join(lines)
 
 
+# Unconstrained-budget statements, matched against the user's own turns to
+# confirm a 'custom' budget_tier the extraction model proposed.
+#
+# Deliberately narrow. A false negative costs the user one clarifying exchange
+# and an 'elite' build; a false positive silently removes every price ceiling
+# from a build the user never said that about, and they find out at checkout.
+# So bare "no budget" is NOT here — "I have no budget" far more often means
+# "I have no money" than "I have unlimited money".
+_UNLIMITED_BUDGET_PATTERNS = (
+    r"\b(?:money|cost|price|budget)\s+(?:is|are)\s+no\s+(?:object|issue|concern)\b",
+    r"\bno\s+(?:budget|price|spending|cost)\s+(?:limit|cap|ceiling|constraint)",
+    r"\bbudget\s+is\s+(?:unlimited|limitless|open|uncapped)\b",
+    r"\bunlimited\s+budget\b",
+    r"\bspend\s+(?:whatever|as\s+much\s+as)\b",
+    r"\bwhatever\s+it\s+(?:takes|costs)\b",
+    r"\b(?:cost|price|money|budget)\s+(?:doesn'?t|does\s+not)\s+matter\b",
+    r"\b(?:don'?t|do\s+not)\s+care\s+(?:about|what)\s+(?:the\s+)?(?:cost|price|money|it\s+costs)\b",
+    r"\bregardless\s+of\s+(?:the\s+)?(?:cost|price)\b",
+    r"\b(?:spare\s+no\s+expense|no\s+expense\s+spared)\b",
+    r"\bsky'?s?\s+is\s+the\s+limit\b|\bsky\s+is\s+the\s+limit\b",
+)
+
+_UNLIMITED_BUDGET_RE = re.compile("|".join(_UNLIMITED_BUDGET_PATTERNS), re.IGNORECASE)
+
+
+def _confirm_custom_budget(budget_tier: str, messages: list[ChatMessage]) -> str:
+    """Accept a 'custom' budget tier only if the user actually said so.
+
+    'custom' removes every price ceiling in the pipeline, which makes it the
+    one tier where a hallucination is expensive rather than merely wrong — so
+    it needs two independent signals to agree, not one. The extraction model
+    proposes it from the conversation as a whole; this checks the user's own
+    turns for an explicit statement, deterministically. An unconfirmed 'custom'
+    falls back to 'elite', the most permissive real tier, so the user still
+    gets a high-end build and can restate their intent.
+
+    Only user turns are scanned. The assistant saying "so, unlimited budget?"
+    is the model's own words coming back around, and letting that confirm the
+    tier would defeat the point of a second signal.
+    """
+    if budget_tier != "custom":
+        return budget_tier
+
+    for msg in messages:
+        if msg.role == "user" and _UNLIMITED_BUDGET_RE.search(msg.content or ""):
+            return "custom"
+
+    logger.info(
+        "profile extraction proposed budget_tier='custom' with no explicit "
+        "user statement to back it; falling back to 'elite'"
+    )
+    return "elite"
+
+
 async def extract_profile(
     messages: list[ChatMessage],
     usage_sink: dict | None = None,
@@ -217,16 +277,18 @@ async def extract_profile(
         return None if not v or v.lower() == "none" else v
 
     return BuildProfile(
+        budget_tier=_confirm_custom_budget(result.budget_tier, messages),
         primary_use=result.primary_use,
         gaming_resolution=_opt(result.gaming_resolution),
         gaming_fps=_opt(result.gaming_fps),
         streaming_style=_opt(result.streaming_style),
         ai_workload=_opt(result.ai_workload),
         ai_model_scale=_opt(result.ai_model_scale),
+        server_workload=_opt(result.server_workload),
+        server_gpu_count=_opt(result.server_gpu_count),
         editing_resolution=_opt(result.editing_resolution),
         rendering_software=_opt(result.rendering_software),
         workload_intensity=_opt(result.workload_intensity),
-        budget_tier=result.budget_tier,
         games=games,
         workloads=workloads,
         notes=result.notes,
@@ -265,6 +327,10 @@ def _profile_details(profile: BuildProfile) -> str:
         bits.append(f"AI workload: {profile.ai_workload}")
     if profile.ai_model_scale:
         bits.append(f"model scale: {profile.ai_model_scale}")
+    if profile.server_workload:
+        bits.append(f"server workload: {profile.server_workload}")
+    if profile.server_gpu_count:
+        bits.append(f"GPU count: {profile.server_gpu_count}")
     if profile.editing_resolution:
         bits.append(f"footage resolution: {profile.editing_resolution}")
     if profile.rendering_software:
@@ -284,18 +350,24 @@ def _format_build_context(
     approx_price/total_approx are in cents (see _assemble_dspy_build's docstring
     for the convention); divide by 100 to show the LLM real dollar figures.
     """
-    parts_text = "\n".join(
-        f"  - {p['component']}: {p['brand']} {p['model']} "
-        f"(~${p['approx_price'] / 100:.0f})"
-        if p.get("approx_price") is not None
-        else f"  - {p['component']}: {p['brand']} {p['model']}"
-        for p in build["parts"]
-    )
+
+    def _line(p: dict) -> str:
+        # "2x " rather than a silent single entry: without it the lead-in would
+        # describe a four-GPU server as though it had one card.
+        quantity = p.get("quantity") or 1
+        prefix = f"{quantity}x " if quantity > 1 else ""
+        line = f"  - {p['component']}: {prefix}{p['brand']} {p['model']}"
+        if p.get("approx_price") is None:
+            return line
+        # approx_price is per unit; show what the line actually costs.
+        return f"{line} (~${p['approx_price'] * quantity / 100:.0f})"
+
+    parts_text = "\n".join(_line(p) for p in build["parts"])
     return f"""\
 USER PROFILE:
   Primary use: {profile.primary_use}
   Use-case details: {_profile_details(profile)}
-  Budget tier: {profile.budget_tier}
+  Budget tier: {"no limit stated by the user" if profile.budget_tier == "custom" else profile.budget_tier}
   Games: {", ".join(profile.games) if profile.games else "N/A"}
   Workloads: {", ".join(profile.workloads) if profile.workloads else "N/A"}
   Notes: {profile.notes or "None"}
@@ -370,16 +442,26 @@ You are Palladium's friendly intake assistant. Learn the user's needs to recomme
 
 Determine:
 1. Primary use case (gaming, streaming, video editing, 3D rendering, AI/ML,
-   software development, music production, or general productivity)
+   a server/workstation, software development, music production, or general
+   productivity)
 2. For gaming (or streaming gameplay): target resolution AND target frame rate, plus game types
 3. For streaming: whether they stream while gaming or camera/IRL content only
 4. For AI/ML: the workload (running models, training/fine-tuning, image generation)
    and roughly how large the models are
-5. For video editing: the resolution of the footage they edit
-6. For 3D rendering: which software/renderer they work in
-7. For software development or music production: how heavy the workload is
+5. For a server: what it will run (AI training, AI serving, HPC/simulation,
+   virtualization or a homelab, storage, a render farm node) AND how many GPUs
+   it has to host — the GPU count is what decides whether this needs a
+   workstation platform like Threadripper rather than a desktop one
+6. For video editing: the resolution of the footage they edit
+7. For 3D rendering: which software/renderer they work in
+8. For software development or music production: how heavy the workload is
    (codebase size, VMs/containers; track and plugin counts)
-8. Budget expectations (even vague is fine)
+9. Budget expectations (even vague is fine)
+
+On budget, take the user at their word in both directions. A vague answer is
+enough — don't push for a figure. If they say there is no limit, accept that and
+move on; don't talk them into naming one. But never put "unlimited" in their
+mouth either: if they haven't said it, don't offer it as an option.
 
 Ask ONE focused follow-up question at a time. Be conversational. Keep responses under 80 words.
 
@@ -398,8 +480,8 @@ def _missing_fields(profile: BuildProfile) -> list[str]:
     if profile.primary_use == "unknown":
         return [
             "their primary use case (gaming, streaming, video editing, "
-            "3D rendering, AI/ML, software development, music production, "
-            "or general productivity)"
+            "3D rendering, AI/ML, a server or workstation, software development, "
+            "music production, or general productivity)"
         ]
 
     missing: list[str] = []
@@ -429,6 +511,17 @@ def _missing_fields(profile: BuildProfile) -> list[str]:
             and profile.ai_model_scale is None
         ):
             missing.append("roughly how large the models are")
+    elif use == "server":
+        if profile.server_workload is None:
+            missing.append(
+                "what the server will run (AI training, AI serving, HPC/simulation, "
+                "virtualization or a homelab, storage, or a render farm node)"
+            )
+        # Asked for every workload, including the CPU-only ones: "zero GPUs" is
+        # the answer that sends the build toward cores and memory bandwidth
+        # instead of PCIe lanes, so it is as load-bearing as "eight".
+        if profile.server_gpu_count is None:
+            missing.append("how many GPUs the server needs to host")
     elif use == "video_editing":
         if profile.editing_resolution is None:
             missing.append("the resolution of the footage they edit")
@@ -527,9 +620,10 @@ def is_profile_complete(profile: BuildProfile) -> bool:
     inferred, plus the use-case-specific fields that meaningfully fork the
     build: gaming needs resolution AND target frame rate; streaming needs a
     style (and resolution + frame rate when streaming while gaming); AI needs
-    a workload (and a model scale for LLM workloads); video editing needs
-    footage resolution; 3D rendering needs the software used; software dev and
-    music production need a workload intensity.
+    a workload (and a model scale for LLM workloads); a server needs a workload
+    AND a GPU count; video editing needs footage resolution; 3D rendering needs
+    the software used; software dev and music production need a workload
+    intensity.
     """
     if profile.primary_use == "unknown":
         return False
@@ -556,6 +650,10 @@ def is_profile_complete(profile: BuildProfile) -> bool:
         ):
             return False
         return True
+    if use == "server":
+        return (
+            profile.server_workload is not None and profile.server_gpu_count is not None
+        )
     if use == "video_editing":
         return profile.editing_resolution is not None
     if use == "3d_rendering":
@@ -604,31 +702,61 @@ _PIPELINE_DONE = object()
 
 _BUDGET_TIER_USD = {"entry": 1000, "mid": 1500, "high": 2500, "elite": 4000}
 
+# Server builds start where a consumer "elite" build ends: a Threadripper and a
+# TRX50 board alone are past $2000 before any GPU, so mapping a server profile
+# onto the desktop ladder would hand every step a ceiling no server part clears
+# and fail the run at the CPU query. Same tier labels, re-scaled.
+_SERVER_BUDGET_TIER_USD = {"entry": 4000, "mid": 7000, "high": 12000, "elite": 25000}
+
+
+def _budget_for(profile: BuildProfile) -> int:
+    """Total build budget in USD for a profile, or NO_BUDGET_CEILING.
+
+    'custom' short-circuits both ladders: it is not a bigger tier, it is the
+    absence of one. By the time a profile reaches here that tier has already
+    been confirmed against the user's own words (_confirm_custom_budget), so
+    this can take it at face value.
+    """
+    if profile.budget_tier == "custom":
+        return NO_BUDGET_CEILING
+    tiers = (
+        _SERVER_BUDGET_TIER_USD if profile.primary_use == "server" else _BUDGET_TIER_USD
+    )
+    return tiers.get(profile.budget_tier, tiers["mid"])
+
+
 # BuildProfile.primary_use → BuildRequest use-case key (must match the keys
-# _allocate_budget knows: gaming, streaming, creator, rendering, aiml, dev,
-# audio, default-anything-else).
+# _allocate_budget knows: gaming, streaming, creator, rendering, aiml, server,
+# dev, audio, default-anything-else).
 _PRIMARY_USE_TO_USE_CASE = {
     "gaming": "gaming",
     "streaming": "streaming",
     "video_editing": "creator",
     "3d_rendering": "rendering",
     "ai": "aiml",
+    "server": "server",
     "software_dev": "dev",
     "music_production": "audio",
     "general": "productivity",
 }
 
 # Display order + labels for the assembled BuildCard parts list.
-_DSPY_COMPONENT_SLOTS: list[tuple[str, str]] = [
-    ("CPU", "cpu_name"),
-    ("CPU Cooler", "cooler_name"),
-    ("Motherboard", "mobo_name"),
-    ("RAM", "ram_name"),
-    ("Storage", "storage_name"),
-    ("GPU", "gpu_name"),
-    ("PSU", "psu_name"),
-    ("Case", "case_name"),
-    ("Case Fans", "fans_name"),
+#
+# Each entry is (label, state attribute, quantity attribute). The attribute
+# holds either one name or a list of them, and the quantity attribute — None
+# for the single-instance roles — says how many of each. The two shapes mirror
+# BuildPart: distinct parts in a role are separate rows (storage), identical
+# ones are one row with a quantity (GPUs, fans).
+_DSPY_COMPONENT_SLOTS: list[tuple[str, str, str | None]] = [
+    ("CPU", "cpu_name", None),
+    ("CPU Cooler", "cooler_name", None),
+    ("Motherboard", "mobo_name", None),
+    ("RAM", "ram_name", None),
+    ("Storage", "storage_names", None),
+    ("GPU", "gpu_name", "gpu_count"),
+    ("PSU", "psu_name", None),
+    ("Case", "case_name", None),
+    ("Case Fans", "fans_name", "fans_quantity"),
 ]
 
 
@@ -645,6 +773,10 @@ def _profile_to_build_request(profile: BuildProfile) -> BuildRequest:
         answers["ai.workload"] = profile.ai_workload
     if profile.ai_model_scale:
         answers["ai.model_scale"] = profile.ai_model_scale
+    if profile.server_workload:
+        answers["server.workload"] = profile.server_workload
+    if profile.server_gpu_count:
+        answers["server.gpu_count"] = profile.server_gpu_count
     if profile.editing_resolution:
         answers["editing.footage_resolution"] = profile.editing_resolution
     if profile.rendering_software:
@@ -659,7 +791,7 @@ def _profile_to_build_request(profile: BuildProfile) -> BuildRequest:
         answers["general.notes"] = profile.notes
     return BuildRequest(
         use_cases=[_PRIMARY_USE_TO_USE_CASE.get(profile.primary_use, "productivity")],
-        budget_usd=_BUDGET_TIER_USD.get(profile.budget_tier, 1500),
+        budget_usd=_budget_for(profile),
         answers=answers,
     )
 
@@ -680,24 +812,30 @@ async def _assemble_dspy_build(state: Any, db) -> dict:
     from app.crud.components import get_part_by_name, resolve_part_price_cents
     from app.crud.reference_builds import get_amazon_urls_by_part
 
-    resolved: list[tuple[str, str, Any, int | None]] = []
+    resolved: list[tuple[str, str, Any, int | None, int]] = []
     total_cents = 0
-    for component, attr in _DSPY_COMPONENT_SLOTS:
-        name = getattr(state, attr)
-        if not name:
-            continue
-        part = await get_part_by_name(db, name)
-        # Grouped parts (GPU/PSU/RAM/Storage) carry price on their group, not the
-        # exact pc_parts row — resolve_part_price_cents handles both.
-        price_cents = (
-            await resolve_part_price_cents(db, part) if part is not None else None
-        )
-        if price_cents is not None:
-            total_cents += price_cents
-        resolved.append((component, name, part, price_cents))
+    for component, attr, quantity_attr in _DSPY_COMPONENT_SLOTS:
+        value = getattr(state, attr, None)
+        # One attribute, two shapes: a list for roles whose members differ
+        # (storage), a bare name for everything else.
+        names = [n for n in (value if isinstance(value, list) else [value]) if n]
+        quantity = max(1, getattr(state, quantity_attr, 1) or 1) if quantity_attr else 1
+        for name in names:
+            part = await get_part_by_name(db, name)
+            # Grouped parts (GPU/PSU/RAM/Storage) carry price on their group, not
+            # the exact pc_parts row — resolve_part_price_cents handles both.
+            price_cents = (
+                await resolve_part_price_cents(db, part) if part is not None else None
+            )
+            if price_cents is not None:
+                # Per-unit price times the count, matching BuildPart's
+                # line_total_cents. Summing the unit price would under-report a
+                # four-GPU build by three cards.
+                total_cents += price_cents * quantity
+            resolved.append((component, name, part, price_cents, quantity))
 
     amazon_urls = await get_amazon_urls_by_part(
-        db, [part.id for _, _, part, _ in resolved if part is not None]
+        db, [part.id for _, _, part, _, _ in resolved if part is not None]
     )
 
     parts = [
@@ -705,11 +843,15 @@ async def _assemble_dspy_build(state: Any, db) -> dict:
             "component": component,
             "brand": (part.manufacturer if part else None) or "",
             "model": name,
+            # Per unit, like pc_build_parts.price_at_build — the card multiplies
+            # by quantity for display rather than being handed a line total it
+            # can't decompose.
             "approx_price": price_cents,
+            "quantity": quantity,
             "part_id": str(part.id) if part is not None else "",
             "amazon_url": amazon_urls.get(part.id) if part is not None else None,
         }
-        for component, name, part, price_cents in resolved
+        for component, name, part, price_cents, quantity in resolved
     ]
     return {
         "label": "Custom Build",

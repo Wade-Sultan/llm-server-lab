@@ -53,6 +53,26 @@ def match_item(
     return None, None, None
 
 
+def match_columns(
+    category: str, matched_id: uuid.UUID | None
+) -> dict[str, uuid.UUID | None]:
+    """Route a dedup hit onto the right discovered_items FK column.
+
+    Three catalogs can be matched against and each has its own column, because
+    a match is a foreign key and gpu_chipsets / ai_models are not pc_parts
+    rows. All three keys are always returned (not just the populated one) so an
+    ON CONFLICT DO UPDATE refresh clears a stale match from a previous run
+    rather than leaving it behind.
+    """
+    return {
+        "matched_part_id": matched_id
+        if category not in ("gpu_chipset", "ai_model")
+        else None,
+        "matched_chipset_id": matched_id if category == "gpu_chipset" else None,
+        "matched_ai_model_id": matched_id if category == "ai_model" else None,
+    }
+
+
 def filter_new_names(
     names: list[str], known_normalized: set[str], limit: int
 ) -> list[str]:

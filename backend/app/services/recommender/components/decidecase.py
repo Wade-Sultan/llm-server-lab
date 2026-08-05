@@ -20,7 +20,9 @@ class CaseOptions(dspy.Signature):
     mobo_form_factor: str = dspy.InputField(
         desc="Required motherboard form factor support"
     )
-    budget_ceiling: int = dspy.InputField(desc="Maximum to spend on case in USD")
+    budget_ceiling: int = dspy.InputField(
+        desc="Maximum to spend on case in USD; -1 means no ceiling — the user has said cost is not a constraint"
+    )
     candidates: str = dspy.InputField(
         desc="JSON list of compatible cases. Fields: name, size, supported_mobo_sizes, "
         "max_gpu_length_mm, max_cooler_height_mm, fan_slots, included_fans, "

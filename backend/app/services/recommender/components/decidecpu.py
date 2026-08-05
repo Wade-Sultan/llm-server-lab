@@ -20,17 +20,32 @@ class CPUSelection(dspy.Signature):
     Output a reconsideration_threshold: a concrete price boundary at which
     the calculus changes. E.g. 'If the Ryzen 7 7800X3D drops below $280,
     upgrade; above that the gaming premium isn't justified for this workload.'
+
+    For server and workstation builds the deciding specs are different ones.
+    pcie_lanes caps how many GPUs and NVMe drives can run at full width — four
+    x16 GPUs need 64 lanes from the CPU regardless of what the board's slot
+    count suggests — and memory_channels sets bandwidth, which is what HPC and
+    CPU-side inference are actually limited by. A high-clocking desktop part
+    with 28 lanes and 2 channels is the wrong answer for those builds however
+    well it benchmarks, and a workstation part is the wrong answer for a
+    single-GPU desktop that would never use the lanes it pays for.
     """
 
     use_cases: str = dspy.InputField(
         desc="User's selected use cases, preferences, and Q&A answers as a summary"
     )
-    budget_total: int = dspy.InputField(desc="Total build budget in USD")
-    cpu_budget_ceiling: int = dspy.InputField(desc="Maximum to spend on CPU in USD")
+    budget_total: int = dspy.InputField(
+        desc="Total build budget in USD; -1 means the user has set no budget at all"
+    )
+    cpu_budget_ceiling: int = dspy.InputField(
+        desc="Maximum to spend on CPU in USD; -1 means no ceiling — the user has said cost is not a constraint"
+    )
     candidates: str = dspy.InputField(
         desc="JSON list of compatible CPUs with street prices. Fields: name, brand, "
         "cores, threads, base_clock_ghz, boost_clock_ghz, tdp_w, socket, "
-        "ddr_gen, has_integrated_graphics, street_price_usd"
+        "ddr_gen, has_integrated_graphics, pcie_lanes, memory_channels, "
+        "supports_ecc, street_price_usd. The last three are null on consumer "
+        "desktop parts — that absence is meaningful, not missing data."
     )
 
     cpu_name: str = dspy.OutputField(

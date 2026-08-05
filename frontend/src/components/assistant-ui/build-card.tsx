@@ -110,9 +110,15 @@ export const BuildCard: DataMessagePartComponent<BuildData> = (props) => {
             // filtered search links with no single price).
             const priceListing = amazonListing
             const partLabel = `${part.brand} ${part.model}`
+            // A build can hold several of a part (four matched GPUs, three
+            // fans). Absent on reference builds, which predate the field.
+            const quantity = part.quantity ?? 1
             return (
               <div
-                key={part.part_id}
+                // part_id is "" for a name the catalog couldn't resolve, so it
+                // is not unique on its own once a build can carry several rows
+                // in one role — pair it with the component and model.
+                key={`${part.component}:${part.part_id || part.model}`}
                 className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2"
               >
                 <div className="min-w-0">
@@ -120,14 +126,18 @@ export const BuildCard: DataMessagePartComponent<BuildData> = (props) => {
                     {part.component}
                   </p>
                   <p className="truncate text-sm font-medium">
+                    {quantity > 1 && (
+                      <span className="text-muted-foreground">{quantity}× </span>
+                    )}
                     {part.brand} {part.model}
                   </p>
                 </div>
                 <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
                   {priceListing?.price_amount != null && (
                     <span className="text-sm text-muted-foreground">
+                      {/* Line total: the listing price is per unit. */}
                       {formatPrice(
-                        priceListing.price_amount / 100,
+                        (priceListing.price_amount * quantity) / 100,
                         priceListing.currency ?? "USD",
                       )}
                     </span>

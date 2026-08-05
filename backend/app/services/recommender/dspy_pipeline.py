@@ -47,7 +47,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.crud import components as crud_components
 from app.models.build_session import BuildSessionStatus
-from app.schemas.chat import BuildRequest
+from app.schemas.chat import NO_BUDGET_CEILING, BuildRequest
 from app.services.recommender.components.decidecase import DecideCase
 from app.services.recommender.components.decidecase import load_program as load_case
 from app.services.recommender.components.decidecpu import DecideCPU
@@ -367,6 +367,24 @@ _BUDGET_CEILINGS: dict[str, dict[str, float]] = {
         "case": 0.05,
         "fans": 0.03,
     },
+    "server": {
+        # The only profile where the *platform* is the expensive part rather
+        # than the GPU. A Threadripper and its board are a third of the build
+        # before anything is plugged into them, RAM is bought 8 sticks at a
+        # time (and registered ECC costs more per GB than consumer kits), and
+        # the PSU has to carry several GPUs plus a 350W+ CPU. Case and fans
+        # get less than any other profile: a machine that runs headless in a
+        # closet gains nothing from a nice one.
+        "cpu": 0.32,
+        "cooler": 0.06,
+        "mobo": 0.18,
+        "ram": 0.35,
+        "storage": 0.30,
+        "gpu": 0.75,
+        "psu": 0.10,
+        "case": 0.05,
+        "fans": 0.03,
+    },
     "creator": {
         "cpu": 0.23,
         "cooler": 0.07,
@@ -431,7 +449,17 @@ _BUDGET_CEILINGS: dict[str, dict[str, float]] = {
 
 
 def _allocate_budget(budget_usd: int, use_cases: list[str]) -> dict[str, int]:
-    """Return per-slot budget ceilings in USD."""
+    """Return per-slot budget ceilings in USD.
+
+    Under the 'custom' tier (budget_usd is NO_BUDGET_CEILING) every slot gets
+    the sentinel rather than a share of a total, because there is no total to
+    take a share of. Splitting a notional huge number across the slots would
+    reintroduce exactly the constraint the user declined to set — the point of
+    'custom' is that no slot has a maximum, not that every slot has a large
+    one. The CRUD layer drops its price filter on the same sentinel.
+    """
+    if budget_usd == NO_BUDGET_CEILING:
+        return dict.fromkeys(_BUDGET_CEILINGS["default"], NO_BUDGET_CEILING)
     # Use the first recognized use case to pick a ceiling profile
     profile_key = next(
         (uc for uc in use_cases if uc in _BUDGET_CEILINGS),
@@ -447,6 +475,17 @@ def _request_summary(request: BuildRequest) -> str:
     signatures expect: use cases plus preferences and Q&A answers.
     """
     parts = [f"Use cases: {', '.join(request.use_cases)}"]
+    if request.budget_usd == NO_BUDGET_CEILING:
+        # Stated in the summary as well as in each step's numeric budget input,
+        # because the sentinel reads as nonsense on its own. This string is the
+        # one piece of context every Decide* module receives, so it is the
+        # cheapest place to say it once and have all ten see it.
+        parts.append(
+            "Budget: no ceiling — the user has explicitly said cost is not a "
+            "constraint. Still choose parts that earn their price for this "
+            "workload; unlimited budget is not licence to pick the most "
+            "expensive part in every slot."
+        )
     prefs = request.preferences
     pref_bits = []
     if prefs.form_factor != "no_preference":
@@ -498,6 +537,9 @@ class DSPyBuildState:
     # used to admit any compatible motherboard generation.
     cpu_ddr_gen: str = "ddr5"
     cpu_ddr_gens: list[str] = field(default_factory=lambda: ["ddr5"])
+    # Advisory input to the GPU step — 0 means the catalog doesn't record it,
+    # which is the norm for consumer parts.
+    cpu_pcie_lanes: int = 0
 
     cooler_name: str = ""
 
@@ -508,19 +550,36 @@ class DSPyBuildState:
     mobo_ddr_gen: str = ""
     mobo_m2_slots: int = 2
     mobo_sata_ports: int = 4
+    # Hard ceiling on gpu_count. Defaults to 1 so a board lookup that missed
+    # produces a single-GPU build rather than an unbuildable multi-GPU one.
+    mobo_pcie_x16_slots: int = 1
+    # DIMM types the chosen board accepts. Empty = unconstrained, which is what
+    # every consumer board records; a populated list is what keeps the RAM step
+    # from offering a workstation board unbuffered kits it can't POST on.
+    mobo_module_types: list[str] = field(default_factory=list)
 
     # For RAM/Storage/PSU/GPU the DSPy step picks a *group*; a deterministic step
     # then resolves the cheapest exact SKU (*_name, used for build assembly).
     ram_group: str = ""
     ram_name: str = ""
 
-    storage_group: str = ""
-    storage_name: str = ""
+    # Storage is the one multi-part role whose members differ from each other
+    # (a fast OS drive alongside bulk capacity), so it carries lists rather
+    # than a name plus a count. Ordered primary-drive-first.
+    storage_groups: list[str] = field(default_factory=list)
+    storage_names: list[str] = field(default_factory=list)
 
     # gpu_chipset is chosen by the main DSPy step; gpu_name is the exact board,
     # resolved deterministically post-case once length + PSU constraints are known.
+    #
+    # gpu_count is a quantity of that one board, not a list: multi-GPU only pays
+    # off when the cards are matched (tensor/pipeline parallelism needs them to
+    # be), so a build never mixes chipsets here.
     gpu_chipset: str = ""
     gpu_name: str = ""
+    gpu_count: int = 1
+    # Per-card TDP. The PSU step multiplies by gpu_count; keeping it per-card
+    # means the value stays comparable with the chipset row it came from.
     gpu_tdp_w: int = 0
     gpu_required: bool = True
 
@@ -535,6 +594,7 @@ class DSPyBuildState:
     case_fan_slots: list[int] = field(default_factory=list)
 
     fans_name: str = ""
+    fans_quantity: int = 1
 
     error: str | None = None
 
@@ -633,6 +693,7 @@ async def _step_cpu(
         raise RuntimeError(f"Chosen CPU {result.cpu_name!r} not found in catalog")
     state.cpu_socket = cpu.socket
     state.cpu_tdp_w = cpu.tdp_watts
+    state.cpu_pcie_lanes = cpu.pcie_lanes or 0
     gens = [g for g in (cpu.ddr_generation or []) if g and g.strip()]
     if gens:
         state.cpu_ddr_gens = gens
@@ -713,6 +774,10 @@ async def _step_motherboard(
         state.mobo_ddr_gen = mobo.ddr_generation or ""
         state.mobo_m2_slots = mobo.m2_slots or 0
         state.mobo_sata_ports = mobo.sata_ports or 0
+        state.mobo_module_types = list(mobo.memory_module_types or [])
+        # Floor of 1: a board with no recorded slot count still takes one card,
+        # and reading the NULL as zero would produce a GPU-less build.
+        state.mobo_pcie_x16_slots = max(1, mobo.pcie_x16_slots or 1)
 
 
 async def _step_ram(
@@ -727,7 +792,14 @@ async def _step_ram(
     # the CPU's whole supported set; fall back to the platform pick if the board
     # lookup missed.
     ddr_for_ram = state.mobo_ddr_gen or state.cpu_ddr_gen
-    candidates = await get_ram_candidates(session, ddr_for_ram, budget["ram"])
+    candidates = await get_ram_candidates(
+        session,
+        ddr_for_ram,
+        budget["ram"],
+        # Registered vs unbuffered is a wall, not a preference — the chosen
+        # board decides it, same as it decides the generation.
+        state.mobo_module_types,
+    )
     _ensure_candidates("ram", candidates)
     result = await _run_step(
         recorder,
@@ -746,6 +818,62 @@ async def _step_ram(
     )
     if kit is not None:
         state.ram_name = kit.name
+
+
+# Backstops on how many parts a single step may return. The per-step ceilings
+# passed to the LLM (max_gpu_slots, max_drives, empty_fan_slots) are the real
+# constraint; these only bound the damage when a model ignores them, so they
+# sit well above any plausible real build rather than trying to be accurate.
+_MAX_STORAGE_DRIVES = 6
+_MAX_GPUS = 8
+_MAX_FANS = 12
+
+
+def _parse_name_list(raw: str, limit: int) -> list[str]:
+    """Comma-separated model output -> a de-duplicated, capped list of names.
+
+    DSPy output fields are strings, so a step that picks several parts returns
+    them as one. Duplicates are dropped rather than counted: UNIQUE (build_id,
+    role, part_id) rejects the same part twice in a role, and a model naming a
+    drive twice means it repeated itself, not that it wants two.
+    """
+    seen: set[str] = set()
+    names: list[str] = []
+    for chunk in (raw or "").split(","):
+        name = chunk.strip()
+        key = name.casefold()
+        if not name or key in seen:
+            continue
+        seen.add(key)
+        names.append(name)
+        if len(names) == limit:
+            break
+    return names
+
+
+def _clamp_count(raw, *, ceiling: int, label: str) -> int:
+    """Coerce a model-supplied count into [1, ceiling].
+
+    The ceilings here are physical — PCIe slots, drive mounts, fan mounts — so
+    a model that overshoots would otherwise produce a build that cannot be
+    assembled. Logged when it bites, because a step that regularly ignores its
+    stated ceiling is a prompt problem worth seeing.
+    """
+    try:
+        count = int(raw)
+    except (TypeError, ValueError):
+        logger.warning("%s: non-numeric count %r; using 1", label, raw)
+        return 1
+    clamped = max(1, min(count, ceiling))
+    if clamped != count:
+        logger.warning(
+            "%s: count %d outside [1, %d]; clamped to %d",
+            label,
+            count,
+            ceiling,
+            clamped,
+        )
+    return clamped
 
 
 def _pick_exact(exacts: list):
@@ -771,23 +899,37 @@ async def _step_storage(
         state.mobo_sata_ports,
     )
     _ensure_candidates("storage", candidates)
+    # Every mounting point the board actually has. Floored at 1 so a board with
+    # neither figure recorded still gets a boot drive.
+    max_drives = max(1, state.mobo_m2_slots + state.mobo_sata_ports)
     result = await _run_step(
         recorder,
         program,
         status_fn=_noop_status,
         use_cases=state.use_case_summary or str(state.request.use_cases),
         budget_ceiling=budget["storage"],
+        max_drives=max_drives,
         candidates=candidates,
     )
-    state.storage_group = result.storage_group
-    state.thresholds["storage"] = result.reconsideration_threshold
-    drive = _pick_exact(
-        await crud_components.get_storage_drives_for_group(
-            session, result.storage_group
-        )
+    state.storage_groups = _parse_name_list(
+        result.storage_groups, limit=min(max_drives, _MAX_STORAGE_DRIVES)
     )
-    if drive is not None:
-        state.storage_name = drive.name
+    state.thresholds["storage"] = result.reconsideration_threshold
+
+    # Resolve each chosen group to a concrete drive, dropping any the catalog
+    # can't match. A group that resolves to nothing is silently skipped rather
+    # than failing the build: the remaining drives are still a usable machine,
+    # and the boot drive is the one that matters.
+    names: list[str] = []
+    for group in state.storage_groups:
+        drive = _pick_exact(
+            await crud_components.get_storage_drives_for_group(session, group)
+        )
+        if drive is not None:
+            names.append(drive.name)
+        else:
+            logger.warning("storage group %r resolved to no drive; skipping", group)
+    state.storage_names = names
 
 
 async def _step_gpu(
@@ -806,6 +948,11 @@ async def _step_gpu(
         state.request.preferences,
     )
     _ensure_candidates("gpu", candidates)
+    # The board was chosen three steps ago and its x16 slot count is now the
+    # hard ceiling on how many cards this build can host — there is no going
+    # back to a wider board from here. That asymmetry is why the motherboard
+    # step is told to favour multi-slot boards for GPU-heavy use cases.
+    max_gpu_slots = min(state.mobo_pcie_x16_slots, _MAX_GPUS)
     result = await _run_step(
         recorder,
         program,
@@ -813,11 +960,16 @@ async def _step_gpu(
         use_cases=state.use_case_summary or str(state.request.use_cases),
         budget_total=state.request.budget_usd,
         gpu_budget_ceiling=budget["gpu"],
+        max_gpu_slots=max_gpu_slots,
+        cpu_pcie_lanes=state.cpu_pcie_lanes,
         candidates=candidates,
     )
     state.gpu_required = result.gpu_required
     if state.gpu_required:
         state.gpu_chipset = result.gpu_chipset
+        state.gpu_count = _clamp_count(
+            getattr(result, "gpu_count", 1), ceiling=max_gpu_slots, label="gpu"
+        )
         state.thresholds["gpu"] = result.reconsideration_threshold
         # Size the PSU against the chipset's TDP (intrinsic to the chip, on the
         # GPUChipset group) so there's headroom regardless of which board resolves.
@@ -862,18 +1014,50 @@ async def _resolve_gpu_variant(state: DSPyBuildState, session: AsyncSession) -> 
         if max_len is not None and v.length_mm and v.length_mm > max_len:
             return False
         rec = v.chipset.recommended_psu_watts if v.chipset else None
-        if psu_watts is not None and rec and psu_watts < rec:
+        # Multiply the chip's single-card PSU recommendation by the card count:
+        # the supply has to carry all of them, not the worst one.
+        if psu_watts is not None and rec and psu_watts < rec * state.gpu_count:
             return False
         return True
 
-    chosen = next((v for v in variants if _fits(v)), None) or variants[0]
+    def _stacks(v) -> bool:
+        """Whether gpu_count of this board can sit next to each other.
+
+        A heuristic, not a guarantee. Boards are seated in alternating x16
+        slots on nearly every consumer and workstation layout, so a card up to
+        two slots wide clears its neighbour and a 3-slot card does not. The
+        schema carries no per-case expansion-slot budget to check properly, so
+        this narrows the field rather than proving fit — hence the fallback
+        below rather than a hard failure.
+        """
+        if state.gpu_count <= 1:
+            return True
+        return not v.width_slots or v.width_slots <= 2
+
+    # Prefer a board that both fits and stacks; fall back to merely fitting,
+    # then to anything, so a build always completes.
+    chosen = (
+        next((v for v in variants if _fits(v) and _stacks(v)), None)
+        or next((v for v in variants if _fits(v)), None)
+        or variants[0]
+    )
     if not _fits(chosen):
         logger.warning(
-            "no %r board fits case length %smm / PSU %sW; using variant %r",
+            "no %r board fits case length %smm / PSU %sW for %d card(s); using variant %r",
             state.gpu_chipset,
             max_len,
             psu_watts,
+            state.gpu_count,
             chosen.name,
+        )
+    elif not _stacks(chosen):
+        logger.warning(
+            "no %r board narrow enough to fit %d alongside each other; using %r "
+            "(%s slots wide)",
+            state.gpu_chipset,
+            state.gpu_count,
+            chosen.name,
+            chosen.width_slots,
         )
     state.gpu_name = chosen.name
     tdp = chosen.chipset.tdp_watts if chosen.chipset else None
@@ -889,8 +1073,10 @@ async def _step_psu(
     recorder: BuildRecorder | None,
 ) -> None:
     _emit(state, "psu", "Calculating power supply…")
-    # Add 20% headroom over combined TDP
-    system_tdp = state.cpu_tdp_w + state.gpu_tdp_w
+    # Add 20% headroom over combined TDP. gpu_tdp_w is per card, so a four-card
+    # build draws four times it — sizing against a single card here would put a
+    # 750W supply on a 1600W machine.
+    system_tdp = state.cpu_tdp_w + state.gpu_tdp_w * state.gpu_count
     min_wattage = int(system_tdp * 1.20)
     # Determine PSU form factor from case
     psu_form_factor = state.psu_form_factor  # updated after case step if ITX
@@ -955,18 +1141,27 @@ async def _step_fans(
 ) -> None:
     _emit(state, "fans", "Checking airflow…")
     candidates = await get_fan_candidates(session, budget["fans"], state.case_fan_slots)
+    empty_slots = max(1, len(state.case_fan_slots))
     result = await _run_step(
         recorder,
         program,
         status_fn=_noop_status,
         cpu_tdp_w=state.cpu_tdp_w,
-        gpu_tdp_w=state.gpu_tdp_w,
+        # Total heat, not per-card: four GPUs is four times the load the case
+        # has to clear, and that is the whole reason to add fans.
+        gpu_tdp_w=state.gpu_tdp_w * state.gpu_count,
         case_included_fans=state.case_included_fans,
+        empty_fan_slots=empty_slots,
         budget_ceiling=budget["fans"],
         candidates=candidates,
     )
     if result.fan_name.upper() != "NONE":
         state.fans_name = result.fan_name
+        state.fans_quantity = _clamp_count(
+            getattr(result, "fan_quantity", 1),
+            ceiling=min(empty_slots, _MAX_FANS),
+            label="fans",
+        )
 
 
 # ---------------------------------------------------------------------------

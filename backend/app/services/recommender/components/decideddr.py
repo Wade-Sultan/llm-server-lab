@@ -31,7 +31,9 @@ class DDRSelection(dspy.Signature):
     use_cases: str = dspy.InputField(
         desc="User's selected use cases, preferences, and Q&A answers as a summary"
     )
-    budget_total: int = dspy.InputField(desc="Total build budget in USD")
+    budget_total: int = dspy.InputField(
+        desc="Total build budget in USD; -1 means the user has set no budget at all"
+    )
     candidates: str = dspy.InputField(
         desc="JSON list with DDR generation options. Fields: ddr_gen, "
         "avg_ram_price_usd, avg_cpu_price_usd, avg_mobo_price_usd, cpu_count"

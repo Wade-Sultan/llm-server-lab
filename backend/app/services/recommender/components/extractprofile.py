@@ -27,7 +27,14 @@ class ProfileExtraction(dspy.Signature):
 
     primary_use: str = dspy.OutputField(
         desc="Exactly one of: gaming, streaming, video_editing, 3d_rendering, ai, "
-        "software_dev, music_production, general, unknown — "
+        "server, software_dev, music_production, general, unknown — "
+        "'server' is a machine built to run workloads rather than to be sat at: "
+        "multi-GPU AI training or serving, HPC/simulation, virtualization or a "
+        "homelab, a render farm node, or heavy self-hosting. Prefer 'server' over "
+        "'ai' when the user describes multiple GPUs, rack or headless operation, "
+        "ECC memory, 24/7 uptime, or a workstation/server platform (Threadripper, "
+        "Threadripper PRO, Xeon, EPYC); prefer 'ai' for a single-GPU desktop that "
+        "happens to run models. "
         "'unknown' if the conversation gives no basis to infer a use case yet"
     )
     gaming_resolution: str = dspy.OutputField(
@@ -52,6 +59,18 @@ class ProfileExtraction(dspy.Signature):
         "small ≈8B params or less, medium ≈934B, large ≈70B+; "
         "'none' unless primary_use is ai and the workload involves LLMs"
     )
+    server_workload: str = dspy.OutputField(
+        desc="Exactly one of: ai_training, ai_serving, hpc, virtualization, storage, "
+        "render_farm, none — what the machine is being built to run; "
+        "'none' unless primary_use is server"
+    )
+    server_gpu_count: str = dspy.OutputField(
+        desc="Exactly one of: 0, 1, 2, 4, 8, none — how many GPUs the build must "
+        "host, rounded to the nearest supported slot count. This is what decides "
+        "whether the build needs a high-lane-count platform (Threadripper, Xeon W, "
+        "EPYC) instead of a desktop one; '0' for a CPU-only server. "
+        "'none' unless primary_use is server"
+    )
     editing_resolution: str = dspy.OutputField(
         desc="Exactly one of: 1080p, 4k, 6k_plus, none — resolution of the footage the user "
         "edits; 'none' unless primary_use is video_editing"
@@ -66,8 +85,15 @@ class ProfileExtraction(dspy.Signature):
         "(track/plugin counts); 'none' for other use cases"
     )
     budget_tier: str = dspy.OutputField(
-        desc="Exactly one of: entry, mid, high, elite, unknown — "
+        desc="Exactly one of: entry, mid, high, elite, custom, unknown — "
         "entry ≈$1000-1500, mid ≈$1500-2300, high ≈$2300-3500, elite ≈$3500+ — "
+        "'custom' ONLY when the user has said outright that there is no budget "
+        "limit ('money is no object', 'budget is unlimited', 'spend whatever it "
+        "takes', 'price doesn't matter'). A large number, an enthusiastic tone, "
+        "a premium use case, or 'I want the best' are NOT 'custom' — 'the best "
+        "under $5000' is elite, and a stated figure is always the tier that "
+        "figure falls in, however large. When in doubt between 'custom' and "
+        "'elite', choose 'elite'. "
         "'unknown' if no budget signal at all has been given"
     )
     games: str = dspy.OutputField(
@@ -111,7 +137,8 @@ def optimize(
         - primary_use (str)       ← gold label
         - budget_tier (str)       ← gold label
         - gaming_resolution / gaming_fps / streaming_style / ai_workload /
-          ai_model_scale / editing_resolution / workload_intensity (str)
+          ai_model_scale / server_workload / server_gpu_count /
+          editing_resolution / workload_intensity (str)
                                   ← gold labels, 'none' if N/A
         - rendering_software (str) ← gold label, empty string if N/A
         - games (str)             ← comma-separated, or empty string

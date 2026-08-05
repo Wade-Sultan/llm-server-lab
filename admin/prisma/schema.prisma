@@ -136,6 +136,10 @@ model RamGroup {
   casLatency       Int?     @map("cas_latency")
   voltage          Float?
   isEcc            Boolean  @default(false) @map("is_ecc")
+  // udimm | rdimm | lrdimm. Registered modules are a hard compatibility wall
+  // on server platforms in both directions, which isEcc alone can't express
+  // (ECC UDIMMs exist). Backfilled to udimm for every pre-existing kit.
+  moduleType       String?  @map("module_type")
   createdAt        DateTime @default(now()) @map("created_at")
   updatedAt        DateTime @updatedAt @map("updated_at")
 
@@ -183,6 +187,11 @@ model Cpu {
   pcieGeneration    Int?     @map("pcie_generation")
   maxMemoryGb       Int?     @map("max_memory_gb")
   series            String?
+  // Server/workstation platform spec — what separates a Threadripper or Xeon
+  // from a desktop part. Nullable means "not recorded", not "no".
+  pcieLanes         Int?     @map("pcie_lanes")
+  memoryChannels    Int?     @map("memory_channels")
+  supportsEcc       Boolean? @map("supports_ecc")
 
   @@map("cpus")
 }
@@ -222,6 +231,14 @@ model Motherboard {
   usbTypeACount  Int?    @map("usb_type_a_count")
   usbTypeCCount  Int?    @map("usb_type_c_count")
   audioCodec     String? @map("audio_codec")
+  // Server-board spec. hasIpmi is the clearest single signal that a board is a
+  // server board rather than a workstation board.
+  supportsEcc    Boolean? @map("supports_ecc")
+  hasIpmi        Boolean? @map("has_ipmi")
+  memoryChannels Int?     @map("memory_channels")
+  // Empty = unconstrained. Populated is what stops a TRX50/WRX90 board being
+  // paired with unbuffered kits it will not POST on.
+  memoryModuleTypes String[] @map("memory_module_types")
 
   @@map("motherboards")
 }
@@ -362,12 +379,26 @@ model PCBuild {
   @@map("pc_builds")
 }
 
+// One row per DISTINCT part in a role; identical units are one row with
+// quantity > 1. gpu/storage/fan may repeat within a build, every other role
+// may not.
+//
+// That narrowing is enforced by two partial unique indexes and two check
+// constraints which, like the discovery ones above, are not expressible in
+// Prisma and live only in the DB (see the b3d5e7f9a1c2 migration):
+//   - UNIQUE (build_id, role) WHERE role NOT IN ('fan','gpu','storage')
+//   - UNIQUE (build_id, role, part_id) WHERE part_id IS NOT NULL
+//   - quantity >= 1, and quantity = 1 for the singleton roles
+// The plain @@unique that used to sit here is gone for the same reason: it
+// would describe a constraint the database no longer has.
 model BuildPart {
   id                String             @id @default(uuid()) @db.Uuid
   buildId           String             @map("build_id") @db.Uuid
   partId            String?            @map("part_id") @db.Uuid
   role              BuildComponentRole
   requiredComponent Boolean            @default(false) @map("required_component")
+  quantity          Int                @default(1)
+  // PER-UNIT price; the line total is priceAtBuild * quantity.
   priceAtBuild      Int?               @map("price_at_build")
   selectionReason   String?            @map("selection_reason")
   createdAt         DateTime           @default(now()) @map("created_at")
@@ -375,7 +406,6 @@ model BuildPart {
   build PCBuild @relation(fields: [buildId], references: [id], onDelete: Cascade)
   part  PcPart? @relation(fields: [partId], references: [id])
 
-  @@unique([buildId, role], map: "uq_pc_build_parts_build_role")
   @@map("pc_build_parts")
 }
 
@@ -711,7 +741,7 @@ model DiscoveredItem {
   id                   String       @id @default(uuid()) @db.Uuid
   runId                String       @map("run_id") @db.Uuid
   run                  DiscoveryRun @relation(fields: [runId], references: [id], onDelete: Cascade)
-  category             String // cpu | gpu_chipset | gpu_variant | ai_model
+  category             String // cpu | gpu_chipset | gpu_variant | motherboard | cpu_cooler | ram_kit | storage_drive | psu | case | fan | ai_model
   nameNormalized       String       @map("name_normalized")
   modelNumber          String?      @map("model_number")
   extractedFields      Json         @map("extracted_fields")
@@ -722,6 +752,9 @@ model DiscoveredItem {
   // discovery back-relations; the queue page resolves names itself.
   matchedPartId        String?      @map("matched_part_id") @db.Uuid
   matchedChipsetId     String?      @map("matched_chipset_id") @db.Uuid
+  // ai_models is a standalone catalog, not a pc_parts subtype, so AI-model
+  // matches and audit links need their own columns.
+  matchedAiModelId     String?      @map("matched_ai_model_id") @db.Uuid
   matchMethod          String?      @map("match_method") // exact | model_number | fuzzy | embedding
   matchScore           Float?       @map("match_score")
   validationStatus     String       @map("validation_status") // passed | failed
@@ -730,6 +763,7 @@ model DiscoveredItem {
   reviewedAt           DateTime?    @map("reviewed_at")
   createdPartId        String?      @map("created_part_id") @db.Uuid
   createdChipsetId     String?      @map("created_chipset_id") @db.Uuid
+  createdAiModelId     String?      @map("created_ai_model_id") @db.Uuid
   createdAt            DateTime     @default(now()) @map("created_at")
 
   @@map("discovered_items")

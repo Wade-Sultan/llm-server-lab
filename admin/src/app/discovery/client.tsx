@@ -50,11 +50,28 @@ import {
   type DiscoveryCategory,
 } from './actions';
 import {
+  ApproveAiModelForm,
+  ApproveCaseForm,
+  ApproveCpuCoolerForm,
   ApproveCpuForm,
+  ApproveFanForm,
   ApproveGpuChipsetForm,
   ApproveGpuVariantForm,
+  ApproveMotherboardForm,
+  ApprovePsuForm,
+  ApproveRamKitForm,
+  ApproveStorageDriveForm,
   type ChipsetOption,
+  type GroupOption,
 } from './approve-forms';
+
+/** The *_groups rows an approval can attach a SKU to, loaded in page.tsx.
+ * Keyed by the category that uses each list. */
+export type GroupOptions = {
+  ram: GroupOption[];
+  storage: GroupOption[];
+  psu: GroupOption[];
+};
 
 // DiscoveryRun with the Decimal cost pre-serialized to a number in page.tsx.
 export type SerializedRun = {
@@ -81,6 +98,14 @@ const CATEGORY_OPTIONS: { value: DiscoveryCategory; label: string }[] = [
   { value: 'cpu', label: 'CPU' },
   { value: 'gpu_chipset', label: 'GPU Chipset' },
   { value: 'gpu_variant', label: 'GPU Variant' },
+  { value: 'motherboard', label: 'Motherboard' },
+  { value: 'cpu_cooler', label: 'CPU Cooler' },
+  { value: 'ram_kit', label: 'Memory Kit' },
+  { value: 'storage_drive', label: 'Storage Drive' },
+  { value: 'psu', label: 'Power Supply' },
+  { value: 'case', label: 'Case' },
+  { value: 'fan', label: 'Case Fan' },
+  { value: 'ai_model', label: 'AI Model' },
 ];
 
 // lookup = "I know the part"; sweep = "tell me what's new". Different backend
@@ -122,6 +147,9 @@ function TriggerCard() {
   // A sweep's text box is an optional narrowing hint, not the part name, so
   // the min-length rule that guards a lookup would be wrong here.
   const isSweep = mode === 'sweep';
+  // AI models come from the Hugging Face Hub API, not a web search + LLM
+  // extraction, so the cost warning and the placeholders both differ.
+  const isAiModel = category === 'ai_model';
 
   function submit() {
     if (!isSweep && query.trim().length < 3) {
@@ -163,8 +191,12 @@ function TriggerCard() {
           <Input
             placeholder={
               isSweep
-                ? 'Optional hint, e.g. "2026 Nvidia"'
-                : 'e.g. "AMD Ryzen 7 9800X3D"'
+                ? isAiModel
+                  ? 'Optional Hub search term, e.g. "qwen"'
+                  : 'Optional hint, e.g. "2026 Nvidia"'
+                : isAiModel
+                  ? 'e.g. "Llama 3.1 70B Instruct"'
+                  : 'e.g. "AMD Ryzen 7 9800X3D"'
             }
             value={query}
             onChange={(e) => setQuery(e.target.value)}
@@ -188,9 +220,13 @@ function TriggerCard() {
           </Button>
         </div>
         <p className="text-xs text-muted-foreground">
-          {isSweep
-            ? 'Reads launch coverage for the category, then runs a full discovery on each new part it names — several parts per run, so it costs several times a single search. Parts already in the catalog or the queue are skipped.'
-            : 'Extracts specs for one named part from its top spec pages.'}
+          {isAiModel
+            ? isSweep
+              ? 'Reads what the Hugging Face Hub is currently trending and stages everything not already in the catalog or the queue. Costs no LLM tokens — the Hub publishes these fields as structured data.'
+              : 'Looks the model up on the Hugging Face Hub. Costs no LLM tokens — the Hub publishes these fields as structured data.'
+            : isSweep
+              ? 'Reads launch coverage for the category, then runs a full discovery on each new part it names — several parts per run, so it costs several times a single search. Parts already in the catalog or the queue are skipped.'
+              : 'Extracts specs for one named part from its top spec pages.'}
         </p>
         {error && <p className="text-sm text-destructive">{error}</p>}
       </CardContent>
@@ -342,11 +378,13 @@ function FieldTable({ item }: { item: DiscoveredItem }) {
 function ReviewDialog({
   item,
   chipsets,
+  groups,
   matchedNames,
   onClose,
 }: {
   item: DiscoveredItem;
   chipsets: ChipsetOption[];
+  groups: GroupOptions;
   matchedNames: Record<string, string>;
   onClose: () => void;
 }) {
@@ -356,7 +394,8 @@ function ReviewDialog({
   const [, startTransition] = useTransition();
 
   const fields = asRecord(item.extractedFields);
-  const matchedId = item.matchedPartId ?? item.matchedChipsetId;
+  const matchedId =
+    item.matchedPartId ?? item.matchedChipsetId ?? item.matchedAiModelId;
   const matchedName = matchedId ? matchedNames[matchedId] : null;
   const validationErrors = Array.isArray(item.validationErrors)
     ? (item.validationErrors as { field?: string; rule?: string; detail?: string }[])
@@ -460,6 +499,45 @@ function ReviewDialog({
                 onSuccess={handleSuccess}
               />
             )}
+            {item.category === 'motherboard' && (
+              <ApproveMotherboardForm itemId={item.id} extractedFields={fields} onSuccess={handleSuccess} />
+            )}
+            {item.category === 'cpu_cooler' && (
+              <ApproveCpuCoolerForm itemId={item.id} extractedFields={fields} onSuccess={handleSuccess} />
+            )}
+            {item.category === 'ram_kit' && (
+              <ApproveRamKitForm
+                itemId={item.id}
+                extractedFields={fields}
+                groups={groups.ram}
+                onSuccess={handleSuccess}
+              />
+            )}
+            {item.category === 'storage_drive' && (
+              <ApproveStorageDriveForm
+                itemId={item.id}
+                extractedFields={fields}
+                groups={groups.storage}
+                onSuccess={handleSuccess}
+              />
+            )}
+            {item.category === 'psu' && (
+              <ApprovePsuForm
+                itemId={item.id}
+                extractedFields={fields}
+                groups={groups.psu}
+                onSuccess={handleSuccess}
+              />
+            )}
+            {item.category === 'case' && (
+              <ApproveCaseForm itemId={item.id} extractedFields={fields} onSuccess={handleSuccess} />
+            )}
+            {item.category === 'fan' && (
+              <ApproveFanForm itemId={item.id} extractedFields={fields} onSuccess={handleSuccess} />
+            )}
+            {item.category === 'ai_model' && (
+              <ApproveAiModelForm itemId={item.id} extractedFields={fields} onSuccess={handleSuccess} />
+            )}
           </>
         )}
 
@@ -486,11 +564,13 @@ export function DiscoveryClient({
   items,
   runs,
   chipsets,
+  groups,
   matchedNames,
 }: {
   items: DiscoveredItem[];
   runs: SerializedRun[];
   chipsets: ChipsetOption[];
+  groups: GroupOptions;
   matchedNames: Record<string, string>;
 }) {
   const router = useRouter();
@@ -550,7 +630,10 @@ export function DiscoveryClient({
       id: 'match',
       header: 'Match',
       cell: ({ row }) => {
-        const id = row.original.matchedPartId ?? row.original.matchedChipsetId;
+        const id =
+          row.original.matchedPartId ??
+          row.original.matchedChipsetId ??
+          row.original.matchedAiModelId;
         if (!id) return <span className="text-muted-foreground">—</span>;
         return (
           <Badge variant="outline" className="border-amber-500 text-amber-600">
@@ -619,6 +702,7 @@ export function DiscoveryClient({
         <ReviewDialog
           item={reviewing}
           chipsets={chipsets}
+          groups={groups}
           matchedNames={matchedNames}
           onClose={() => setReviewing(null)}
         />

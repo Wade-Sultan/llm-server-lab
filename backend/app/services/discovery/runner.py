@@ -10,14 +10,21 @@ from typing import NamedTuple
 from app.core.db import AsyncSessionLocal
 from app.crud import discovery as crud
 from app.crud.components import _normalize
+from app.models.discovery import DiscoveryRunType
 from app.services.chat_models import ChatModelConfig
-from app.services.discovery.dedup import filter_new_names, match_item
+from app.services.discovery.dedup import filter_new_names, match_columns, match_item
 from app.services.discovery.extract import (
     extract_candidate_names,
     extract_from_source,
     unwrap,
 )
 from app.services.discovery.fetch import fetch_document
+from app.services.discovery.huggingface import (
+    HubModel,
+    HuggingFaceError,
+    list_trending,
+    search_models,
+)
 from app.services.discovery.reconcile import reconcile
 from app.services.discovery.search import (
     DiscoveryConfigError,
@@ -90,6 +97,15 @@ async def start_sweep_run(hint: str | None, category: str) -> uuid.UUID:
     return run_id
 
 
+async def run_ai_model_sweep(hint: str | None = None) -> uuid.UUID:
+    """Awaited Hub sweep for the scheduled job (see start_sweep_run for the
+    fire-and-forget admin-panel version, and run_discovery for why a batch job
+    cannot detach)."""
+    run_id = await _create_run(DiscoveryRunType.AI_MODELS.value)
+    await _sweep_ai_models(run_id, hint)
+    return run_id
+
+
 async def run_discovery(
     query: str, category: str, *, run_type: str = "scheduled"
 ) -> uuid.UUID:
@@ -126,6 +142,77 @@ async def _process_source(
     return result.url, values, provenance
 
 
+async def _stage(
+    run_id: uuid.UUID,
+    category: str,
+    extracted: dict,
+    provenance: dict,
+    confidence: dict | None,
+    source_urls: list[str],
+    fallback_name: str,
+) -> bool:
+    """validate -> dedup -> upsert. Returns True when the item is new.
+
+    The tail every discovery path shares, whichever way it obtained its fields:
+    web extraction reconciles three sources into this shape, the Hugging Face
+    path builds it from one JSON document. Validation and dedup must not differ
+    between them — a reviewer looking at the queue should not have to know
+    which pipeline produced a row.
+    """
+    name = extracted.get("name") or fallback_name
+    model_number = extracted.get("model_number")
+    validation_status, validation_errors = validate_item(category, extracted)
+
+    async with AsyncSessionLocal() as db:
+        candidates = await crud.get_dedup_candidates(db, category)
+
+    matched_id, match_method, match_score = match_item(name, model_number, candidates)
+
+    async with AsyncSessionLocal() as db:
+        await crud.upsert_discovered_item(
+            db,
+            run_id=run_id,
+            category=category,
+            name_normalized=_normalize(name),
+            model_number=model_number,
+            extracted_fields=extracted,
+            field_provenance=provenance,
+            extraction_confidence=confidence or None,
+            source_urls=source_urls,
+            validation_status=validation_status,
+            validation_errors=validation_errors,
+            match_method=match_method,
+            match_score=match_score,
+            **match_columns(category, matched_id),
+        )
+    return match_method is None
+
+
+async def _stage_hub_model(run_id: uuid.UUID, model: HubModel) -> _ItemOutcome:
+    """Stage one Hugging Face model. Costs no LLM tokens, so usage_events
+    doesn't come into it — sources_checked counts the one Hub record read."""
+    is_new = await _stage(
+        run_id,
+        "ai_model",
+        model.fields,
+        model.provenance,
+        # No reconciliation step: one authoritative source cannot disagree with
+        # itself, so there is no confidence to report.
+        None,
+        [f"https://huggingface.co/{model.hub_id}"],
+        model.hub_id,
+    )
+    return _ItemOutcome(1, is_new, None)
+
+
+async def _discover_ai_model(run_id: uuid.UUID, query: str) -> _ItemOutcome:
+    """Resolve one model name against the Hub and stage the best match."""
+    models = await search_models(query, limit=1)
+    if not models:
+        return _ItemOutcome(0, False, f"no Hugging Face model matches {query!r}")
+    return await _stage_hub_model(run_id, models[0])
+
+
 async def _discover_one(
     run_id: uuid.UUID,
     query: str,
@@ -141,6 +228,11 @@ async def _discover_one(
     Raises only what the caller must decide about (a missing search key, a DB
     failure) — per-source failures are already absorbed by _process_source.
     """
+    if category == "ai_model":
+        # The Hub publishes these fields as structured JSON, so this category
+        # skips search + extraction entirely. See services/discovery/huggingface.py.
+        return await _discover_ai_model(run_id, query)
+
     results = await search_spec_pages(query, category, max_results=_MAX_SOURCES)
     if not results:
         return _ItemOutcome(0, False, "search returned no usable results")
@@ -171,38 +263,10 @@ async def _discover_one(
         )
 
     extracted, provenance, confidence, source_urls = reconcile(per_source)
-    name = extracted.get("name") or query
-    name_normalized = _normalize(name)
-    model_number = extracted.get("model_number")
-
-    validation_status, validation_errors = validate_item(category, extracted)
-
-    async with AsyncSessionLocal() as db:
-        candidates = await crud.get_dedup_candidates(db, category)
-
-    matched_id, match_method, match_score = match_item(name, model_number, candidates)
-    matched_part_id = matched_id if category != "gpu_chipset" else None
-    matched_chipset_id = matched_id if category == "gpu_chipset" else None
-
-    async with AsyncSessionLocal() as db:
-        await crud.upsert_discovered_item(
-            db,
-            run_id=run_id,
-            category=category,
-            name_normalized=name_normalized,
-            model_number=model_number,
-            extracted_fields=extracted,
-            field_provenance=provenance,
-            extraction_confidence=confidence or None,
-            source_urls=source_urls,
-            matched_part_id=matched_part_id,
-            matched_chipset_id=matched_chipset_id,
-            match_method=match_method,
-            match_score=match_score,
-            validation_status=validation_status,
-            validation_errors=validation_errors,
-        )
-    return _ItemOutcome(len(results), match_method is None, None)
+    is_new = await _stage(
+        run_id, category, extracted, provenance, confidence, source_urls, query
+    )
+    return _ItemOutcome(len(results), is_new, None)
 
 
 async def _finalize(
@@ -260,7 +324,10 @@ async def _run(run_id: uuid.UUID, query: str, category: str) -> None:
             status, error_detail = "error", outcome.error
         else:
             items_found, items_new = 1, int(outcome.is_new)
-    except DiscoveryConfigError as exc:
+    except (DiscoveryConfigError, HuggingFaceError) as exc:
+        # Both are "this run could never have worked": a missing search key, or
+        # a Hub that can't be reached. Neither deserves a stack trace in the
+        # logs, and both read fine verbatim in the run row.
         status, error_detail = "error", str(exc)
     except Exception as exc:
         logger.exception("discovery run %s failed", run_id)
@@ -328,6 +395,67 @@ async def _enumerate_candidates(
     return _SweepCandidates(fresh, len(pages), len(names))
 
 
+async def _sweep_ai_models(run_id: uuid.UUID, hint: str | None) -> None:
+    """The ai_model sweep: trending Hub models, staged directly.
+
+    Structurally simpler than the web sweep because enumeration and extraction
+    are the same call. The web sweep deliberately throws away everything a
+    roundup page says and re-discovers each name from its own spec pages, since
+    a roundup's numbers aren't trustworthy; the Hub listing *is* the
+    authoritative record, so re-fetching each model by name would just be a
+    second round trip to the same document.
+
+    Never raises, for the same reason as _run.
+    """
+    status = "completed"
+    error_detail: str | None = None
+    items_found = 0
+    items_new = 0
+
+    try:
+        models = await list_trending(hint, _MAX_SWEEP_CANDIDATES)
+        if not models:
+            status, error_detail = "error", "Hugging Face Hub returned no usable models"
+        else:
+            # Filtered after fetching, not before: the Hub has no "exclude
+            # these ids" parameter, and hydration has already happened by the
+            # time a listing comes back. Costs nothing but bandwidth — unlike
+            # the web sweep, where each candidate is billed LLM tokens, which
+            # is why that one filters before extracting.
+            async with AsyncSessionLocal() as db:
+                known = {
+                    _normalize(c.name)
+                    for c in await crud.get_dedup_candidates(db, "ai_model")
+                }
+                known |= await crud.get_pending_names(db, "ai_model")
+
+            fresh = [m for m in models if _normalize(m.fields["name"]) not in known]
+            if not fresh:
+                error_detail = (
+                    f"all {len(models)} trending models are already in the catalog "
+                    "or the review queue"
+                )
+            for model in fresh:
+                outcome = await _stage_hub_model(run_id, model)
+                items_found += 1
+                items_new += int(outcome.is_new)
+    except HuggingFaceError as exc:
+        status, error_detail = "error", str(exc)
+    except Exception as exc:
+        logger.exception("discovery ai_model sweep %s failed", run_id)
+        status, error_detail = "error", f"{type(exc).__name__}: {exc}"
+    finally:
+        await _finalize(
+            run_id,
+            status=status,
+            error_detail=error_detail,
+            sources_checked=items_found,
+            items_found=items_found,
+            items_new=items_new,
+            usage_events=[],
+        )
+
+
 async def _sweep(run_id: uuid.UUID, hint: str | None, category: str) -> None:
     """The category sweep: enumerate what's new, then run the single-part
     pipeline over each candidate, staging everything against this run.
@@ -337,6 +465,10 @@ async def _sweep(run_id: uuid.UUID, hint: str | None, category: str) -> None:
     concurrency is there; serialising here keeps search-API rate limits and
     per-click spend predictable. Never raises, for the same reason as _run.
     """
+    if category == "ai_model":
+        await _sweep_ai_models(run_id, hint)
+        return
+
     status = "completed"
     error_detail: str | None = None
     sources_checked = 0

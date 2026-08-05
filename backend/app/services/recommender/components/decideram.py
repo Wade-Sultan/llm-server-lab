@@ -18,15 +18,26 @@ class RAMSelection(dspy.Signature):
     generation. Focus on capacity vs. speed vs. price tradeoffs. For gaming,
     32GB DDR5-5600 is rarely meaningfully better than 32GB DDR5-6000 at $40
     more — call that out.
+
+    Candidates are also already filtered to module types the chosen board
+    accepts, so registered/unbuffered compatibility is settled before you see
+    them — never reject a candidate on that basis. What is still yours to
+    decide: server builds want capacity and enough modules to populate every
+    memory channel ahead of raw speed, since bandwidth on those platforms comes
+    from channel count, and a kit that leaves half the channels empty wastes
+    more performance than a speed bin ever recovers. ECC is worth its premium
+    on a machine expected to run unattended and not much otherwise.
     """
 
     use_cases: str = dspy.InputField(desc="User's use cases and preferences summary")
     ddr_gen: str = dspy.InputField(desc="Required DDR generation (ddr4 or ddr5)")
-    budget_ceiling: int = dspy.InputField(desc="Maximum to spend on RAM in USD")
+    budget_ceiling: int = dspy.InputField(
+        desc="Maximum to spend on RAM in USD; -1 means no ceiling — the user has said cost is not a constraint"
+    )
     candidates: str = dspy.InputField(
         desc="JSON list of RAM groups with the group's street price. Fields: "
         "ram_group, ddr_gen, capacity_gb, speed_mhz, kit_count, cas_latency, "
-        "street_price_usd"
+        "is_ecc, module_type, street_price_usd"
     )
 
     ram_group: str = dspy.OutputField(

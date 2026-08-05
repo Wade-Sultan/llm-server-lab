@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, true
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload, with_polymorphic
 
@@ -29,7 +29,22 @@ from app.models.pcparts import (
     StorageDrive,
     StorageGroup,
 )
-from app.schemas.chat import UserPreferences
+from app.schemas.chat import NO_BUDGET_CEILING, UserPreferences
+
+
+def _within_budget(price_column, budget_ceiling_usd: int):
+    """Price predicate for a candidate query, or an always-true one.
+
+    Every candidate query filters on price the same way, and every one of them
+    has to drop that filter entirely under the 'custom' budget tier — a ceiling
+    the user explicitly declined to set must not silently reappear as a
+    candidate-set boundary. Centralised so the sentinel is honoured in one
+    place rather than nine.
+    """
+    if budget_ceiling_usd == NO_BUDGET_CEILING:
+        return true()
+    return price_column <= budget_ceiling_usd * 100
+
 
 # ---------------------------------------------------------------------------
 # Generic (polymorphic base)
@@ -148,7 +163,7 @@ async def get_cpu_candidates(
 ) -> list[CPU]:
     stmt = select(CPU).where(
         CPU.is_active == True,  # noqa: E712
-        CPU.street_price_cents <= budget_ceiling_usd * 100,
+        _within_budget(CPU.street_price_cents, budget_ceiling_usd),
     )
     if preferences.preferred_brand_cpu != "no_preference":
         stmt = stmt.where(CPU.brand == preferences.preferred_brand_cpu)
@@ -210,7 +225,7 @@ async def get_gpu_candidates(
         .join(GPUChipset, GPU.gpu_chipset_id == GPUChipset.id)
         .where(
             GPU.is_active == True,  # noqa: E712
-            GPUChipset.street_price_cents <= budget_ceiling_usd * 100,
+            _within_budget(GPUChipset.street_price_cents, budget_ceiling_usd),
         )
         .options(selectinload(GPU.chipset))
     )
@@ -245,7 +260,7 @@ async def get_cooler_candidates(
     # instead of CPUCooler.supported_sockets.contains([cpu_socket]).
     stmt = select(CPUCooler).where(
         CPUCooler.is_active == True,  # noqa: E712
-        CPUCooler.street_price_cents <= budget_ceiling_usd * 100,
+        _within_budget(CPUCooler.street_price_cents, budget_ceiling_usd),
         CPUCooler.max_tdp_watts >= cpu_tdp_w,
     )
     result = await db.execute(stmt)
@@ -294,7 +309,7 @@ async def get_motherboard_candidates(
     # that supports both DDR4 and DDR5 can pair with either kind of board).
     stmt = select(Motherboard).where(
         Motherboard.is_active == True,  # noqa: E712
-        Motherboard.street_price_cents <= budget_ceiling_usd * 100,
+        _within_budget(Motherboard.street_price_cents, budget_ceiling_usd),
     )
     if wifi_required:
         stmt = stmt.where(Motherboard.has_wifi == True)  # noqa: E712
@@ -331,19 +346,40 @@ async def get_ram_candidates(
     db: AsyncSession,
     ddr_gen: str,
     budget_ceiling_usd: int,
+    module_types: list[str] | None = None,
 ) -> list[RAMKit]:
     """Affordable RAM kit exacts (group eager-loaded) whose group DDR generation
-    matches. queries.py aggregates these into one candidate per RAM group."""
+    matches. queries.py aggregates these into one candidate per RAM group.
+
+    module_types is the chosen board's accepted DIMM types. Registered and
+    unbuffered memory are not interchangeable in either direction — a TRX50 or
+    WRX90 board will not POST on UDIMMs, and a consumer board rejects RDIMMs —
+    so this is a hard filter, not a preference. None (the board didn't record
+    any, which is every consumer board today) means unconstrained, keeping the
+    candidate set identical to what it was before the column existed.
+
+    Kits whose group has no module_type recorded pass either way: the column is
+    new and the seeded consumer groups predate it, so treating a NULL as a
+    mismatch would empty the candidate set for existing builds.
+    """
     stmt = (
         select(RAMKit)
         .join(RAMGroup, RAMKit.ram_group_id == RAMGroup.id)
         .where(
             RAMKit.is_active == True,  # noqa: E712
-            RAMGroup.street_price_cents <= budget_ceiling_usd * 100,
+            _within_budget(RAMGroup.street_price_cents, budget_ceiling_usd),
             func.lower(func.trim(RAMGroup.ddr_generation)) == _normalize(ddr_gen),
         )
         .options(selectinload(RAMKit.group))
     )
+    if module_types:
+        wanted = {_normalize(t) for t in module_types if t and t.strip()}
+        stmt = stmt.where(
+            or_(
+                RAMGroup.module_type.is_(None),
+                func.lower(func.trim(RAMGroup.module_type)).in_(wanted),
+            )
+        )
     result = await db.execute(stmt)
     return list(result.scalars().all())
 
@@ -394,7 +430,7 @@ async def get_storage_candidates(
         .join(StorageGroup, StorageDrive.storage_group_id == StorageGroup.id)
         .where(
             StorageDrive.is_active == True,  # noqa: E712
-            StorageGroup.street_price_cents <= budget_ceiling_usd * 100,
+            _within_budget(StorageGroup.street_price_cents, budget_ceiling_usd),
         )
         .options(selectinload(StorageDrive.group))
     )
@@ -441,7 +477,7 @@ async def get_psu_candidates(
         .join(PSUGroup, PSU.psu_group_id == PSUGroup.id)
         .where(
             PSU.is_active == True,  # noqa: E712
-            PSUGroup.street_price_cents <= budget_ceiling_usd * 100,
+            _within_budget(PSUGroup.street_price_cents, budget_ceiling_usd),
             PSUGroup.wattage >= min_wattage,
             # form_factor is the same free-text admin field as
             # Motherboard.socket/ddr_generation — normalize it too.
@@ -477,7 +513,7 @@ async def get_case_candidates(
 ) -> list[Case]:
     stmt = select(Case).where(
         Case.is_active == True,  # noqa: E712
-        Case.street_price_cents <= budget_ceiling_usd * 100,
+        _within_budget(Case.street_price_cents, budget_ceiling_usd),
     )
     # SFX/SFX-L PSU only fits cases that explicitly support it; ATX fits anywhere
     if psu_form_factor in ("sfx", "sfx_l"):
@@ -509,7 +545,7 @@ async def get_fan_candidates(
     sizes = list(set(case_fan_slots))
     stmt = select(Fan).where(
         Fan.is_active == True,  # noqa: E712
-        Fan.street_price_cents <= budget_ceiling_usd * 100,
+        _within_budget(Fan.street_price_cents, budget_ceiling_usd),
         or_(*[Fan.size_mm == s for s in sizes]),
     )
     result = await db.execute(stmt)

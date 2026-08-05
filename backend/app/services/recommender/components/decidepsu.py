@@ -16,15 +16,24 @@ class PSUSelection(dspy.Signature):
     efficiency/price/headroom combination. Prefer Gold or better efficiency
     unless budget is very tight. A 20% wattage headroom over the system TDP is a
     reasonable minimum.
+
+    Wattage is not the only constraint on a multi-GPU or workstation build: the
+    unit also has to physically reach every load. Each GPU needs its own
+    8-pin/12-pin/16-pin run, and high-TDP workstation boards take two EPS
+    connectors rather than one. A supply with the headroom but not the
+    connectors is the wrong pick.
     """
 
     required_wattage: int = dspy.InputField(
         desc="Minimum wattage required by the system in watts"
     )
-    budget_ceiling: int = dspy.InputField(desc="Maximum to spend on PSU in USD")
+    budget_ceiling: int = dspy.InputField(
+        desc="Maximum to spend on PSU in USD; -1 means no ceiling — the user has said cost is not a constraint"
+    )
     candidates: str = dspy.InputField(
         desc="JSON list of PSU groups with the group's street price. Fields: "
-        "psu_group, wattage, efficiency, form_factor, modular, street_price_usd"
+        "psu_group, wattage, efficiency, form_factor, modular, pcie_8pin, "
+        "pcie_12pin, pcie_16pin, eps_connectors, street_price_usd"
     )
 
     psu_group: str = dspy.OutputField(

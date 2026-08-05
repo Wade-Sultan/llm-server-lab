@@ -16,7 +16,13 @@ async def resolve_build(profile: BuildProfile, db: AsyncSession) -> tuple[str, B
 
     use = profile.primary_use
     resolution = profile.gaming_resolution or "1080p"
-    budget = profile.budget_tier
+    # 'custom' (no budget ceiling) collapses to 'elite' here. The reference
+    # catalog is a fixed set of curated builds with a top entry — there is no
+    # "unlimited" one to resolve to, and the branches below are written as an
+    # ordered ladder that an unrecognised tier would fall straight through.
+    # Only the DSPy path can actually spend an unbounded budget; this is its
+    # fallback, so the top rung is the right answer.
+    budget = "elite" if profile.budget_tier == "custom" else profile.budget_tier
     floor = RESOLUTION_FLOOR.get(resolution, 1080)
 
     # Filter candidates by resolution floor
@@ -26,6 +32,17 @@ async def resolve_build(profile: BuildProfile, db: AsyncSession) -> tuple[str, B
         for key, build in builds.items()
         if build.get("max_resolution") is not None and build["max_resolution"] >= floor
     }
+
+    # Server / workstation builds. Reference builds are the fallback when the
+    # DSPy pipeline fails, so a server profile landing on a gaming build would
+    # be a worse failure than most — it would recommend a machine that cannot
+    # do the job at all. Keys follow the same "<resolution>_<name>" convention
+    # as the rest of the catalog; a server build's max_resolution is nominal
+    # (it exists to pass the resolution filter, not to describe a display).
+    if use == "server":
+        if budget in ("high", "elite"):
+            return _pick(candidates, "2160_serverpro")
+        return _pick(candidates, "2160_server")
 
     # AI workloads (inference, training, image gen)
     if use == "ai":

@@ -10,8 +10,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from sqlalchemy.sql import func
 
+from app.models.ai_catalog import AIModel
 from app.models.discovery import DiscoveredItem, DiscoveryRun
-from app.models.pcparts import CPU, GPU, GPUChipset
+from app.models.pcparts import (
+    CPU,
+    GPU,
+    PSU,
+    Case,
+    CPUCooler,
+    Fan,
+    GPUChipset,
+    Motherboard,
+    RAMKit,
+    StorageDrive,
+)
 from app.services.discovery.dedup import CatalogCandidate
 
 
@@ -84,6 +96,7 @@ async def upsert_discovered_item(
     source_urls: list[str],
     matched_part_id: uuid.UUID | None,
     matched_chipset_id: uuid.UUID | None,
+    matched_ai_model_id: uuid.UUID | None,
     match_method: str | None,
     match_score: float | None,
     validation_status: str,
@@ -101,6 +114,7 @@ async def upsert_discovered_item(
         "source_urls": source_urls,
         "matched_part_id": matched_part_id,
         "matched_chipset_id": matched_chipset_id,
+        "matched_ai_model_id": matched_ai_model_id,
         "match_method": match_method,
         "match_score": match_score,
         "validation_status": validation_status,
@@ -172,19 +186,51 @@ async def get_pending_names(db: AsyncSession, category: str) -> set[str]:
     return set(rows.scalars().all())
 
 
+# Discovery category -> the pc_parts subtype its items dedup against. Every
+# entry here is a PCPart subclass, so they share one query shape (id, name,
+# model_number, filtered to active). gpu_chipset and ai_model are handled
+# separately below because neither is a pc_parts row.
+_PART_MODEL_BY_CATEGORY = {
+    "cpu": CPU,
+    "gpu_variant": GPU,
+    "motherboard": Motherboard,
+    "cpu_cooler": CPUCooler,
+    "ram_kit": RAMKit,
+    "storage_drive": StorageDrive,
+    "psu": PSU,
+    "case": Case,
+    "fan": Fan,
+}
+
+
 async def get_dedup_candidates(
     db: AsyncSession, category: str
 ) -> list[CatalogCandidate]:
-    if category == "cpu":
-        stmt = select(CPU.id, CPU.name, CPU.model_number).where(CPU.is_active == True)  # noqa: E712
-    elif category == "gpu_variant":
-        stmt = select(GPU.id, GPU.name, GPU.model_number).where(GPU.is_active == True)  # noqa: E712
-    elif category == "gpu_chipset":
+    if category == "gpu_chipset":
         result = await db.execute(select(GPUChipset.id, GPUChipset.name))
         return [CatalogCandidate(id=row[0], name=row[1]) for row in result.all()]
-    else:
+
+    if category == "ai_model":
+        # huggingface_id stands in for model_number: it is the stable, globally
+        # unique identifier for a model, which is exactly the role model_number
+        # plays for hardware, so the dedup tier that matches on it works
+        # unchanged (and catches "Llama 3.1 70B" vs "Llama-3.1-70B-Instruct").
+        result = await db.execute(
+            select(AIModel.id, AIModel.name, AIModel.huggingface_id)
+        )
+        return [
+            CatalogCandidate(id=row[0], name=row[1], model_number=row[2])
+            for row in result.all()
+        ]
+
+    model = _PART_MODEL_BY_CATEGORY.get(category)
+    if model is None:
         return []
-    result = await db.execute(stmt)
+    result = await db.execute(
+        select(model.id, model.name, model.model_number).where(
+            model.is_active.is_(True)
+        )
+    )
     return [
         CatalogCandidate(id=row[0], name=row[1], model_number=row[2])
         for row in result.all()

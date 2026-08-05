@@ -48,6 +48,13 @@ class FormFactor(str, enum.Enum):
     MATX = "matx"
     ITX = "itx"
     EATX = "eatx"
+    # Server/workstation board sizes. SSI-EEB and SSI-CEB are what most
+    # Threadripper PRO, EPYC and dual-socket Xeon boards actually ship as —
+    # they are wider than E-ATX and only fit cases that list them explicitly,
+    # so collapsing them into "eatx" would produce builds that don't physically
+    # assemble.
+    SSI_EEB = "ssi_eeb"
+    SSI_CEB = "ssi_ceb"
 
 
 class StorageInterface(str, enum.Enum):
@@ -76,6 +83,17 @@ class ModularType(str, enum.Enum):
     FULL = "full"
     SEMI = "semi"
     NON = "non"
+
+
+class MemoryModuleType(str, enum.Enum):
+    """Physical/electrical DIMM type. Not interchangeable in either direction:
+    Threadripper PRO and EPYC require registered modules and will not POST on
+    unbuffered ones, while consumer AM5/LGA1851 boards reject registered ones.
+    `RAMGroup.is_ecc` alone can't express that, since ECC UDIMMs exist."""
+
+    UDIMM = "udimm"  # unbuffered — every consumer platform, ECC or not
+    RDIMM = "rdimm"  # registered — Threadripper PRO, EPYC, Xeon W/SP
+    LRDIMM = "lrdimm"  # load-reduced — highest-capacity server configs
 
 
 class CaseSize(str, enum.Enum):
@@ -239,6 +257,9 @@ class RAMGroup(Base):
     cas_latency = Column(Integer, nullable=True)
     voltage = Column(Float, nullable=True)
     is_ecc = Column(Boolean, nullable=True)
+    # MemoryModuleType value. Backfilled to 'udimm' for every pre-existing kit
+    # (all consumer); a server build filters on this, not on is_ecc.
+    module_type = Column(String(10), nullable=True)
 
     created_at = Column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
@@ -323,6 +344,23 @@ class CPU(PCPart):
     max_memory_gb = Column(Integer, nullable=True)
     series = Column(String(100), nullable=True)
 
+    # Server/workstation platform spec. These are what separate a Threadripper
+    # or Xeon from a desktop part — not clocks. All nullable: a value of NULL
+    # means "not recorded", which is different from a definitive zero/false.
+    pcie_lanes = Column(
+        Integer,
+        nullable=True,
+        doc="CPU-provided PCIe lanes (Threadripper 7970X=88, Ryzen 9800X3D=28). "
+        "The hard ceiling on multi-GPU width regardless of board slot count.",
+    )
+    memory_channels = Column(
+        Integer,
+        nullable=True,
+        doc="Memory channels (desktop=2, Threadripper=4, TR PRO/EPYC=8/12). "
+        "Bandwidth is the binding constraint for HPC and CPU-side inference.",
+    )
+    supports_ecc = Column(Boolean, nullable=True)
+
     @property
     def specs(self) -> dict:
         return {
@@ -335,6 +373,9 @@ class CPU(PCPart):
             "socket": self.socket,
             "ddr_gen": self.ddr_generation,
             "has_integrated_graphics": self.has_igpu,
+            "pcie_lanes": self.pcie_lanes,
+            "memory_channels": self.memory_channels,
+            "supports_ecc": self.supports_ecc,
         }
 
     __mapper_args__ = {"polymorphic_identity": "cpu"}
@@ -403,6 +444,28 @@ class Motherboard(PCPart):
     usb_type_c_count = Column(Integer, nullable=True)
     audio_codec = Column(String(50), nullable=True)
 
+    # Server/workstation board spec — the board half of CPU.pcie_lanes etc.
+    supports_ecc = Column(Boolean, nullable=True)
+    has_ipmi = Column(
+        Boolean,
+        nullable=True,
+        doc="Out-of-band management (IPMI/BMC). The clearest single signal "
+        "that a board is a server board rather than a workstation board.",
+    )
+    memory_channels = Column(
+        Integer,
+        nullable=True,
+        doc="Channels the board wires up. memory_slots alone can't say how to "
+        "populate 8 DIMMs across 4 vs 8 channels for full bandwidth.",
+    )
+    memory_module_types = Column(
+        ARRAY(String),
+        nullable=True,
+        doc="MemoryModuleType values the board accepts. NULL = unconstrained; "
+        "a populated list is what keeps a TRX50/WRX90 board from being paired "
+        "with unbuffered kits it will not POST on.",
+    )
+
     @property
     def specs(self) -> dict:
         return {
@@ -414,6 +477,10 @@ class Motherboard(PCPart):
             "m2_slots": self.m2_slots,
             "sata_ports": self.sata_ports,
             "has_wifi": self.has_wifi,
+            "supports_ecc": self.supports_ecc,
+            "has_ipmi": self.has_ipmi,
+            "memory_channels": self.memory_channels,
+            "memory_module_types": self.memory_module_types,
             "supports_bios_flashback": None,
             "vrm_quality": None,
         }

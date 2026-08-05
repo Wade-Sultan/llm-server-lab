@@ -43,9 +43,26 @@ _BLOCKED_DOMAINS = frozenset(
 # for the per-candidate run to extract from. The enumeration prompt rejects
 # rumors too — this just stops paying to fetch them.
 _CATEGORY_SWEEP_TERMS = {
-    "cpu": "officially launched new desktop CPUs",
+    "cpu": "officially launched new desktop and workstation CPUs",
     "gpu_chipset": "officially launched new GPUs",
     "gpu_variant": "officially launched new graphics cards from board partners",
+    "motherboard": "officially launched new motherboards",
+    "cpu_cooler": "officially launched new CPU coolers",
+    "ram_kit": "officially launched new DDR5 memory kits",
+    "storage_drive": "officially launched new NVMe SSDs and hard drives",
+    "psu": "officially launched new power supplies",
+    "case": "officially launched new PC cases",
+    "fan": "officially launched new case fans",
+}
+
+# Suffix appended to a part name when searching for its authoritative spec
+# page. Most categories want a vendor spec sheet; ai_model wants a model card.
+# Cases are the outlier — "specifications" on a case name ranks retailer
+# listings, whose dimension tables are frequently wrong or truncated, while
+# "review" ranks the outlets that actually measure clearances.
+_CATEGORY_SPEC_SUFFIX = {
+    "ai_model": "model card",
+    "case": "specifications clearance dimensions",
 }
 
 
@@ -105,7 +122,7 @@ async def search_spec_pages(
 
     Rank order matters downstream: reconcile() breaks value ties in favor of
     the earliest source in this list."""
-    suffix = "model card" if category == "ai_model" else "specifications"
+    suffix = _CATEGORY_SPEC_SUFFIX.get(category, "specifications")
     results = await _tavily_search(f"{query} {suffix}", fetch_count=5)
     return results[:max_results]
 

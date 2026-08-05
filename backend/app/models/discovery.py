@@ -48,6 +48,23 @@ class DiscoveryCategory(str, enum.Enum):
     GPU_CHIPSET = "gpu_chipset"
     GPU_VARIANT = "gpu_variant"
     AI_MODEL = "ai_model"
+    MOTHERBOARD = "motherboard"
+    CPU_COOLER = "cpu_cooler"
+    RAM_KIT = "ram_kit"
+    STORAGE_DRIVE = "storage_drive"
+    PSU = "psu"
+    CASE = "case"
+    FAN = "fan"
+
+
+# Categories whose approval creates a pc_parts row plus (or reusing) a *_groups
+# row. Discovery always targets the purchasable SKU — that is what a spec page
+# is written about and what a buyer searches for — and the group's intrinsic
+# spec is extracted alongside it, so approval can find-or-create the group.
+GROUPED_CATEGORIES = frozenset({"ram_kit", "storage_drive", "psu"})
+
+# Categories that do not produce a pc_parts row at all.
+NON_PART_CATEGORIES = frozenset({"gpu_chipset", "ai_model"})
 
 
 class MatchMethod(str, enum.Enum):
@@ -164,6 +181,14 @@ class DiscoveredItem(Base):
         nullable=True,
         index=True,
     )
+    # ai_models is a standalone catalog, not a pc_parts subtype, so it needs its
+    # own match/audit columns rather than reusing matched_part_id.
+    matched_ai_model_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("ai_models.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     match_method = Column(Text, nullable=True)
     match_score = Column(Float, nullable=True)
 
@@ -185,6 +210,12 @@ class DiscoveredItem(Base):
     created_chipset_id = Column(
         UUID(as_uuid=True),
         ForeignKey("gpu_chipsets.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    created_ai_model_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("ai_models.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )

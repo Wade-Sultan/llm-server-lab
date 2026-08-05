@@ -82,17 +82,48 @@ async function resolveEntries(data: ReferenceBuildFormData): Promise<Entry[]> {
   return entries;
 }
 
-// pc_build_parts requires one-per-role; take the first occurrence of each component.
+// Mirrors models.pcbuild.MULTI_INSTANCE_ROLES. Roles outside this set are still
+// one-per-build in the database.
+const MULTI_INSTANCE_ROLES = new Set<BuildComponentRole>(['gpu', 'storage', 'fan']);
+
+// Collapse the resolved entries into pc_build_parts rows.
+//
+// This used to keep only the first entry per role, because the table carried a
+// UNIQUE (build_id, role) — so a two-GPU or three-fan reference build silently
+// lost everything after the first. gpu/storage/fan may now repeat; identical
+// units become one row with quantity > 1 rather than repeated rows, because
+// UNIQUE (build_id, role, part_id) makes quantity the only way to say "two of
+// these". Singleton roles still keep their first occurrence.
 function pcBuildParts(entries: Entry[]) {
-  const seen = new Set<string>();
-  return entries
-    .filter(e => { if (seen.has(e.component)) return false; seen.add(e.component); return true; })
-    .map(e => ({
+  type Row = {
+    partId: string;
+    role: BuildComponentRole;
+    requiredComponent: boolean;
+    quantity: number;
+    priceAtBuild: number;
+  };
+  const rows = new Map<string, Row>();
+
+  for (const e of entries) {
+    const isMulti = MULTI_INSTANCE_ROLES.has(e.component);
+    // Multi roles key on the part, so two different GPUs are two rows and two
+    // of the same GPU are one row of 2. Singleton roles key on the role alone,
+    // which is what makes the extras drop out.
+    const key = isMulti ? `${e.component}:${e.partId}` : e.component;
+    const existing = rows.get(key);
+    if (existing) {
+      if (isMulti) existing.quantity += 1;
+      continue;
+    }
+    rows.set(key, {
       partId: e.partId,
       role: e.component,
       requiredComponent: REQUIRED[e.component] ?? false,
+      quantity: 1,
       priceAtBuild: e.priceCents,
-    }));
+    });
+  }
+  return [...rows.values()];
 }
 
 function refBuildParts(entries: Entry[]) {
