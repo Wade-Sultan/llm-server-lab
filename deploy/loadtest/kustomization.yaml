@@ -1,0 +1,46 @@
+# Distributed Locust, applied on demand — deliberately NOT a resource of
+# overlays/prod.
+#
+# A load generator that is always deployed is five Autopilot pods billed around
+# the clock to do nothing, and a permanently reachable "start 500 users against
+# production" button. Stand it up for a run and tear it down after:
+#
+#   kubectl apply -k deploy/loadtest
+#   kubectl -n palladium port-forward svc/locust-master 8089:8089
+#   ...run the test at http://localhost:8089 ...
+#   kubectl delete -k deploy/loadtest
+#
+# It targets the palladium namespace because it has to: the workers reach
+# builder and commerce by in-cluster Service DNS, and they read LOAD_TEST_SECRET
+# from palladium-secrets-builder, which is namespaced. Both are resolved by
+# short name, so this cannot be applied elsewhere without editing.
+#
+# Local development does not need any of this — run `locust -f
+# deploy/loadtest/locustfile.py --host http://localhost:8000` on the host
+# instead. One process is more than enough load for a single dev pod, and the
+# local overlay has no palladium-secrets-builder to mount.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: palladium
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: palladium
+      app.kubernetes.io/component: loadtest
+
+resources:
+  - master.yaml
+  - worker.yaml
+
+configMapGenerator:
+  - name: locust-locustfile
+    files:
+      - locustfile.py
+
+# The content-hash suffix is KEPT here, unlike overlays/local (which disables it
+# because envFrom references a Secret by fixed name). Here it is the feature:
+# the hash changes when the locustfile does, kustomize rewrites the volume
+# reference in both Deployments, and the pods roll onto the new script. Without
+# it, editing the test and re-applying would leave every pod running the old one
+# — with nothing in the diff to suggest why.

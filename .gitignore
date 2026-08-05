@@ -63,7 +63,7 @@ dist
 # Local operator runbooks — deliberately untracked. They contain the step-by-step
 # GCP console/CLI setup that only the person holding those consoles needs.
 # Code comments reference them by path (cloudbuild.yaml, scripts/logs.sh,
-# backend/app/core/metrics.py, scripts/k6/chat.js, backend/app/core/pubsub.py);
+# backend/app/core/metrics.py, deploy/loadtest/, backend/app/core/pubsub.py);
 # those are pointers for whoever has the file, not a build dependency.
 #
 # The alert policies in deploy/monitoring/ are NOT covered by this: they are

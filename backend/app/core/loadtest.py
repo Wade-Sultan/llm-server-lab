@@ -1,9 +1,9 @@
 """Per-request OpenRouter blocker for load tests.
 
-WHY THIS EXISTS. k6 driving /chat would otherwise make real OpenRouter calls —
-profile extraction, elicitation, recommendation, and one LM call per build step.
-A few hundred virtual users is real money, spent to learn nothing about the LLM.
-This stubs the two places the service talks to OpenRouter so a load test
+WHY THIS EXISTS. Locust driving /chat would otherwise make real OpenRouter calls
+— profile extraction, elicitation, recommendation, and one LM call per build
+step. A few hundred simulated users is real money, spent to learn nothing about
+the LLM. This stubs the two places the service talks to OpenRouter so a load test
 exercises everything else for real (routing, auth, Postgres, SSE framing,
 telemetry) while making zero outbound LLM calls.
 
@@ -25,13 +25,23 @@ where this ContextVar is reliably set:
   * chat_pipeline._get_client()        the streaming OpenAI/OpenRouter client
   * dspy_pipeline.session_lm()         every DSPy module call
 Nothing else in the service makes an outbound LLM call.
+
+IT HAS TO CROSS PUB/SUB. In any deployment with Valkey and Pub/Sub configured —
+which is to say production — /chat does not run the turn at all: it publishes to
+a topic and relays the worker's stream back. The worker is a different pod in a
+different process, so a ContextVar set by this middleware means nothing there,
+and every LM call of a load-tested turn would be real. The flag therefore
+travels in the message body (routes/chat.py sets `load_test`) and is re-entered
+on the far side with load_test_scope() (worker.py). Without that hop the two
+chokepoints above are simply never reached under load.
 """
 
 from __future__ import annotations
 
 import hmac
 import logging
-from collections.abc import Awaitable, Callable, MutableMapping
+from collections.abc import Awaitable, Callable, Generator, MutableMapping
+from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any
 
@@ -55,6 +65,28 @@ _load_test: ContextVar[bool] = ContextVar("palladium_load_test", default=False)
 def is_load_test() -> bool:
     """True when the current request opted into stub LMs with a valid secret."""
     return _load_test.get()
+
+
+@contextmanager
+def load_test_scope(enabled: bool) -> Generator[None]:
+    """Re-enter load-test mode off the request path, for the Pub/Sub worker.
+
+    The worker never sees the HTTP header — it sees a decoded message that says
+    the turn was published by a load-tested request. This is where that claim is
+    turned back into the ContextVar the stubs read.
+
+    The claim is not taken on trust. It is ANDed with LOAD_TEST_SECRET being
+    configured, which preserves the middleware's safe-by-default property on
+    this side too: with the feature off, a message asserting `load_test` — a
+    replay, a stale message left in the subscription across a config change —
+    cannot put a worker into stub mode and start returning fake builds to real
+    users.
+    """
+    token = _load_test.set(enabled and bool(settings.LOAD_TEST_SECRET))
+    try:
+        yield
+    finally:
+        _load_test.reset(token)
 
 
 class LoadTestMiddleware:

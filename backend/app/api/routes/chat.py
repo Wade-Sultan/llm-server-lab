@@ -10,6 +10,7 @@ from fastapi.responses import StreamingResponse
 
 from app.core import pubsub
 from app.core.auth import optional_firebase_token
+from app.core.loadtest import is_load_test
 from app.core.valkey import is_available as valkey_available
 from app.schemas.chat import ChatMessage, ChatRequest
 from app.services import turn_stream
@@ -210,6 +211,12 @@ async def chat(
                 "conversation_id": req.conversation_id,
                 "user": user,
                 "messages": [m.model_dump() for m in req.messages],
+                # Carries load-test mode across the process boundary. The
+                # middleware's ContextVar stops at this pod, and the worker is
+                # where every LM call actually happens — so without this line a
+                # load test against production stubs nothing and bills for one
+                # full build per simulated user. See core/loadtest.py.
+                "load_test": is_load_test(),
             },
         )
 

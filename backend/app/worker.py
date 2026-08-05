@@ -34,6 +34,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from app.core.config import settings
+from app.core.loadtest import load_test_scope
 from app.core.logging import configure_logging
 from app.core.metrics import start_exporter as start_metrics_exporter
 from app.core.turn_metrics import CHAT_BUFFERS_RETAINED
@@ -52,7 +53,7 @@ WORKER_ID = os.getenv("HOSTNAME") or f"worker-{uuid.uuid4().hex[:8]}"
 
 def _decode(
     message: Any,
-) -> tuple[str, list[ChatMessage], dict | None, str | None] | None:
+) -> tuple[str, list[ChatMessage], dict | None, str | None, bool] | None:
     """Parse a Pub/Sub message into run_turn's arguments, or None if malformed.
 
     A malformed message is permanent: it will decode exactly as badly on every
@@ -68,7 +69,16 @@ def _decode(
     except Exception:
         logger.exception("undecodable Pub/Sub message; discarding")
         return None
-    return turn_id, messages, payload.get("user"), payload.get("conversation_id")
+    return (
+        turn_id,
+        messages,
+        payload.get("user"),
+        payload.get("conversation_id"),
+        # Absent on anything published before this field existed, and on every
+        # real user's turn. Defaulting to False is the safe direction: the cost
+        # of getting it wrong is a stubbed build shown to a real user.
+        bool(payload.get("load_test")),
+    )
 
 
 async def _buffer_gauge_loop(interval_s: int = 60) -> None:
@@ -107,6 +117,7 @@ async def _handle(
     messages: list[ChatMessage],
     user: dict | None,
     conversation_id: str | None,
+    load_test: bool = False,
 ) -> None:
     if not await turn_stream.claim(
         turn_id, WORKER_ID, settings.PUBSUB_ACK_EXTENSION_S * 2
@@ -115,7 +126,11 @@ async def _handle(
         return
 
     try:
-        await run_turn(turn_id, messages, user, conversation_id)
+        # Wraps run_turn only, not the claim: the claim is bookkeeping that must
+        # behave identically either way, and the scope exists solely to put the
+        # LM chokepoints into stub mode for the duration of the pipeline.
+        with load_test_scope(load_test):
+            await run_turn(turn_id, messages, user, conversation_id)
     except BaseException:
         # Includes CancelledError from a SIGTERM mid-turn. Releasing the claim is
         # what lets the redelivery actually re-run the turn instead of being
@@ -248,10 +263,10 @@ class Worker:
         if decoded is None:
             message.ack()  # permanent; see _decode
             return
-        turn_id, messages, user, conversation_id = decoded
+        turn_id, messages, user, conversation_id, load_test = decoded
 
         future = asyncio.run_coroutine_threadsafe(
-            _handle(turn_id, messages, user, conversation_id), self._loop
+            _handle(turn_id, messages, user, conversation_id, load_test), self._loop
         )
         try:
             future.result()

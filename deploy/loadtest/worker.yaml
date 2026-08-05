@@ -1,0 +1,64 @@
+# The load generators. Each worker is a single-CPU-bound process, so the number
+# of replicas — not the "users" figure in the UI — is what caps how much load
+# this deployment can actually produce.
+#
+# Four is sized against what it is pointed at: builder tops out at 4 replicas
+# (overlays/prod/hpa.yaml), and /chat users spend nearly all their time idle on
+# an open SSE stream rather than burning CPU. Scale this up before concluding
+# the target has plateaued:
+#   kubectl -n palladium scale deployment/locust-worker --replicas=8
+# Locust workers can join a run already in progress, so that takes effect
+# without restarting the test.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: locust-worker
+spec:
+  replicas: 4
+  selector:
+    matchLabels:
+      app: locust
+      role: worker
+  template:
+    metadata:
+      labels:
+        app: locust
+        role: worker
+    spec:
+      containers:
+        - name: locust
+          image: locustio/locust:2.46.3
+          args:
+            - --worker
+            - --master-host
+            - locust-master
+            - -f
+            - /mnt/locust/locustfile.py
+          # No --host here on purpose: the master broadcasts it to the workers
+          # when a run starts, so the UI's Host field stays the single place it
+          # is set. A --host here would be silently ignored and would rot.
+          env:
+            # Workers are what actually issue the requests, so they each need
+            # the secret too — the master's copy only covers the preflight.
+            - name: LOAD_TEST_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: palladium-secrets-builder
+                  key: LOAD_TEST_SECRET
+            - name: COMMERCE_URL
+              value: http://commerce
+          volumeMounts:
+            - name: locustfile
+              mountPath: /mnt/locust
+          resources:
+            # See master.yaml for why these are not burstable.
+            requests:
+              cpu: "1"
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+      volumes:
+        - name: locustfile
+          configMap:
+            name: locust-locustfile

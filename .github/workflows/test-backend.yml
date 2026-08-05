@@ -11,6 +11,41 @@ on:
 jobs:
   test-backend:
     runs-on: ubuntu-latest
+
+    # app/core/config.py builds `settings` at import time from `../.env`, which
+    # is gitignored and therefore does not exist on a runner. Five fields have no
+    # default (PROJECT_NAME, POSTGRES_SERVER, POSTGRES_USER, OPENROUTER_API_KEY,
+    # SERPAPI_KEY), so without this block every step that imports the app dies in
+    # pydantic validation before a single test runs.
+    #
+    # NONE OF THESE ARE SECRETS, and that is the point rather than an oversight.
+    # The two API keys are deliberate nonsense: the suite makes no outbound call
+    # to either provider, so a real key would be a live credential sitting in a
+    # public log for no test coverage in return. The Postgres values are the
+    # throwaway container started below, whose credentials are already the
+    # defaults committed in docker-compose.yml.
+    #
+    # `${{ secrets.* }}` would be worse here even if the values were real:
+    # secrets are not exposed to workflows triggered by a fork's pull request, so
+    # the gate would fail for exactly the contributors it exists to check.
+    #
+    # If a test ever genuinely needs a live key, give it its own job, mark it
+    # `if: github.event.pull_request.head.repo.full_name == github.repository`,
+    # and pull the key from secrets there — do not promote this block.
+    env:
+      PROJECT_NAME: Palladium
+      # localhost, not `db`: these steps run on the runner itself, and compose
+      # publishes 5432 to the host. `db` is the right answer only inside the
+      # compose network, which is what docker-compose.yml's own prestart uses.
+      POSTGRES_SERVER: localhost
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: palladium_app
+      POSTGRES_PASSWORD: changethis
+      POSTGRES_DB: palladium
+      POSTGRES_DB_URL: postgresql://palladium_app:changethis@localhost:5432/palladium
+      OPENROUTER_API_KEY: ci-not-a-real-key
+      SERPAPI_KEY: ci-not-a-real-key
+
     steps:
       - name: Checkout
         uses: actions/checkout@v6

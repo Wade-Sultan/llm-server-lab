@@ -43,7 +43,7 @@ class Settings(BaseSettings):
     PROJECT_NAME: str
     SENTRY_DSN: HttpUrl | None = None
 
-    # Shared secret enabling the k6 load-test path (app/core/loadtest.py):
+    # Shared secret enabling the Locust load-test path (app/core/loadtest.py):
     # requests presenting it in X-Palladium-Load-Test are served by stub LMs and
     # never reach OpenRouter. Empty — the default — disables the header
     # entirely, so a normal deployment cannot be put into stub mode at all.

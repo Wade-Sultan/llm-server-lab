@@ -1,0 +1,113 @@
+# The Locust master: the web UI, and the process that aggregates every worker's
+# statistics. Exactly one — the master is a singleton by design, and a second
+# replica would be a second, separate test run with its own numbers.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: locust-master
+spec:
+  replicas: 1
+  # Recreate, not RollingUpdate: two masters briefly coexisting would have the
+  # workers split across them mid-connect, and one of the two would report a
+  # test running with half the load it thinks it has.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: locust
+      role: master
+  template:
+    metadata:
+      labels:
+        app: locust
+        role: master
+    spec:
+      containers:
+        - name: locust
+          image: locustio/locust:2.46.3
+          args:
+            - --master
+            - -f
+            - /mnt/locust/locustfile.py
+            # THE HOST THE WEB UI MOUNTS TO. In-cluster Service DNS, so the run
+            # exercises builder and its HPA directly.
+            #
+            # The trade-off, stated plainly because the UI lets you change it:
+            # this path skips the Gateway, so it measures the service and not
+            # the edge — no TLS termination, no Cloud Load Balancer, no
+            # GCPBackendPolicy timeout. To include all of that, put
+            # https://api.palladiumtech.ai in the UI's Host field instead. The
+            # locustfile works unchanged either way; only the blast radius
+            # differs, since the second form loads the public endpoint real
+            # users are on.
+            - --host
+            - http://builder
+          ports:
+            - containerPort: 8089
+              name: web
+            - containerPort: 5557
+              name: master
+          env:
+            # The whole cost-safety mechanism. The locustfile refuses to start a
+            # run when this is empty, so a missing key fails the test rather
+            # than quietly turning it into a live OpenRouter bill.
+            #
+            # It lives in the builder Secret because builder is what validates
+            # it; see deploy/overlays/prod/patches/secrets-scoped.yaml.
+            - name: LOAD_TEST_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: palladium-secrets-builder
+                  key: LOAD_TEST_SECRET
+            - name: COMMERCE_URL
+              value: http://commerce
+          volumeMounts:
+            - name: locustfile
+              mountPath: /mnt/locust
+          readinessProbe:
+            httpGet:
+              path: /
+              port: web
+            periodSeconds: 10
+          resources:
+            # requests == limits, unlike every application workload here, which
+            # burst on purpose (see overlays/prod/patches/resources.yaml). A
+            # throttled load generator reports its own CPU starvation as target
+            # latency, and that number is indistinguishable from a real
+            # regression. Guaranteed CPU is worth more than the burst headroom.
+            requests:
+              cpu: "1"
+              memory: 1Gi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+      volumes:
+        - name: locustfile
+          configMap:
+            # Name is rewritten by kustomize to include the content hash, which
+            # is what rolls these pods when the locustfile changes.
+            name: locust-locustfile
+---
+# ClusterIP, NOT the LoadBalancer the GKE tutorial uses. The Locust web UI is an
+# unauthenticated button that generates traffic against production; putting it
+# on a public IP would let anyone who finds it load-test the deployment for you.
+# Same posture as admin: reachable only through
+#   kubectl -n palladium port-forward svc/locust-master 8089:8089
+apiVersion: v1
+kind: Service
+metadata:
+  name: locust-master
+spec:
+  selector:
+    app: locust
+    role: master
+  ports:
+    - name: web
+      port: 8089
+      targetPort: web
+    # Workers connect here. Locust 2.x multiplexes control and statistics over
+    # this single port — the second port older guides mention (5558) no longer
+    # exists.
+    - name: master
+      port: 5557
+      targetPort: master

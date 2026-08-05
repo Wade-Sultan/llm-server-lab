@@ -1,7 +1,7 @@
-"""Guards the OpenRouter blocker used by the k6 load tests.
+"""Guards the OpenRouter blocker used by the Locust load tests.
 
 These are cost tests, not feature tests. A regression here does not break a
-page — it silently bills real OpenRouter tokens for every virtual user in a
+page — it silently bills real OpenRouter tokens for every simulated user in a
 load run, which is exactly the kind of failure nobody notices until the
 invoice. Hence asserting the negative cases (no header, wrong secret, secret
 unset) as carefully as the positive one.
@@ -17,7 +17,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.core.config import settings
-from app.core.loadtest import LoadTestMiddleware, is_load_test
+from app.core.loadtest import LoadTestMiddleware, is_load_test, load_test_scope
 
 HEADER = "X-Palladium-Load-Test"
 SECRET = "test-secret-value"
@@ -76,6 +76,90 @@ def test_flag_does_not_leak_between_requests(client: TestClient) -> None:
     """A stubbed request must not taint the next one on a reused task."""
     assert client.get("/probe", headers={HEADER: SECRET}).json() == {"stubbed": True}
     assert client.get("/probe").json() == {"stubbed": False}
+
+
+# --- crossing the Pub/Sub boundary ----------------------------------------
+#
+# In production /chat does not run the turn; it publishes and relays. Every one
+# of the stubbed LM calls therefore happens in the worker process, where the
+# middleware's ContextVar does not exist. These three tests cover the whole
+# relay: the flag is published, decoded, and re-entered.
+
+
+def test_chat_publishes_the_load_test_flag(monkeypatch) -> None:
+    """The regression that costs money: a payload without `load_test`.
+
+    Nothing about such a turn looks wrong — it streams, it persists, the load
+    test reports healthy latency — except that the worker called OpenRouter for
+    real, once per build step, for every simulated user.
+    """
+    from app.api.routes import chat as chat_route
+
+    monkeypatch.setattr(settings, "LOAD_TEST_SECRET", SECRET, raising=False)
+
+    published: list[dict] = []
+
+    async def fake_publish(_turn_id, _conversation_id, payload) -> bool:
+        published.append(payload)
+        return True
+
+    async def fake_valkey() -> bool:
+        return True
+
+    monkeypatch.setattr(chat_route.pubsub, "publish_turn", fake_publish)
+    monkeypatch.setattr(chat_route.pubsub, "is_enabled", lambda: True)
+    monkeypatch.setattr(chat_route, "valkey_available", fake_valkey)
+
+    app = FastAPI()
+    app.add_middleware(LoadTestMiddleware)
+    app.include_router(chat_route.router, prefix="/api/v1")
+
+    body = {"messages": [{"role": "user", "content": "hi"}]}
+    with TestClient(app) as c:
+        # The response body is the relay, which needs a live Valkey; only the
+        # published payload matters here, and it is written before any streaming
+        # begins.
+        c.post("/api/v1/chat", json=body, headers={HEADER: SECRET})
+        c.post("/api/v1/chat", json=body)
+
+    assert [p["load_test"] for p in published] == [True, False]
+
+
+def test_worker_decode_carries_the_flag() -> None:
+    import json
+    from types import SimpleNamespace
+
+    from app.worker import _decode
+
+    def message(payload: dict) -> SimpleNamespace:
+        return SimpleNamespace(data=json.dumps(payload).encode())
+
+    base = {"turn_id": "t1", "messages": [{"role": "user", "content": "hi"}]}
+
+    assert _decode(message({**base, "load_test": True}))[4] is True
+    assert _decode(message({**base, "load_test": False}))[4] is False
+    # A message published before this field existed must decode as a real turn,
+    # not a stubbed one.
+    assert _decode(message(base))[4] is False
+
+
+def test_load_test_scope_refuses_when_secret_unset(monkeypatch) -> None:
+    """Safe-by-default, enforced on the worker side too.
+
+    The worker takes the flag from a message body rather than a validated
+    header, so the check has to be re-done here — otherwise a replayed or stale
+    message could put a worker into stub mode in a deployment where the feature
+    is switched off entirely, and real users would get fabricated builds.
+    """
+    monkeypatch.setattr(settings, "LOAD_TEST_SECRET", SECRET, raising=False)
+    with load_test_scope(True):
+        assert is_load_test() is True
+
+    monkeypatch.setattr(settings, "LOAD_TEST_SECRET", "", raising=False)
+    with load_test_scope(True):
+        assert is_load_test() is False
+
+    assert is_load_test() is False
 
 
 def test_stub_client_streams_like_openrouter() -> None:
