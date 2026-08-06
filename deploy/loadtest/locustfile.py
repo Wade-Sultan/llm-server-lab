@@ -33,6 +33,7 @@ import json
 import logging
 import os
 import time
+from enum import Enum, auto
 
 import gevent
 import requests
@@ -53,6 +54,30 @@ COMMERCE_URL = os.environ.get("COMMERCE_URL", "http://commerce").rstrip("/")
 # single token and any multi-word marker is split across two frames and never
 # matches. "stubbed" is the first distinctive word of the stub's canned text.
 _STUB_MARKER = "stubbed"
+
+# The server's own fallback texts, from routes/chat.py and turn_runner.py. These
+# arrive as ordinary token frames, so without matching them explicitly a
+# saturated backend is indistinguishable from a real model answering — and the
+# cost guard would abort the run exactly when the load test got interesting.
+# Matched on a distinctive fragment rather than the full string, which carries
+# leading newlines and trailing punctuation.
+_SERVICE_ERRORS = (
+    "That build didn't start",
+    "Lost the connection to the build service",
+    "Something went wrong generating your recommendation",
+)
+
+
+class _Stream(Enum):
+    """What produced a /chat stream. Drives cost safety, so it is explicit
+    rather than a bool: "not the stub" covers both a free error message and an
+    expensive real completion, and those are not the same event."""
+
+    EMPTY = auto()  # no token frames at all
+    STUBBED = auto()  # the stub LM — the expected case
+    SERVICE_ERROR = auto()  # a server fallback message; nothing was spent
+    UNSTUBBED = auto()  # real model output; money is being spent
+
 
 # Varied enough that profile extraction sees different inputs, short enough that
 # the request body is not itself the thing being measured.
@@ -139,24 +164,29 @@ def preflight(environment, **_kwargs) -> None:
         _abort(environment, f"preflight /chat returned {res.status_code}")
         return
 
-    _, _, stubbed = _consume_sse(res, time.perf_counter())
-    if not stubbed:
+    # Strict here, unlike the per-request check: the preflight runs against an
+    # idle service with one request, so anything other than a clean stubbed
+    # build means the run should not start — including a service error, which
+    # at zero load is a broken deployment rather than saturation.
+    _, _, verdict = _consume_sse(res, time.perf_counter())
+    if verdict is not _Stream.STUBBED:
         _abort(
             environment,
-            "preflight response was NOT served by the stub LM — the secret is "
-            "wrong, LOAD_TEST_SECRET is unset on the server, or the worker "
-            "running the turn did not receive the flag. Real tokens were spent "
-            "on this one request; stopping before the run multiplies that.",
+            f"preflight /chat came back as {verdict.name}, not STUBBED — the "
+            "secret is wrong, LOAD_TEST_SECRET is unset on the server, or the "
+            "worker running the turn did not receive the flag. If it was "
+            "UNSTUBBED, real tokens were spent on this one request; stopping "
+            "before the run multiplies that.",
         )
         return
 
     logger.info("preflight OK — %s is serving stubbed builds", host)
 
 
-def _consume_sse(response, started: float) -> tuple[float, float, bool]:
+def _consume_sse(response, started: float) -> tuple[float, float, _Stream]:
     """Drain one /chat SSE stream.
 
-    Returns (ms to first token, ms to [DONE], whether the stub served it).
+    Returns (ms to first token, ms to [DONE], what produced the stream).
 
     Time to first token is the number worth watching. Total duration mostly
     measures how long the stub chose to stream for, which says nothing about
@@ -164,7 +194,12 @@ def _consume_sse(response, started: float) -> tuple[float, float, bool]:
     duration from its own request histogram.
     """
     first_token_ms: float | None = None
-    stubbed = False
+    # Classified from the assembled reply rather than frame by frame. SSE
+    # framing is not something a marker can rely on: the stub emits one word per
+    # frame, so every multi-word phrase below is split across several and
+    # matches none of them individually. That is the same mistake the k6 script
+    # this replaced had baked in.
+    parts: list[str] = []
 
     try:
         for line in response.iter_lines(decode_unicode=True):
@@ -190,18 +225,31 @@ def _consume_sse(response, started: float) -> tuple[float, float, bool]:
 
             if first_token_ms is None:
                 first_token_ms = (time.perf_counter() - started) * 1000
-            if _STUB_MARKER in event.get("text", ""):
-                stubbed = True
+
+            parts.append(event.get("text", ""))
     finally:
         # An early break leaves the connection mid-body, where urllib3 cannot
         # return it to the pool; without this the run leaks a socket per turn.
         response.close()
 
+    reply = "".join(parts)
+    if not parts:
+        verdict = _Stream.EMPTY
+    elif _STUB_MARKER in reply:
+        # Checked first, and it wins: a stubbed turn that went on to hit an
+        # error is still a turn that spent nothing, which is the only question
+        # this verdict is used to answer.
+        verdict = _Stream.STUBBED
+    elif any(marker in reply for marker in _SERVICE_ERRORS):
+        verdict = _Stream.SERVICE_ERROR
+    else:
+        verdict = _Stream.UNSTUBBED
+
     total_ms = (time.perf_counter() - started) * 1000
     return (
         (first_token_ms if first_token_ms is not None else total_ms),
         total_ms,
-        stubbed,
+        verdict,
     )
 
 
@@ -239,17 +287,32 @@ class ChatUser(HttpUser):
                 return
 
             try:
-                first_token_ms, total_ms, stubbed = _consume_sse(res, started)
+                first_token_ms, total_ms, verdict = _consume_sse(res, started)
             except Exception as exc:
                 res.failure(f"stream aborted: {exc}")
                 return
 
-            if not stubbed:
+            # Absence of the stub marker is ambiguous, and the two readings call
+            # for opposite responses. A service error message costs nothing and
+            # is exactly what a saturation test is trying to provoke; a real
+            # model's answer costs money and must stop the run. Treating them
+            # alike made the load test abort itself at the moment it started
+            # measuring the thing it was pointed at.
+            if verdict is _Stream.SERVICE_ERROR:
+                res.failure("build did not start (server fallback message)")
+                return
+            if verdict is _Stream.EMPTY:
+                # No token frames at all. No LM was reached, so nothing was
+                # spent — a failed request, not a cost incident.
+                res.failure("stream produced no tokens")
+                return
+            if verdict is _Stream.UNSTUBBED:
                 res.failure("served by a REAL model — see abort below")
                 _abort(
                     self.environment,
-                    "a /chat response was not served by the stub LM. The run "
-                    "was billing real OpenRouter tokens; stopping now.",
+                    "a /chat response carried model output with no stub marker "
+                    "and no known service-error text. The run was billing real "
+                    "OpenRouter tokens; stopping now.",
                 )
                 return
 
