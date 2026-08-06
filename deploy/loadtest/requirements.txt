@@ -1,0 +1,23 @@
+# Local environment for locustfile.py. NOT needed to run the load test the
+# normal way — the cluster runs it from the locustio/locust image and installs
+# nothing from here. This exists so an editor can resolve the imports, and so
+# `locust -f deploy/loadtest/locustfile.py --host http://localhost:8000` works
+# against a dev server.
+#
+# Pinned to the exact tag in master.yaml and worker.yaml. A local run that
+# disagrees with the cluster on the version of the tool is a debugging trap, and
+# the whole point of running it locally is to trust what it tells you.
+#
+# NOT in backend/pyproject.toml, and it cannot be: locust >=2.46 requires
+# pytest>=8.3.3 while that project's dev group pins pytest<8.0.0, so uv fails to
+# resolve them together. A separate environment is also the honest description
+# of what this is — the load test is not part of the backend package.
+#
+# Needs Python >= 3.11; locust dropped 3.10 in 2.46.3, and backend/.venv is
+# 3.10. Do not reuse it:
+#
+#   uv venv --python 3.11 deploy/loadtest/.venv
+#   uv pip install --python deploy/loadtest/.venv -r deploy/loadtest/requirements.txt
+#
+# Then point the editor's interpreter at deploy/loadtest/.venv for this file.
+locust==2.46.3

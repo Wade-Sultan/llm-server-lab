@@ -49,6 +49,12 @@ dev = [
     "coverage<8.0.0,>=7.4.3",
 ]
 
+# NO locust GROUP HERE, deliberately — see deploy/loadtest/requirements.txt.
+# locust >=2.46 requires pytest>=8.3.3 and `dev` above pins pytest<8.0.0, so uv
+# (which locks every group together) cannot satisfy both. The load test is not
+# part of this package and is not imported by it, so it gets its own
+# environment rather than dragging this one's test stack forward.
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
