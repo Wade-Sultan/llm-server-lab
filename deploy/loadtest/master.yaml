@@ -42,6 +42,15 @@ spec:
             # users are on.
             - --host
             - http://builder
+            # Adds a user-class selector to the UI. The default 1:4 chat:browse
+            # weighting mirrors real traffic and is right for asking "how does
+            # the service behave under load", but it is the wrong tool for
+            # finding the worker pool's ceiling: saturating 16 concurrent turn
+            # slots that way takes ~550 users, most of them generating browse
+            # traffic that is not the constraint. Selecting ChatUser alone gets
+            # there at ~110. Both runs are worth having; this flag is what lets
+            # one deployment do both.
+            - --class-picker
           ports:
             - containerPort: 8089
               name: web
