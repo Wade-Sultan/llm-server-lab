@@ -1,7 +1,7 @@
 # Workload Identity: the KSA -> Google SA link. This annotation is the half that
 # lives in the cluster; the matching roles/iam.workloadIdentityUser binding is
-# in RUNBOOK.md §6. Both are required — with only one, token exchange fails at
-# runtime with a permission error rather than at deploy time.
+# granted out-of-band in GCP. Both are required — with only one, token exchange
+# fails at runtime with a permission error rather than at deploy time.
 #
 # This replaced the Cloud Run --service-account flag. No service account JSON
 # keys exist anywhere in this topology, which is also why the local overlay's
@@ -15,8 +15,9 @@
 # anyone "cleans up" an SA that looks over-privileged for a GKE-only stack —
 # check what actually binds to it first.
 #
-# PROJECT_ID must be substituted before apply (RUNBOOK.md §1). Keep the
-# placeholder in git — substitute at deploy time, not in a commit.
+# PROJECT_ID must be substituted before apply — the render step in
+# deploy/cloudbuild.yaml does it, and fails the build if it did not. Keep the
+# placeholder in git: substitute at deploy time, not in a commit.
 apiVersion: v1
 kind: ServiceAccount
 metadata:

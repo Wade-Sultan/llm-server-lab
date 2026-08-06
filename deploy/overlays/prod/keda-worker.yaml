@@ -1,0 +1,129 @@
+# Autoscaling for the chat-turn workers, keyed on the Pub/Sub backlog.
+#
+# WHY NOT A PLAIN CPU HPA, the way builder has one. hpa.yaml already flags the
+# problem in its closing note: these pods are blocked on OpenRouter, not
+# computing, so a saturated worker looks idle. The load test made that concrete
+# — at 2 replicas x PUBSUB_MAX_CONCURRENCY 8 = 16 concurrent turns, pushing past
+# that ceiling took first-token latency from ~3s to 20s+ while CPU stayed
+# unremarkable. A CPU target would not have scaled out at all. Queue depth is
+# the signal that actually moves when this workload is in trouble.
+#
+# PROD ONLY, like podmonitoring.yaml and for the same reason: these are KEDA
+# CRDs (keda.sh/v1alpha1), which do not exist on the minikube+Cilium local
+# cluster. Putting them in base/ would break every local apply with "no matches
+# for kind ScaledObject". The local overlay also runs worker at replicas: 0 with
+# no Pub/Sub at all, so there is nothing here for it to scale.
+#
+# SETUP IS NOT SELF-CONTAINED. This needs KEDA installed on the cluster and its
+# operator service account granted roles/monitoring.viewer through Workload
+# Identity — note that the grant is a Cloud Monitoring role, not a Pub/Sub one,
+# because the trigger below reads the metric rather than the subscription.
+# Applying this file without that leaves the ScaledObject permanently in a
+# failed state, and `kubectl describe scaledobject worker` is the only place
+# that says so.
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: gcp-pubsub
+spec:
+  # Workload Identity rather than credentialsFromEnv. The alternative is pasting
+  # a service account JSON key into a Secret, which is a long-lived credential
+  # for a scaler that only ever reads one metric — strictly worse than the
+  # keyless binding the rest of this overlay already uses
+  # (patches/workload-identity.yaml).
+  #
+  # NOTE: this resolves against KEDA's OWN operator service account, not the
+  # builder KSA the worker pods run as. Granting the worker more IAM does
+  # nothing for it.
+  podIdentity:
+    provider: gcp
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: worker
+spec:
+  scaleTargetRef:
+    name: worker
+
+  # Matches the base Deployment's replicas: 2, so the first apply does not
+  # immediately fight KEDA — the same reasoning as builder's HPA. 2 is also what
+  # keeps the worker PDB (minAvailable: 1) able to permit a voluntary eviction
+  # at all; drop this to 1 and node drains block, exactly as pdb.yaml describes
+  # for the services that deliberately have no PDB.
+  minReplicaCount: 2
+
+  # 8 x 8 concurrency = 64 turns in flight. A ceiling, not a target: at the
+  # worker's prod resources (250m/2Gi requested) a fully scaled-out pool is 16Gi
+  # of Autopilot memory, so this is the number to revisit deliberately rather
+  # than raise reflexively when a run looks slow.
+  maxReplicaCount: 8
+
+  # Every poll is a Cloud Monitoring API call, and Autopilot needs 60-120s to
+  # schedule a node anyway — polling faster than 30s would bill more to react no
+  # sooner.
+  pollingInterval: 30
+
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleDown:
+          # Five minutes, matching builder's HPA. Scaling in is what kills a pod
+          # mid-turn: the turn is redelivered rather than lost, but the user
+          # still watches their build stall for the redelivery backoff, so a
+          # brief dip in queue depth must not be able to cause one.
+          stabilizationWindowSeconds: 300
+
+  triggers:
+    # `prometheus`, NOT the `gcp-pubsub` scaler, which is the obvious choice and
+    # the wrong one. KEDA deprecated all three of its GCP scalers (Pub/Sub,
+    # Stackdriver, Cloud Tasks) in September 2025 because they are built on
+    # Monitoring Query Language, which Google deprecated in October 2024 in
+    # favour of a PromQL API. Nothing is scheduled for removal — KEDA's notice
+    # says the scalers stay as long as GCP supports MQL — so this is not urgent
+    # maintenance, it is simply not worth adopting a dead code path on day one.
+    #
+    # This is KEDA's own recommended migration, and it costs nothing extra:
+    # Cloud Monitoring already serves every GCP metric over a PromQL endpoint
+    # with no exporter, adapter or sidecar to run. Same metric, same IAM grant
+    # (monitoring.viewer), same Workload Identity binding.
+    - type: prometheus
+      authenticationRef:
+        name: gcp-pubsub
+      metadata:
+        # PROJECT_ID is substituted at deploy time by the render step in
+        # cloudbuild.yaml, which greps this file afterwards to make sure it
+        # happened. Deploying the literal placeholder would leave a scaler
+        # quietly querying a project that does not exist.
+        serverAddress: https://monitoring.googleapis.com/v1/projects/PROJECT_ID/location/global/prometheus
+
+        # Cloud Monitoring's PromQL naming: the metric type
+        # pubsub.googleapis.com/subscription/num_undelivered_messages becomes
+        # <domain with dots as underscores>:<path with slashes as underscores>.
+        #
+        # sum() is not decoration — KEDA requires the query to return exactly
+        # one element, and this series carries per-resource labels that would
+        # otherwise return several.
+        #
+        # subscription_id must track PUBSUB_SUBSCRIPTION in
+        # patches/config-prod.yaml.
+        query: sum(pubsub_googleapis_com:subscription_num_undelivered_messages{subscription_id="chat-turns-workers"})
+
+        # A PER-REPLICA target: KEDA asks for ceil(metric / threshold) replicas.
+        # Setting it to PUBSUB_MAX_CONCURRENCY makes this robust to the one
+        # genuinely ambiguous thing about the metric — whether messages a worker
+        # currently holds leased count toward it. If they do, a fully busy pool
+        # reads 8 x replicas and this resolves to exactly the replicas already
+        # running (stable, and it scales the moment a real queue forms on top).
+        # If they do not, a healthy pool reads ~0 and the scaler sits at
+        # minReplicaCount until a backlog appears. Both are correct; only the
+        # anticipation differs. Confirm which you have by watching the metric
+        # against in-flight turns on the first load run.
+        threshold: "8"
+
+        # Explicit because the failure mode is silent and confusing. An empty
+        # result — which is what a subscription with no backlog returns — is
+        # read as 0 rather than as an error. With it false, a healthy idle
+        # queue would put the scaler into an error state and the HPA would stop
+        # being able to compute a target at all.
+        ignoreNullValues: "true"

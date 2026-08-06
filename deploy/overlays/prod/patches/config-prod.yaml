@@ -9,7 +9,7 @@ data:
   #
   # It is the Cloud SQL private IP, which must not be committed, so it is
   # supplied through palladium-secrets-builder instead — created out-of-band from
-  # the live instance (RUNBOOK §7). Reached directly over the VPC: Autopilot
+  # the live instance. Reached directly over the VPC: Autopilot
   # clusters are VPC-native, so no Auth Proxy sidecar is needed.
   #
   # This works because envFrom lists the configMapRef first and the secretRef
@@ -45,8 +45,7 @@ data:
   # --- Valkey / Pub/Sub -----------------------------------------------------
   # VALKEY_HOST is deliberately ABSENT here, for the same reason as
   # POSTGRES_SERVER above: it is the Memorystore instance's private VPC address
-  # and does not belong in git. It comes from palladium-secrets-builder
-  # (deploy/messaging.md §1).
+  # and does not belong in git. It comes from palladium-secrets-builder.
   #
   # Unlike POSTGRES_SERVER, an absent VALKEY_HOST does NOT fail startup — it
   # defaults to "" and degrades /chat to inline streaming. That is the right

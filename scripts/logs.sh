@@ -16,7 +16,7 @@
 #
 # Cloud Logging needs no setup: GKE ships container stdout/stderr there by
 # default. Metrics land in Cloud Monitoring via GMP, logs here — both queryable
-# from the GCP console. See deploy/observability.md.
+# from the GCP console.
 set -euo pipefail
 
 NAMESPACE="${NAMESPACE:-palladium}"

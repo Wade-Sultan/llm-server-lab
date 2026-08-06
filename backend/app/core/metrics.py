@@ -3,7 +3,7 @@
 SCRAPED, NOT PUSHED. Google Managed Prometheus scrapes this endpoint via the
 `PodMonitoring` resource in deploy/overlays/prod/podmonitoring.yaml and stores
 the series in Cloud Monitoring, which is where they are queried from. Nothing
-here pushes anywhere. See deploy/observability.md.
+here pushes anywhere.
 
 WHY A SEPARATE PORT. The metrics endpoint listens on METRICS_PORT, not on the
 API port, and that port is deliberately absent from the Service. Both

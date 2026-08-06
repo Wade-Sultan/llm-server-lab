@@ -130,8 +130,8 @@ steps:
   # is a python application).
   #
   # sed rather than `kustomize edit set image`: the substitution is two fields,
-  # and the \b boundaries keep FIREBASE_PROJECT_ID from being rewritten — the
-  # same trap documented in RUNBOOK §1.
+  # and the \b boundaries keep FIREBASE_PROJECT_ID from being rewritten, which
+  # an unanchored match would corrupt into a value nothing resolves.
   - id: render
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
     entrypoint: bash
@@ -142,14 +142,18 @@ steps:
         set -euo pipefail
         cd "$_OVERLAY"
 
+        # keda-worker.yaml is in this list because the KEDA trigger queries
+        # Cloud Monitoring by project-scoped URL. Left unsubstituted it does not
+        # fail — it silently polls a project named "PROJECT_ID", so the workers
+        # never scale and nothing anywhere says why.
         sed -i "s/\bPROJECT_ID\b/$PROJECT_ID/g" \
-          kustomization.yaml patches/workload-identity.yaml
+          kustomization.yaml patches/workload-identity.yaml keda-worker.yaml
         sed -i "s/newTag: latest/newTag: $SHORT_SHA/g" kustomization.yaml
 
         # Fail loudly rather than deploying a half-substituted manifest.
-        if grep -qE '\bPROJECT_ID\b|newTag: latest' kustomization.yaml; then
+        if grep -qE '\bPROJECT_ID\b|newTag: latest' kustomization.yaml keda-worker.yaml; then
           echo "ERROR: substitution incomplete" >&2
-          grep -nE '\bPROJECT_ID\b|newTag: latest' kustomization.yaml >&2
+          grep -nE '\bPROJECT_ID\b|newTag: latest' kustomization.yaml keda-worker.yaml >&2
           exit 1
         fi
         # POSTGRES_SERVER is intentionally not in this ConfigMap — it is the Cloud
@@ -198,7 +202,7 @@ steps:
         set -euo pipefail
         gcloud container clusters get-credentials "$_CLUSTER" --region "$_REGION"
 
-        # Preflight. These Secrets are created out-of-band (RUNBOOK §7), so the
+        # Preflight. These Secrets are created out-of-band, so the
         # repo cannot verify them — but deploying without them means three pods
         # crash-looping on missing env, which reads like an application bug.
         for s in builder commerce admin; do

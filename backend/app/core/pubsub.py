@@ -10,8 +10,7 @@ must run in order or the second will read a message history the first has not
 finished writing. Ordering keys give per-key FIFO with no global bottleneck, so
 unrelated conversations still run fully in parallel. Note that ordering requires
 the publisher and subscription to agree — the subscription must be created with
-`--enable-message-ordering` or the guarantee is silently lost (see
-deploy/observability.md's successor, deploy/messaging.md §2).
+`--enable-message-ordering` or the guarantee is silently lost.
 
 THE PUBLISHER CLIENT IS SYNC AND THREADED. google-cloud-pubsub has no asyncio
 publisher; `publish()` returns a concurrent.futures.Future resolved on its own

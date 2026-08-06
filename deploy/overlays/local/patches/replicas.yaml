@@ -23,7 +23,7 @@ spec:
 #
 # To work on the dispatched path locally, run the Pub/Sub emulator and a valkey
 # container, set PUBSUB_EMULATOR_HOST/VALKEY_HOST in .env.local, and scale this
-# to 1. See deploy/messaging.md §6.
+# to 1.
 apiVersion: apps/v1
 kind: Deployment
 metadata:

@@ -1,7 +1,7 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
-# Matches the Workload Identity member strings in RUNBOOK.md
+# Matches the Workload Identity member strings granted in GCP
 # (PROJECT_ID.svc.id.goog[palladium/builder]). Changing this namespace means
 # re-running every IAM binding.
 namespace: palladium
@@ -12,6 +12,10 @@ resources:
   - gateway.yaml
   - backend-policies.yaml
   - hpa.yaml
+  # builder scales on CPU (hpa.yaml); the worker scales on Pub/Sub queue depth,
+  # because CPU does not move when it saturates. Needs KEDA installed — see the
+  # file header.
+  - keda-worker.yaml
   - pdb.yaml
   - podmonitoring.yaml
 
@@ -23,8 +27,8 @@ patches:
 
 # NOTE: no secretGenerator here, deliberately — unlike the local overlay there
 # is no .env.prod to read. The three palladium-secrets-* Secrets are created
-# out-of-band from Secret Manager (RUNBOOK.md §7) so no prod credential is ever
-# on a developer's disk or in a kustomize build output.
+# out-of-band from Secret Manager, so no prod credential is ever on a
+# developer's disk or in a kustomize build output.
 #
 # Three, not one: patches/secrets-scoped.yaml narrows each workload to the keys
 # it actually reads, so commerce cannot see OPENROUTER_API_KEY and builder

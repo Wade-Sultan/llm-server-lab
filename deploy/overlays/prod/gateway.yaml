@@ -15,14 +15,14 @@ metadata:
   name: palladium
   annotations:
     # Certificate Manager, NOT the ManagedCertificate CRD — that CRD only works
-    # with Ingress and is silently ignored by the Gateway controller. Create
-    # the cert map first (RUNBOOK.md §6); TLS is resolved entirely through this
+    # with Ingress and is silently ignored by the Gateway controller. The cert
+    # map must exist before this applies; TLS is resolved entirely through this
     # annotation, which is why the listeners below carry no `tls` block.
     networking.gke.io/certmap: palladium-certs
 spec:
   gatewayClassName: gke-l7-global-external-managed
   addresses:
-    # Reserved before the Gateway exists (RUNBOOK.md §4). Pinning it is what
+    # A static address, reserved before the Gateway exists. Pinning it is what
     # lets DNS — and therefore certificate provisioning — be done in advance,
     # instead of waiting on an ephemeral LB address.
     - type: NamedAddress
