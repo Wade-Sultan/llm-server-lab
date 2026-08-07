@@ -71,3 +71,5 @@ dist
 # they carry no project-specific identifiers.
 deploy/observability.md
 deploy/messaging.md
+deployment.md
+development.md
