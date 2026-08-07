@@ -30,6 +30,7 @@ class RAMSelection(dspy.Signature):
     """
 
     use_cases: str = dspy.InputField(desc="User's use cases and preferences summary")
+    # Add ddr6 to the desc when DDR6 parts exist.
     ddr_gen: str = dspy.InputField(desc="Required DDR generation (ddr4 or ddr5)")
     budget_ceiling: int = dspy.InputField(
         desc="Maximum to spend on RAM in USD; -1 means no ceiling — the user has said cost is not a constraint"

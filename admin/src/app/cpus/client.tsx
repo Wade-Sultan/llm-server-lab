@@ -350,6 +350,7 @@ function CpuForm({
           name="ddrGenerationInput"
           render={({ field }) => (
             <FormItem>
+              {/* Mention ddr6 in the label when DDR6 parts exist. */}
               <FormLabel>DDR Generation (comma-separated, e.g. ddr4, ddr5)</FormLabel>
               <FormControl><Input {...field} /></FormControl>
               <FormMessage />

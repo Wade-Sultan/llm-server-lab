@@ -57,6 +57,7 @@ class CPUExtraction(BaseModel):
     socket: Sourced[str]
     tdp_watts: Sourced[int]
     has_igpu: Sourced[bool]
+    # Extend to Literal["ddr4", "ddr5", "ddr6"] when DDR6 parts exist.
     ddr_generation: Sourced[list[Literal["ddr4", "ddr5"]]]
     supported_features: Sourced[list[str]]
     cores: Sourced[int]
@@ -124,6 +125,7 @@ class MotherboardExtraction(BaseModel):
 
     socket: Sourced[str]
     form_factor: Sourced[Literal["atx", "matx", "itx", "eatx", "ssi_eeb", "ssi_ceb"]]
+    # Extend to Literal["ddr4", "ddr5", "ddr6"] when DDR6 parts exist.
     ddr_generation: Sourced[Literal["ddr4", "ddr5"]]
     memory_slots: Sourced[int]
     has_wifi: Sourced[bool]
@@ -188,6 +190,7 @@ class RAMKitExtraction(BaseModel):
     msrp_usd: Sourced[float]
 
     # ram_groups columns
+    # Extend to Literal["ddr4", "ddr5", "ddr6"] when DDR6 parts exist.
     ddr_generation: Sourced[Literal["ddr4", "ddr5"]]
     speed_mhz: Sourced[int]
     capacity_gb: Sourced[int]  # total across the kit, not per module

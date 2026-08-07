@@ -32,6 +32,7 @@ class GPUBrand(str, enum.Enum):
 class DDRGeneration(str, enum.Enum):
     DDR4 = "ddr4"
     DDR5 = "ddr5"
+    DDR6 = "ddr6"
 
 
 class CoolerType(str, enum.Enum):

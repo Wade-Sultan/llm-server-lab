@@ -56,6 +56,7 @@ _MOBO_FORM_FACTORS = frozenset({"atx", "matx", "itx", "eatx", "ssi_eeb", "ssi_ce
 ENUM_VOCAB: dict[str, dict[str, frozenset[str]]] = {
     "cpu": {
         "brand": frozenset({"amd", "intel"}),
+        # Add "ddr6" here to accept DDR6 during discovery (see DDRGeneration).
         "ddr_generation": frozenset({"ddr4", "ddr5"}),
     },
     "gpu_chipset": {
@@ -78,6 +79,7 @@ ENUM_VOCAB: dict[str, dict[str, frozenset[str]]] = {
     },
     "motherboard": {
         "form_factor": _MOBO_FORM_FACTORS,
+        # Add "ddr6" here to accept DDR6 during discovery (see DDRGeneration).
         "ddr_generation": frozenset({"ddr4", "ddr5"}),
         "memory_module_types": frozenset({"udimm", "rdimm", "lrdimm"}),
     },
@@ -87,6 +89,7 @@ ENUM_VOCAB: dict[str, dict[str, frozenset[str]]] = {
         ),
     },
     "ram_kit": {
+        # Add "ddr6" here to accept DDR6 during discovery (see DDRGeneration).
         "ddr_generation": frozenset({"ddr4", "ddr5"}),
         "module_type": frozenset({"udimm", "rdimm", "lrdimm"}),
     },

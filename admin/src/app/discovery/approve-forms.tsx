@@ -742,6 +742,7 @@ export function ApproveCpuForm({
           <NumberField control={form.control} name="maxMemoryGb" label="Max Memory (GB)" />
           <TextField control={form.control} name="series" label="Series" />
         </div>
+        {/* Mention ddr6 in the label when DDR6 parts exist. */}
         <TextField
           control={form.control}
           name="ddrGenerationInput"

@@ -39,6 +39,7 @@ class DDRSelection(dspy.Signature):
         "avg_ram_price_usd, avg_cpu_price_usd, avg_mobo_price_usd, cpu_count"
     )
 
+    # Add 'ddr6' to the desc when DDR6 parts exist.
     ddr_gen: str = dspy.OutputField(desc="'ddr4' or 'ddr5'")
     reason: str = dspy.OutputField(
         desc="1-2 sentences. Lead with the value argument for this workload and budget."
