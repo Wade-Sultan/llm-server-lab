@@ -145,6 +145,22 @@ class Settings(BaseSettings):
     # buffer outlives the stream it describes and a post-mortem can still read it.
     CHAT_BUFFER_TTL_S: int = 86400
 
+    # How long a conversation's LangGraph checkpoints live in Valkey. Matched to
+    # CHAT_BUFFER_TTL_S because they answer the same question for the same
+    # window — what was this conversation in the middle of. Past it, the latest
+    # checkpoint is still in Postgres (conversations.graph_checkpoint), so
+    # expiry costs resumability mid-turn, not the accumulated build profile.
+    GRAPH_CHECKPOINT_TTL_S: int = 86400
+
+    # --- Tracing --------------------------------------------------------------
+    # Empty key disables the LangSmith span exporter entirely; the Google
+    # Cloud Observability side is driven separately by the standard
+    # OTEL_EXPORTER_OTLP_ENDPOINT, which Managed OpenTelemetry for GKE injects
+    # into the pod. Both are independently optional — see app/core/tracing.py.
+    LANGSMITH_API_KEY: str = ""
+    LANGSMITH_PROJECT: str = "palladium"
+    LANGSMITH_OTEL_ENDPOINT: str = "https://api.smith.langchain.com/otel"
+
     # --- Pub/Sub --------------------------------------------------------------
     # Unset topic disables publishing, which is what selects the inline fallback
     # described above. GOOGLE_CLOUD_PROJECT is set automatically on GKE via the

@@ -92,6 +92,24 @@ class Conversation(Base):
         doc="Full resolved reference Build payload (label, parts, total) cached for this conversation",
     )
 
+    # Write-behind mirror of the LangGraph checkpointer's latest checkpoint for
+    # this conversation, written in the same transaction as the turn itself.
+    # Valkey is the hot store and the only one that keeps pending writes; this
+    # is what survives GRAPH_CHECKPOINT_TTL_S expiring or Memorystore being
+    # flushed, so a conversation resumed days later still knows the user's
+    # accumulated profile instead of re-asking every question.
+    # See app/services/graph/checkpoint.py.
+    graph_checkpoint = Column(
+        JSONB,
+        nullable=True,
+        doc="Serialized latest LangGraph checkpoint (base64 payload in a JSON envelope)",
+    )
+    graph_checkpoint_id = Column(
+        Text,
+        nullable=True,
+        doc="Id of the checkpoint held in graph_checkpoint, for correlating with Valkey",
+    )
+
     created_at = Column(
         DateTime(timezone=True),
         nullable=False,

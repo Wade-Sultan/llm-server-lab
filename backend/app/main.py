@@ -14,6 +14,7 @@ from app.core.loadtest import LoadTestMiddleware
 from app.core.logging import configure_logging
 from app.core.metrics import instrument as instrument_metrics
 from app.core.metrics import start_exporter as start_metrics_exporter
+from app.core.tracing import configure_tracing, shutdown_tracing
 from app.core.valkey import close_client as close_valkey
 from app.core.warmup import mark_dspy_warm
 
@@ -56,6 +57,11 @@ async def lifespan(app: FastAPI):
     # app.main (alembic, the test suite, `fastapi run`'s reloader parent).
     start_metrics_exporter()
 
+    # Before the warm-up task, so the DSPy/litellm import chain it triggers is
+    # itself traced — that chain is the slowest thing a cold pod does, and a
+    # trace that starts after it hides exactly the part worth seeing.
+    configure_tracing("palladium-api")
+
     # Fire-and-forget: don't await, so lifespan startup (and thus port
     # binding) isn't blocked on the dspy/litellm import chain.
     warm_task = asyncio.create_task(_warm_dspy_pipeline())
@@ -76,6 +82,8 @@ async def lifespan(app: FastAPI):
         # topic — the user watches a stream that no worker will ever write to.
         pubsub.close()
         await close_valkey()
+        # Last: flushes spans describing the shutdown above.
+        shutdown_tracing()
 
 
 app = FastAPI(

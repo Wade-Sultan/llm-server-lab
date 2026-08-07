@@ -5,7 +5,6 @@ import logging
 import os
 import re
 import threading
-import time
 import uuid
 from collections.abc import AsyncIterator
 from typing import Any
@@ -20,6 +19,7 @@ from app.schemas.chat import (
     BuildProfile,
     BuildRequest,
     ChatMessage,
+    UserPreferences,
 )
 from app.services.chat_models import ChatModelConfig
 from app.services.resolver import resolve_build
@@ -158,6 +158,12 @@ def warm_dspy_pipeline() -> None:
 
     load_all_programs()
 
+    # The langgraph import chain is a second multi-second cost on a cold start,
+    # and it lands on whichever request happens to arrive first. Paid here
+    # instead. Import only — compiling needs the event loop this runs beside,
+    # and get_graph() caches on first use.
+    import app.services.graph.graph  # noqa: F401
+
 
 def _capture_dspy_usage(prediction: Any, usage_sink: dict) -> None:
     """Pull tokens + cost for the extractprofile DSPy call from the LM history."""
@@ -276,8 +282,24 @@ async def extract_profile(
         v = (value or "").strip()
         return None if not v or v.lower() == "none" else v
 
+    def _pref(value: str) -> str | None:
+        """Same as _opt, but 'no_preference' is also an absence of an answer.
+
+        form_factor's sentinel differs from the others because it feeds
+        UserPreferences, where "no_preference" is the real literal — see
+        _effective_form_factor in dspy_pipeline for why that distinction has
+        teeth (defaulting it to 'atx' silently narrows every motherboard query).
+        """
+        v = _opt(value)
+        return None if v is None or v.lower() == "no_preference" else v
+
     return BuildProfile(
         budget_tier=_confirm_custom_budget(result.budget_tier, messages),
+        price_sensitivity=_opt(getattr(result, "price_sensitivity", "")),
+        form_factor=_pref(getattr(result, "form_factor", "")),
+        color_theme=_opt(getattr(result, "color_theme", "")),
+        rgb_lighting=_opt(getattr(result, "rgb_lighting", "")),
+        noise_tolerance=_opt(getattr(result, "noise_tolerance", "")),
         primary_use=result.primary_use,
         gaming_resolution=_opt(result.gaming_resolution),
         gaming_fps=_opt(result.gaming_fps),
@@ -457,11 +479,16 @@ Determine:
 8. For software development or music production: how heavy the workload is
    (codebase size, VMs/containers; track and plugin counts)
 9. Budget expectations (even vague is fine)
+10. Once a budget is known, whether it is a hard ceiling or they'd stretch a
+   little for the right part
 
 On budget, take the user at their word in both directions. A vague answer is
 enough — don't push for a figure. If they say there is no limit, accept that and
 move on; don't talk them into naming one. But never put "unlimited" in their
 mouth either: if they haven't said it, don't offer it as an option.
+
+Item 10 is about how firm the number is, not how big — ask it only after they
+have given one, and never of someone who has said cost is no object.
 
 Ask ONE focused follow-up question at a time. Be conversational. Keep responses under 80 words.
 
@@ -536,6 +563,11 @@ def _missing_fields(profile: BuildProfile) -> list[str]:
 
     if profile.budget_tier == "unknown":
         missing.append("budget expectations")
+    elif profile.budget_tier != "custom" and profile.price_sensitivity is None:
+        missing.append(
+            "whether that budget is a hard ceiling or they'd stretch a little "
+            "for the right part"
+        )
 
     return missing
 
@@ -624,10 +656,23 @@ def is_profile_complete(profile: BuildProfile) -> bool:
     AND a GPU count; video editing needs footage resolution; 3D rendering needs
     the software used; software dev and music production need a workload
     intensity.
+
+    A known budget also needs a price_sensitivity, because the tier alone does
+    not say where in its band to aim (see _budget_for). The exception is the
+    'custom' tier, where there is no figure for sensitivity to qualify — asking
+    a user who just said cost is no object whether that is a hard ceiling would
+    be answering a question they already answered.
+
+    The stated-preference fields (form_factor, color_theme, rgb_lighting,
+    noise_tolerance) are deliberately absent from this check. They improve a
+    build when volunteered but none of them forks it, and gating on taste would
+    turn a two-question intake into a survey.
     """
     if profile.primary_use == "unknown":
         return False
     if profile.budget_tier == "unknown":
+        return False
+    if profile.budget_tier != "custom" and profile.price_sensitivity is None:
         return False
 
     use = profile.primary_use
@@ -709,20 +754,34 @@ _BUDGET_TIER_USD = {"entry": 1000, "mid": 1500, "high": 2500, "elite": 4000}
 _SERVER_BUDGET_TIER_USD = {"entry": 4000, "mid": 7000, "high": 12000, "elite": 25000}
 
 
+# How far the tier's headline figure moves with the user's own framing of it.
+# A tier is a band, and these pick where in that band to aim: someone who called
+# their number an absolute ceiling should not be shown a build that sits on it,
+# and someone who said they'd go higher for the right part should not be capped
+# at a figure they already disowned.
+#
+# Deliberately narrow (±10-15%). These shift which parts clear the filter at the
+# margins; they are not a licence to rewrite the budget the user gave.
+_PRICE_SENSITIVITY_SCALE = {"firm": 0.90, "flexible": 1.00, "stretch": 1.15}
+
+
 def _budget_for(profile: BuildProfile) -> int:
     """Total build budget in USD for a profile, or NO_BUDGET_CEILING.
 
     'custom' short-circuits both ladders: it is not a bigger tier, it is the
     absence of one. By the time a profile reaches here that tier has already
     been confirmed against the user's own words (_confirm_custom_budget), so
-    this can take it at face value.
+    this can take it at face value — and price_sensitivity cannot apply to it,
+    because there is no figure to scale.
     """
     if profile.budget_tier == "custom":
         return NO_BUDGET_CEILING
     tiers = (
         _SERVER_BUDGET_TIER_USD if profile.primary_use == "server" else _BUDGET_TIER_USD
     )
-    return tiers.get(profile.budget_tier, tiers["mid"])
+    base = tiers.get(profile.budget_tier, tiers["mid"])
+    scale = _PRICE_SENSITIVITY_SCALE.get(profile.price_sensitivity or "", 1.0)
+    return int(base * scale)
 
 
 # BuildProfile.primary_use → BuildRequest use-case key (must match the keys
@@ -760,6 +819,25 @@ _DSPY_COMPONENT_SLOTS: list[tuple[str, str, str | None]] = [
 ]
 
 
+def _profile_to_preferences(profile: BuildProfile) -> UserPreferences:
+    """Map the stated-preference half of a chat profile onto UserPreferences.
+
+    Only fields the user actually volunteered are set; everything else keeps
+    UserPreferences' own defaults, which are the "no preference" values the
+    pipeline is built around. Notably form_factor: leaving it at
+    "no_preference" is what keeps _effective_form_factor from narrowing the
+    motherboard query to ATX for a user who never mentioned a case.
+    """
+    prefs = UserPreferences()
+    if profile.form_factor:
+        prefs.form_factor = profile.form_factor  # type: ignore[assignment]
+    if profile.color_theme:
+        prefs.color_theme = profile.color_theme
+    if profile.rgb_lighting == "yes":
+        prefs.rgb_lighting = True
+    return prefs
+
+
 def _profile_to_build_request(profile: BuildProfile) -> BuildRequest:
     """Map the chat-extracted BuildProfile onto the pipeline's BuildRequest."""
     answers: dict[str, str | list[str]] = {}
@@ -783,6 +861,16 @@ def _profile_to_build_request(profile: BuildProfile) -> BuildRequest:
         answers["rendering.software"] = profile.rendering_software
     if profile.workload_intensity:
         answers["general.workload_intensity"] = profile.workload_intensity
+    # Both also reach the Decide* modules as free text via _request_summary's
+    # Q&A flattening. price_sensitivity is already applied numerically in
+    # _budget_for; saying it in words too lets a step tell "$1350 of a firm
+    # $1500" apart from "$1350 of a flexible $1350", which the number alone
+    # cannot express. noise_tolerance has no numeric analogue at all — the
+    # cooler and fan steps are the only place it can land.
+    if profile.price_sensitivity:
+        answers["general.price_sensitivity"] = profile.price_sensitivity
+    if profile.noise_tolerance:
+        answers["general.noise_tolerance"] = profile.noise_tolerance
     if profile.games:
         answers["gaming.games"] = profile.games
     if profile.workloads:
@@ -792,6 +880,7 @@ def _profile_to_build_request(profile: BuildProfile) -> BuildRequest:
     return BuildRequest(
         use_cases=[_PRIMARY_USE_TO_USE_CASE.get(profile.primary_use, "productivity")],
         budget_usd=_budget_for(profile),
+        preferences=_profile_to_preferences(profile),
         answers=answers,
     )
 
@@ -1047,6 +1136,7 @@ async def run_chat_turn(
       {"type": "reference_estimate", "key": "...", "data": {...}}
       {"type": "build",    "key": "...", "data": {...}}
       {"type": "usage",    "cost_usd": ..., "tokens_in": ..., "tokens_out": ..., "models": [...]}
+      {"type": "checkpoint", "checkpoint_id": "...", "data": {...}}
       {"type": "done"}
 
     "reference_estimate" fires at most once per conversation, the first time
@@ -1059,158 +1149,86 @@ async def run_chat_turn(
     consumes it internally (it is not forwarded to the client) to increment the
     conversation's running cost.
 
-    conversation_id (when the caller has one — guests won't) is passed to
-    OpenRouter as session_id so every OpenRouter call this turn makes (extract,
-    elicit or recommend) groups into one session in OpenRouter's dashboard.
-    Falls back to a fresh id scoped to just this turn for guests, so at least
-    this turn's calls still group together.
+    "checkpoint" carries the graph's final state for this turn, for the caller
+    to mirror into Postgres alongside everything else it persists. Also internal;
+    it arrives after "done" because it describes a turn that has finished.
+
+    conversation_id (when the caller has one — guests won't) does double duty:
+    it is the graph's thread_id, which is what makes the accumulated build
+    profile survive from one turn to the next, and it is passed to OpenRouter as
+    session_id so every call this turn makes groups into one session in their
+    dashboard. Guests fall back to a fresh scratch id, which gives them
+    per-turn grouping and no persistence — the same deal they had before.
+
+    THIS FUNCTION IS A PASSTHROUGH BY DESIGN. Every event below is produced by a
+    node writing to the graph's custom stream; none is synthesized here. Keeping
+    it that way is what lets the graph be rearranged without the SSE contract —
+    which three callers and the frontend depend on — moving underneath it.
     """
-    session_id = conversation_id or str(uuid.uuid4())
-    turn_usage = {
-        "tokens_in": 0,
-        "tokens_out": 0,
-        "cost_usd": 0.0,
-        "llm_call_count": 0,
-        "models": [],
+    from app.services.graph.graph import get_graph
+    from app.services.graph.state import new_usage
+
+    is_guest = conversation_id is None
+    thread_id = conversation_id or f"turn:{uuid.uuid4()}"
+    config: dict = {"configurable": {"thread_id": thread_id}}
+
+    graph = await get_graph()
+
+    initial: dict = {
+        "messages": [m.model_dump() for m in messages],
+        "conversation_id": conversation_id,
+        "session_id": thread_id,
+        "usage": new_usage(),
+        # Reset per turn; only `profile` and `asked_fields` are meant to carry,
+        # and those are restored from the checkpoint rather than passed in.
+        "next_question": None,
+        "price_estimate": None,
+        "build_key": None,
+        "build_data": None,
+        "ref_estimate_key": None,
+        "ref_estimate_data": None,
     }
 
-    # Extract the structured profile up front — the model only ever populates
-    # fields here. Whether that's "enough" to recommend is then a hard,
-    # code-level decision (is_profile_complete), not something the model says.
-    # No progress event yet: the frontend treats any "progress" event as
-    # confirmation we're on the recommend path, so it can't fire until we know.
-    extract_usage_sink: dict = {}
-    profile = await extract_profile(
-        messages, usage_sink=extract_usage_sink, session_id=session_id
-    )
-    _merge_usage(turn_usage, extract_usage_sink)
+    async for _mode, event in graph.astream(initial, config, stream_mode=["custom"]):
+        yield event
 
-    if not is_profile_complete(profile):
-        # Elicitation mode — gather more info, then end the turn.
-        missing_fields = _missing_fields(profile)
-
-        # Budget is the only thing left: resolve a reference build now (a
-        # "mid" tier guess, since the real budget isn't known yet) so this
-        # turn can tell the user what to expect to pay while it asks. Once
-        # resolved, it's cached on the conversation and never re-resolved.
-        price_estimate: int | None = None
-        if missing_fields == ["budget expectations"]:
-            est_key, est_build, est_cached = await _get_reference_build(
-                profile, conversation_id, assumed_budget_tier="mid"
-            )
-            price_estimate = _round_to_nearest_hundred_usd(est_build["total_approx"])
-            if not est_cached:
-                yield {
-                    "type": "reference_estimate",
-                    "key": est_key,
-                    "data": _build_payload(est_build, profile),
-                }
-
-        elicit_usage_sink: dict = {}
-        async for chunk in stream_elicitation(
-            messages,
-            missing_fields=missing_fields,
-            price_estimate=price_estimate,
-            usage_sink=elicit_usage_sink,
-            session_id=session_id,
-        ):
-            yield {"type": "token", "text": chunk}
-        _merge_usage(turn_usage, elicit_usage_sink)
-
-        yield {"type": "usage", **turn_usage}
-        yield {"type": "done"}
+    if is_guest:
+        # No conversation row to mirror onto, so there is nothing to emit and
+        # nothing to read back later.
         return
 
-    # --- Profile is complete: run DSPy + reference build in parallel ---
-    # Both start as soon as the profile is complete. The DSPy pipeline's
-    # progress events stream through while it runs; if it fails or times out,
-    # its result is discarded and the reference build is recommended instead.
+    checkpoint_event = await _checkpoint_event(graph, config)
+    if checkpoint_event is not None:
+        yield checkpoint_event
 
-    yield {"type": "progress", "step": "resolving", "message": "Building your PC…"}
 
-    progress_queue: asyncio.Queue = asyncio.Queue()
-    ref_task = asyncio.create_task(_get_reference_build(profile, conversation_id))
-    dspy_task = asyncio.create_task(_run_dspy_build(profile, progress_queue, ref_task))
+async def _checkpoint_event(graph, config: dict) -> dict | None:
+    """Render the turn's final checkpoint for the Postgres write-behind.
 
-    deadline = time.monotonic() + _DSPY_CHAT_TIMEOUT_S
-    timed_out = False
-    while True:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            timed_out = True
-            break
-        try:
-            item = await asyncio.wait_for(progress_queue.get(), timeout=remaining)
-        except asyncio.TimeoutError:
-            timed_out = True
-            break
-        if item is _PIPELINE_DONE:
-            break
-        yield item
+    Read back through the checkpointer rather than assembled from the state we
+    just streamed, so what gets mirrored is exactly what the checkpointer would
+    hand back on the next turn — including the parts of the checkpoint (channel
+    versions, step counters) this module knows nothing about.
 
-    dspy_build: dict | None = None
-    if timed_out:
-        dspy_task.cancel()
-        try:
-            await dspy_task
-        except asyncio.CancelledError:
-            pass
+    Returns None when there is nothing to mirror, which is the normal case for
+    an in-memory fallback run.
+    """
+    from app.services.graph.checkpoint import AsyncValkeySaver
+
+    saver = getattr(graph, "checkpointer", None)
+    if not isinstance(saver, AsyncValkeySaver):
+        return None
+    try:
+        tuple_ = await saver.aget_tuple(config)
+        if tuple_ is None:
+            return None
+        return {
+            "type": "checkpoint",
+            "checkpoint_id": tuple_.checkpoint["id"],
+            "data": saver.to_mirror(tuple_),
+        }
+    except Exception:
         logger.warning(
-            "DSPy pipeline timed out after %.0fs; using reference build",
-            _DSPY_CHAT_TIMEOUT_S,
+            "could not read back the turn's checkpoint to mirror it", exc_info=True
         )
-    else:
-        dspy_build = await dspy_task  # never raises; None on failure
-
-    if dspy_build is not None:
-        # Customer sees the DSPy build. The reference build was already awaited
-        # and recorded onto the same session row inside _run_dspy_build; we don't
-        # cancel it (it's the recorded comparison), just make sure it's reaped.
-        build_key, build = "custom_dspy", dspy_build
-        try:
-            ref_key, ref_build, ref_cached = await ref_task
-            if not ref_cached:
-                yield {
-                    "type": "reference_estimate",
-                    "key": ref_key,
-                    "data": _build_payload(ref_build, profile),
-                }
-        except Exception:
-            logger.debug(
-                "reference build task errored (already recorded/ignored)", exc_info=True
-            )
-    else:
-        build_key, build, ref_cached = await ref_task
-        if not ref_cached:
-            yield {
-                "type": "reference_estimate",
-                "key": build_key,
-                "data": _build_payload(build, profile),
-            }
-
-    yield {
-        "type": "build",
-        "key": build_key,
-        "data": _build_payload(build, profile),
-    }
-
-    yield {
-        "type": "progress",
-        "step": "presenting",
-        "message": "Preparing your recommendation…",
-    }
-
-    recommend_usage_sink: dict = {}
-    async for chunk in stream_recommendation(
-        messages,
-        profile,
-        build_key,
-        build,
-        usage_sink=recommend_usage_sink,
-        session_id=session_id,
-    ):
-        yield {"type": "token", "text": chunk}
-    _merge_usage(turn_usage, recommend_usage_sink)
-
-    yield {"type": "usage", **turn_usage}
-    yield {"type": "done"}
+        return None

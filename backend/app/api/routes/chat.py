@@ -30,7 +30,7 @@ _SSE_HEADERS = {
     "X-Accel-Buffering": "no",
 }
 
-_INTERNAL_EVENTS = frozenset({"usage", "reference_estimate"})
+_INTERNAL_EVENTS = frozenset({"usage", "reference_estimate", "checkpoint"})
 
 # Strong refs to in-flight fallback turns. asyncio only holds weak references to
 # tasks, so without this a turn can be collected mid-run under memory pressure.
@@ -127,6 +127,8 @@ async def _inline_stream(
     build_key: str | None = None
     ref_estimate_data: dict | None = None
     ref_estimate_key: str | None = None
+    graph_checkpoint: dict | None = None
+    graph_checkpoint_id: str | None = None
 
     try:
         async for event in run_chat_turn(messages, conversation_id=conversation_id):
@@ -142,6 +144,9 @@ async def _inline_stream(
                 ref_estimate_key = event.get("key")
             elif etype == "usage":
                 turn_usage = event
+            elif etype == "checkpoint":
+                graph_checkpoint = event.get("data")
+                graph_checkpoint_id = event.get("checkpoint_id")
 
             if etype not in _INTERNAL_EVENTS:
                 yield _sse(event)
@@ -169,6 +174,8 @@ async def _inline_stream(
                 build_key,
                 ref_estimate_data,
                 ref_estimate_key,
+                graph_checkpoint,
+                graph_checkpoint_id,
             ),
         )
 

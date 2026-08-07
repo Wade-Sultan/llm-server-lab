@@ -77,6 +77,20 @@ class BuildProfile(BaseModel):
     # applies anywhere; it is never inferred, only accepted when the user says
     # so outright — see chat_pipeline._confirm_custom_budget.
     budget_tier: str
+    # How firm the budget is, independent of how big it is: "firm" | "flexible"
+    # | "stretch". Scales the tier's dollar figure in chat_pipeline._budget_for.
+    price_sensitivity: str | None = None
+
+    # --- Stated preferences -------------------------------------------------
+    # Volunteered by the user, never inferred from the use case, and never
+    # required to reach a build. They populate UserPreferences (and the Q&A
+    # string) on the way into the DSPy pipeline, which already knows how to
+    # read all of them — the chat path just never filled them in before.
+    form_factor: str | None = None  # "atx" | "matx" | "itx" | "no_preference"
+    color_theme: str | None = None  # free text, e.g. "black & white"
+    rgb_lighting: str | None = None  # "yes" | "no"
+    noise_tolerance: str | None = None  # "quiet" | "normal"
+
     games: list[str] = []
     workloads: list[str] = []
     notes: str = ""
