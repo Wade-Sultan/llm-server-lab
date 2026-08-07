@@ -45,9 +45,10 @@ from app.services.chat_pipeline import run_chat_turn
 logger = logging.getLogger(__name__)
 
 # Events the pipeline emits for the server's benefit, never the client's:
-# `usage` carries OpenRouter spend and `reference_estimate` is a caching signal.
-# Forwarding either would leak cost data to the browser.
-_INTERNAL_EVENTS = frozenset({"usage", "reference_estimate"})
+# `usage` carries OpenRouter spend, `reference_estimate` is a caching signal, and
+# `checkpoint` is the graph state mirrored into Postgres. Forwarding the first
+# would leak cost data to the browser and the last is meaningless to it.
+_INTERNAL_EVENTS = frozenset({"usage", "reference_estimate", "checkpoint"})
 
 
 def save_turn(
@@ -62,6 +63,8 @@ def save_turn(
     build_key: str | None = None,
     ref_estimate_data: dict | None = None,
     ref_estimate_key: str | None = None,
+    graph_checkpoint: dict | None = None,
+    graph_checkpoint_id: str | None = None,
 ) -> bool:
     """Persist this chat turn. Runs in a thread executor (sync SQLAlchemy).
 
@@ -191,6 +194,17 @@ def save_turn(
             conversation.reference_build = ref_estimate_data
             db.add(conversation)
 
+        # Mirror the graph's final checkpoint. Overwritten every turn rather
+        # than appended: only the latest matters here, because Valkey holds the
+        # history and this column exists for the case where Valkey no longer
+        # does. Written inside this transaction on purpose — a checkpoint that
+        # committed while its messages did not would describe a conversation
+        # that, as far as Postgres is concerned, never had that turn.
+        if graph_checkpoint is not None:
+            conversation.graph_checkpoint = graph_checkpoint
+            conversation.graph_checkpoint_id = graph_checkpoint_id
+            db.add(conversation)
+
         # Link the conversation to the concrete PCBuild row backing this
         # reference build template, so pc_builds reflects what was actually
         # recommended (not just the abstract build_key).
@@ -271,6 +285,12 @@ async def _run_turn(
 ) -> None:
     """The body of run_turn. Split out only so the metrics wrapper above stays
     readable; there is no second caller."""
+    # Local rather than a parameter, unlike the accumulators above: nothing in
+    # run_turn reads any of them back, so there is no reason to widen that
+    # signature further.
+    graph_checkpoint: dict | None = None
+    graph_checkpoint_id: str | None = None
+
     try:
         async for event in run_chat_turn(messages, conversation_id=conversation_id):
             etype = event.get("type")
@@ -286,6 +306,9 @@ async def _run_turn(
                 ref_estimate_key = event.get("key")
             elif etype == "usage":
                 turn_usage = event
+            elif etype == "checkpoint":
+                graph_checkpoint = event.get("data")
+                graph_checkpoint_id = event.get("checkpoint_id")
 
             if etype not in _INTERNAL_EVENTS:
                 await turn_stream.emit(turn_id, event)
@@ -331,6 +354,8 @@ async def _run_turn(
                 "build_key": build_key,
                 "ref_estimate_data": ref_estimate_data,
                 "ref_estimate_key": ref_estimate_key,
+                "graph_checkpoint": graph_checkpoint,
+                "graph_checkpoint_id": graph_checkpoint_id,
             },
         )
 
@@ -348,6 +373,8 @@ async def _run_turn(
                 build_key,
                 ref_estimate_data,
                 ref_estimate_key,
+                graph_checkpoint,
+                graph_checkpoint_id,
             ),
         )
 

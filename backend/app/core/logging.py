@@ -12,7 +12,7 @@ import logging
 import os
 import sys
 from contextvars import ContextVar
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 # Set once per pipeline run (see BuildRecorder) and read by the formatter, so
 # every log line emitted during that run carries the id without each call site
@@ -69,9 +69,7 @@ class JsonFormatter(logging.Formatter):
         payload: dict = {
             "severity": _SEVERITY.get(record.levelname, "DEFAULT"),
             "message": record.getMessage(),
-            "timestamp": datetime.fromtimestamp(
-                record.created, timezone.utc
-            ).isoformat(),
+            "timestamp": datetime.fromtimestamp(record.created, UTC).isoformat(),
             "logger": record.name,
         }
 

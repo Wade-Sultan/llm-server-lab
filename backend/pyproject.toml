@@ -2,7 +2,9 @@
 name = "app"
 version = "0.1.0"
 description = ""
-requires-python = ">=3.10,<4.0"
+# Floor of 3.12: see the note in Dockerfile. The ceiling is litellm's (<3.14),
+# reached transitively through dspy.
+requires-python = ">=3.12,<3.14"
 dependencies = [
     "fastapi[standard]<1.0.0,>=0.114.2",
     "email-validator<3.0.0.0,>=2.1.0.post1",
@@ -38,6 +40,20 @@ dependencies = [
     # asyncio RedisCluster, which Memorystore for Valkey requires.
     "redis>=5.0",
     "google-cloud-pubsub>=2.21",
+    # Chat turn harness. langgraph-checkpoint carries BaseCheckpointSaver and
+    # JsonPlusSerializer, which app/services/graph/checkpoint.py implements
+    # against directly — langgraph-checkpoint-redis is deliberately NOT here,
+    # because it requires the RedisJSON and RediSearch modules and Memorystore
+    # for Valkey ships no modules at all.
+    "langgraph>=0.2.60",
+    "langgraph-checkpoint>=2.0.24",
+    # Emits the graph's spans through OpenTelemetry rather than LangSmith's
+    # native REST transport (see LANGSMITH_OTEL_ENABLED in app/core/tracing.py).
+    "langsmith>=0.2.0",
+    # opentelemetry-api/-sdk arrive transitively via dspy; the exporter and the
+    # openai instrumentor do not, and both are needed on the tracing path.
+    "opentelemetry-exporter-otlp-proto-http>=1.44.0",
+    "opentelemetry-instrumentation-openai-v2>=2.0b0",
 ]
 
 [dependency-groups]
@@ -64,7 +80,7 @@ strict = true
 exclude = ["venv", ".venv", "alembic"]
 
 [tool.ruff]
-target-version = "py310"
+target-version = "py312"
 exclude = ["alembic"]
 
 [tool.ruff.lint]

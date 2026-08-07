@@ -19,6 +19,12 @@ class ProfileExtraction(dspy.Signature):
     no basis to infer it yet.
     Output 'unknown' for primary_use or budget_tier ONLY when the conversation truly gives no
     basis to infer them yet — do not guess just to avoid 'unknown'.
+
+    The preference fields (price_sensitivity, form_factor, color_theme, rgb_lighting,
+    noise_tolerance) are reported ONLY when the user volunteered them. They are stated tastes,
+    not things to deduce from the use case: a gamer has not asked for RGB, and a $900 budget is
+    not thereby a firm one. Their 'none'/'no_preference'/empty values mean "the user has not
+    said", which is a useful answer — the build has sensible defaults for each.
     """
 
     conversation: str = dspy.InputField(
@@ -96,6 +102,35 @@ class ProfileExtraction(dspy.Signature):
         "'elite', choose 'elite'. "
         "'unknown' if no budget signal at all has been given"
     )
+    price_sensitivity: str = dspy.OutputField(
+        desc="Exactly one of: firm, flexible, stretch, none — how hard the stated budget is. "
+        "'firm' when the user frames it as a ceiling they will not cross ('max', 'absolute "
+        "limit', 'can't go over'); 'flexible' when the figure is a target they'd bend a little "
+        "for ('around', 'ish', 'roughly'); 'stretch' when they say outright they would pay more "
+        "for the right part ('could go higher if it's worth it'). This is about the FIRMNESS of "
+        "the number, not its size — a $900 budget can be 'stretch' and a $5000 one 'firm'. "
+        "'none' if budget_tier is unknown or the user gave no signal either way"
+    )
+    form_factor: str = dspy.OutputField(
+        desc="Exactly one of: atx, matx, itx, no_preference — desired case/motherboard size. "
+        "'itx' for small-form-factor cues (SFF, tiny, shoebox, travel/LAN builds), 'matx' for "
+        "'compact but not tiny', 'atx' for full-size or 'big case' cues. 'no_preference' unless "
+        "the user actually expressed one — do NOT infer a size from the use case"
+    )
+    color_theme: str = dspy.OutputField(
+        desc="The case/build color scheme the user asked for (e.g. 'black', 'white', "
+        "'black & red'), or empty string if not mentioned"
+    )
+    rgb_lighting: str = dspy.OutputField(
+        desc="Exactly one of: yes, no, none — whether the user wants RGB lighting. 'no' only "
+        "when they said they don't want it (which is a real preference worth honoring); "
+        "'none' when they never raised the subject"
+    )
+    noise_tolerance: str = dspy.OutputField(
+        desc="Exactly one of: quiet, normal, none — how much fan noise the user will accept. "
+        "'quiet' for explicit silence cues (bedroom, recording, 'as quiet as possible'); "
+        "'normal' when they say noise doesn't bother them; 'none' if not mentioned"
+    )
     games: str = dspy.OutputField(
         desc="Comma-separated game titles the user mentioned, or empty string if none"
     )
@@ -141,6 +176,10 @@ def optimize(
           editing_resolution / workload_intensity (str)
                                   ← gold labels, 'none' if N/A
         - rendering_software (str) ← gold label, empty string if N/A
+        - price_sensitivity / rgb_lighting / noise_tolerance (str)
+                                  ← gold labels, 'none' if the user never said
+        - form_factor (str)       ← gold label, 'no_preference' if the user never said
+        - color_theme (str)       ← gold label, empty string if N/A
         - games (str)             ← comma-separated, or empty string
         - workloads (str)         ← comma-separated, or empty string
         - notes (str)
