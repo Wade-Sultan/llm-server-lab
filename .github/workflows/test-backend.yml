@@ -52,7 +52,8 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.10"
+          # Keep in step with backend/Dockerfile and requires-python.
+          python-version: "3.12"
       # 0.9.28, not 0.4.15. The dev tools this job needs — coverage, pytest —
       # live in `[dependency-groups]` in backend/pyproject.toml (PEP 735).
       # uv 0.4.15 predates `default-groups`, so `uv run` installed the project

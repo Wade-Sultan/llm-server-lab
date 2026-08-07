@@ -17,3 +17,12 @@ data:
   LOG_LEVEL: "INFO"
   POSTGRES_PORT: "5432"
   POSTGRES_USER: "palladium_app"
+  # LangSmith trace destination. The key itself is LANGSMITH_API_KEY in
+  # palladium-secrets; with no key the exporter is simply not attached, so an
+  # unconfigured cluster traces to Google Cloud only rather than failing.
+  #
+  # Note there is no OTEL_EXPORTER_OTLP_ENDPOINT here on purpose: Managed
+  # OpenTelemetry for GKE injects it into these Pods via its Instrumentation
+  # custom resource, and a value set here would override an injection that is
+  # meant to win. See app/core/tracing.py.
+  LANGSMITH_PROJECT: "palladium"

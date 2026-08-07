@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from app.core.db import AsyncSessionLocal
 from app.crud import pricing_etl as crud
@@ -117,7 +117,7 @@ async def _check_target(
         db,
         target_kind=target.kind,
         target_id=target.id,
-        checked_at=datetime.now(timezone.utc),
+        checked_at=datetime.now(UTC),
         price_cents=price_stats.mean_cents if price_stats else None,
     )
 

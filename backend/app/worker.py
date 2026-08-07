@@ -37,6 +37,7 @@ from app.core.config import settings
 from app.core.loadtest import load_test_scope
 from app.core.logging import configure_logging
 from app.core.metrics import start_exporter as start_metrics_exporter
+from app.core.tracing import configure_tracing, shutdown_tracing
 from app.core.turn_metrics import CHAT_BUFFERS_RETAINED
 from app.schemas.chat import ChatMessage
 from app.services import chat_buffer, turn_stream
@@ -162,6 +163,10 @@ class Worker:
         # same config once its selector includes this Deployment.
         start_metrics_exporter()
 
+        # Before any turn runs, so the first message off the subscription is
+        # traced like every one after it.
+        configure_tracing("palladium-worker")
+
         self._loop_thread = threading.Thread(
             target=self._run_loop, name="worker-loop", daemon=True
         )
@@ -255,6 +260,12 @@ class Worker:
         # New loop: the worker loop is stopped by now, and closing the Valkey
         # pool still needs to await.
         asyncio.run(close_client())
+
+        # After the drain, so the turns that just finished are included. This
+        # is the flush that matters: turns are short, spans are batched, and a
+        # rollout SIGTERMs this process without warning — without it the last
+        # turn before every deploy vanishes from both backends.
+        shutdown_tracing()
 
     # -- message handling --------------------------------------------------
 

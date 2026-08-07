@@ -19,10 +19,11 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          # Matches requires-python in backend/pyproject.toml (>=3.10). Linting
-          # on a newer interpreter than production runs would let syntax through
-          # that fails at import time in the container.
-          python-version: "3.10"
+          # Matches requires-python in backend/pyproject.toml (>=3.12) and the
+          # container's base image. Linting on a newer interpreter than
+          # production runs would let syntax through that fails at import time
+          # in the container.
+          python-version: "3.12"
       # See the note in test-backend.yml: uv 0.4.15 does not sync
       # `[dependency-groups]`, and ruff lives in the dev group — so
       # scripts/lint.sh would fail with `ruff: command not found` for the same
