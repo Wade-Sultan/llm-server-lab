@@ -4,7 +4,7 @@ import {
   AssistantRuntimeProvider,
   makeAssistantDataUI,
   useAssistantTransportRuntime,
-  useAssistantTransportState,
+  useAuiState,
 } from "@assistant-ui/react"
 import { useParams, useRouter } from "next/navigation"
 import type { ReactNode } from "react"
@@ -238,22 +238,30 @@ function ChatRuntimeMount({
  * that a reconnect lost. They are derived from server state now; the stores
  * remain only because other components already subscribe to them.
  *
- * Rendered inside AssistantRuntimeProvider because useAssistantTransportState
- * reads from that context.
+ * Rendered inside AssistantRuntimeProvider because it reads the active thread's
+ * state from that context. It returns null until a Thread is actually mounted —
+ * see the note in the body.
  */
 function AgentStateSync() {
-  // The hook is typed against a generic external-state record; the shape is
-  // whatever `initialState` established, which is ChatAgentState.
-  const state = useAssistantTransportState(
-    (s) => s as unknown as ChatAgentState,
-  )
+  // Read defensively rather than through useAssistantTransportState, which
+  // asserts the active thread belongs to a transport runtime and throws if it
+  // does not. This component sits at provider level in (main)/layout.tsx, so it
+  // mounts on every route under it — including /buildhistory, which never
+  // renders a Thread and therefore never causes the thread-list runtime to
+  // instantiate the transport thread. That assertion took the whole page down.
+  const state = useAuiState((s) => {
+    const extras = s.thread?.extras as { state?: ChatAgentState } | undefined
+    return extras?.state ?? null
+  })
   const phase = useConversationStateStore((s) => s.phase)
 
   useEffect(() => {
+    if (!state) return
     usePipelineStatusStore.getState().setMessage(pipelineMessage(state))
   }, [state])
 
   useEffect(() => {
+    if (!state) return
     const store = useConversationStateStore.getState()
     if (state.build) {
       store.setBuildData(state.build)
