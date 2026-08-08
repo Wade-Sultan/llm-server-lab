@@ -72,6 +72,37 @@ def messages_to_write(
     duplicates: their rows are out of order but they are still there, and this
     fills in what is missing around them.
     """
+    return _reconcile(stored, incoming)[0]
+
+
+def messages_to_drop(
+    stored: list[tuple[str, str]], incoming: list[tuple[str, str]]
+) -> list[tuple[str, str]]:
+    """Which of `stored` the incoming conversation no longer contains.
+
+    The other half of the same reconciliation, and it exists for editing: an
+    edit replaces a message and everything that followed from it, so those rows
+    have to leave the database or the conversation reloads with the branch the
+    user just discarded sitting under the one that replaced it.
+
+    ONLY EVER CALL THIS WHEN THE TURN REALLY IS AN EDIT — `save_turn` gates it on
+    `rewound`, which originates at the one place that knows, the `parentId` check
+    in api/routes/chat.py. Every other kind of turn can legitimately present a
+    shorter or reordered history (a cancelled turn, a redelivery, one of the
+    conversations the old count-based bug scrambled), and deleting on that
+    evidence would destroy messages to fix a display problem.
+
+    Note what the shared matching loop already protects: a stored row that
+    appears anywhere in the incoming tail is consumed as a match, not returned
+    here. So a merely reordered conversation drops nothing.
+    """
+    return _reconcile(stored, incoming)[1]
+
+
+def _reconcile(
+    stored: list[tuple[str, str]], incoming: list[tuple[str, str]]
+) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+    """(what `incoming` adds, what `stored` has that `incoming` dropped)."""
     prefix = 0
     while (
         prefix < len(stored)
@@ -87,7 +118,7 @@ def messages_to_write(
             unmatched.remove(entry)
             continue
         out.append(entry)
-    return out
+    return out, unmatched
 
 
 def save_turn(
@@ -104,6 +135,7 @@ def save_turn(
     ref_estimate_key: str | None = None,
     graph_checkpoint: dict | None = None,
     graph_checkpoint_id: str | None = None,
+    rewound: bool = False,
 ) -> bool:
     """Persist this chat turn. Runs in a thread executor (sync SQLAlchemy).
 
@@ -202,9 +234,30 @@ def save_turn(
         if assistant_text:
             incoming.append(("assistant", assistant_text))
 
-        to_write = messages_to_write(
-            [(m.role, m.content or "") for m in existing], incoming
-        )
+        stored = [(m.role, m.content or "") for m in existing]
+        to_write, to_drop = _reconcile(stored, incoming)
+
+        # An edit does not add to the conversation, it rewrites it — so the rows
+        # it replaced have to go, or /conversations/{id} rehydrates the discarded
+        # branch and the edit appears to have been undone by a page reload.
+        #
+        # Gated on `rewound` rather than inferred from `to_drop` being non-empty,
+        # because plenty of ordinary turns present a history that does not match
+        # the stored rows one for one, and none of them mean "delete". See
+        # messages_to_drop.
+        if rewound and to_drop:
+            remaining = list(to_drop)
+            for row in existing:
+                entry = (row.role, row.content or "")
+                if entry in remaining:
+                    remaining.remove(entry)
+                    db.delete(row)
+            logger.info(
+                "edit rewound conversation %s: dropped %d message(s)",
+                conversation_id,
+                len(to_drop) - len(remaining),
+            )
+            db.flush()
 
         # Explicit, strictly increasing timestamps. `created_at` defaulted to
         # server_default=func.now(), which in Postgres is the *transaction*
@@ -307,6 +360,7 @@ async def run_turn(
     messages: list[ChatMessage],
     user: dict | None,
     conversation_id: str | None,
+    rewound: bool = False,
 ) -> None:
     """Run one turn end to end, emitting into the turn's Valkey stream.
 
@@ -340,6 +394,7 @@ async def run_turn(
             build_key,
             ref_estimate_data,
             ref_estimate_key,
+            rewound,
         )
     finally:
         TURNS_INFLIGHT.dec()
@@ -358,6 +413,7 @@ async def _run_turn(
     build_key: str | None,
     ref_estimate_data: dict | None,
     ref_estimate_key: str | None,
+    rewound: bool = False,
 ) -> None:
     """The body of run_turn. Split out only so the metrics wrapper above stays
     readable; there is no second caller."""
@@ -451,6 +507,7 @@ async def _run_turn(
                 ref_estimate_key,
                 graph_checkpoint,
                 graph_checkpoint_id,
+                rewound,
             ),
         )
 

@@ -20,7 +20,6 @@ import {
   DownloadIcon,
   MoreHorizontalIcon,
   PencilIcon,
-  RefreshCwIcon,
   SquareIcon,
 } from "lucide-react"
 import type { FC } from "react"
@@ -258,11 +257,15 @@ const AssistantActionBar: FC = () => {
           </AuiIf>
         </TooltipIconButton>
       </ActionBarPrimitive.Copy>
-      <ActionBarPrimitive.Reload asChild>
-        <TooltipIconButton tooltip="Refresh">
-          <RefreshCwIcon />
-        </TooltipIconButton>
-      </ActionBarPrimitive.Reload>
+      {/*
+        No Refresh button. `useAssistantTransportRuntime` has no `onReload`
+        option to pass — unlike `capabilities.edit`, there is no way to opt in —
+        so the external-store core's `startRun` throws "Runtime does not support
+        reloading messages." And ActionBarPrimitive.Reload is not capability
+        gated: it calls straight through, which is why this rendered as a button
+        that did nothing. Regenerating a reply means editing the message above
+        it until the runtime grows a reload command.
+      */}
       <ActionBarMorePrimitive.Root>
         <ActionBarMorePrimitive.Trigger asChild>
           <TooltipIconButton

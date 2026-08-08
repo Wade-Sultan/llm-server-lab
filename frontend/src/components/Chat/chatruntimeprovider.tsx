@@ -1,5 +1,6 @@
 "use client"
 
+import type { AssistantTransportCommand } from "@assistant-ui/react"
 import {
   AssistantRuntimeProvider,
   makeAssistantDataUI,
@@ -24,6 +25,7 @@ import { usePipelineStatusStore } from "@/hooks/usePipelineStatus"
 import type { BuildData } from "@/types/build"
 import {
   type ChatAgentState,
+  commandsToMessages,
   createConverter,
   initialAgentState,
   pipelineMessage,
@@ -175,6 +177,25 @@ function ConversationLoader({
   )
 }
 
+/**
+ * Fold commands the server never accepted back into state, and stop the clock.
+ *
+ * `pipeline: null` matters as much as the messages. The progress line is driven
+ * by transitions out of state (see AgentStateSync), so a turn that dies with a
+ * step still set emits no `pipeline-idle` and leaves "Selecting a GPU…" pinned
+ * under a turn that is no longer running.
+ */
+function restoreCommands(
+  state: ChatAgentState,
+  commands: AssistantTransportCommand[],
+): ChatAgentState {
+  return {
+    ...state,
+    messages: [...(state.messages ?? []), ...commandsToMessages(commands)],
+    pipeline: null,
+  }
+}
+
 function ChatRuntimeMount({
   conversationId,
   initialState,
@@ -207,6 +228,37 @@ function ChatRuntimeMount({
     // Our conversation id, not assistant-ui's threadId — that tracks its own
     // thread list, which this app does not use.
     body: { conversation_id: conversationIdRef.current },
+    // Without this the runtime never attaches `onEdit`, and the external-store
+    // core's `beginEdit` throws "Runtime does not support editing." The Edit
+    // button is not capability-gated — it calls straight through — so the throw
+    // surfaced as a button that silently did nothing.
+    //
+    // Enabling it here is only half of editing. The runtime sends the edited
+    // message as a plain `add-message` plus a `parentId`, so the server is what
+    // decides that an edit REPLACES history rather than appending to it — see
+    // `rewind_prefix` in backend/app/services/transport.py.
+    capabilities: { edit: true },
+    // WHY BOTH OF THESE EXIST. On failure or cancellation the runtime calls
+    // `commandQueue.reset()` and then hands the dropped commands to these
+    // callbacks. Leaving them unset does not merely lose an error message: the
+    // dropped commands stop appearing in `pendingCommands`, so the optimistic
+    // echo vanishes and the message the user just typed disappears from the
+    // thread with no explanation — on a fresh conversation, straight back to
+    // the welcome screen.
+    //
+    // Putting the commands into state is what keeps them on screen, and it is
+    // safe against duplication by construction: these receive only commands the
+    // server never acknowledged. `markDelivered()` clears the in-transit queue
+    // the moment the first state operation arrives, so a command that reached
+    // the server is already in state and is never passed here.
+    onError: (error, { commands, updateState }) => {
+      updateState((state) => restoreCommands(state, commands))
+      console.error("chat turn failed", error)
+      toast.error("Couldn't send that message. Please try again.")
+    },
+    onCancel: ({ commands, updateState }) => {
+      updateState((state) => restoreCommands(state, commands))
+    },
   })
 
   useEffect(() => {

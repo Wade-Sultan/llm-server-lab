@@ -1,4 +1,5 @@
 import type {
+  AssistantTransportCommand,
   AssistantTransportConnectionMetadata,
   DataMessagePart,
   ThreadMessageLike,
@@ -67,28 +68,48 @@ const messageConverter = createMessageConverter<ChatMessageState>(
   },
 )
 
+/**
+ * The messages a batch of `add-message` commands is asking us to add.
+ *
+ * Two callers, and the second is the reason this is not inlined: the optimistic
+ * echo below, and the failure handlers in chatruntimeprovider.tsx, which put a
+ * message the server never accepted back into state so it stays on screen. Both
+ * have to agree on what a command renders as, or a failed send would redraw the
+ * message differently than it was drawn while in flight.
+ *
+ * Mirrors `command_messages` in backend/app/services/transport.py.
+ */
+export function commandsToMessages(
+  commands: readonly AssistantTransportCommand[],
+): ChatMessageState[] {
+  const out: ChatMessageState[] = []
+  for (const command of commands) {
+    if (command.type !== "add-message") continue
+    // `parts` is a union across user (text|image) and assistant (text)
+    // messages, so narrowing has to be structural rather than by a type
+    // predicate over one branch.
+    const text = (command.message.parts as readonly { type: string }[])
+      .filter((p): p is { type: "text"; text: string } => p.type === "text")
+      .map((p) => p.text)
+      .join("\n")
+    if (text) out.push({ role: command.message.role, content: text })
+  }
+  return out
+}
+
 export function createConverter() {
   return (
     state: ChatAgentState,
     metadata: AssistantTransportConnectionMetadata,
   ) => {
-    const renderable: ChatMessageState[] = [...(state.messages ?? [])]
-
     // Optimistic echo: commands the runtime has queued but not yet sent. This
     // covers only the gap before the request goes out — once the first state
     // operation lands, the runtime drops these and the server's copy of the
     // same message takes over (see `_append_pending` in transport.py).
-    for (const command of metadata.pendingCommands) {
-      if (command.type !== "add-message") continue
-      // `parts` is a union across user (text|image) and assistant (text)
-      // messages, so narrowing has to be structural rather than by a type
-      // predicate over one branch.
-      const text = (command.message.parts as readonly { type: string }[])
-        .filter((p): p is { type: "text"; text: string } => p.type === "text")
-        .map((p) => p.text)
-        .join("\n")
-      if (text) renderable.push({ role: command.message.role, content: text })
-    }
+    const renderable: ChatMessageState[] = [
+      ...(state.messages ?? []),
+      ...commandsToMessages(metadata.pendingCommands),
+    ]
 
     return {
       messages: messageConverter.toThreadMessages(

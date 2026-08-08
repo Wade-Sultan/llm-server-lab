@@ -131,6 +131,46 @@ def command_messages(commands: list[dict]) -> list[dict[str, Any]]:
     return out
 
 
+def rewind_prefix(
+    messages: list[Any], parent_id: str | None
+) -> list[dict[str, Any]] | None:
+    """The messages that survive an edit, or None to keep the whole history.
+
+    WHAT `parentId` IS. assistant-transport has no "edit" command — editing a
+    message sends the same `add-message` any send does, and the only thing that
+    marks it as an edit is `parentId`: the id of the message the new one is
+    being appended *after*. So replacing history rather than appending to it is
+    a decision made here, not in the browser.
+
+    The ids are array indices. `convertExternalMessages` labels each converted
+    message with its position (`fromThreadMessageLike(joined, idx.toString())`),
+    and our converter emits exactly one message per state message, so index i in
+    this list is id "i". Editing message i therefore arrives as parent "i-1",
+    and everything from i onward — the message and every turn it led to — is
+    what the edit discards. A null parent means the first message was edited and
+    nothing survives.
+
+    Returns None, meaning "no rewind", for the ordinary send (parent is the last
+    message, so there is nothing to drop) and for any parent that does not parse
+    as an index in range. That degradation is deliberate: an unrecognised parent
+    should append like it always did, never silently delete a conversation.
+    """
+    if not messages:
+        return None
+    if parent_id is None:
+        return []
+
+    try:
+        parent_index = int(parent_id)
+    except (TypeError, ValueError):
+        return None
+
+    keep = parent_index + 1
+    if keep < 0 or keep >= len(messages):
+        return None
+    return list(messages[:keep])
+
+
 def to_chat_messages(messages: Any) -> list[ChatMessage]:
     """Convert state messages into what the pipeline consumes.
 
@@ -154,6 +194,25 @@ def messages_from_state(state: Any) -> list[ChatMessage]:
     if not isinstance(state, dict):
         return []
     return to_chat_messages(state.get("messages"))
+
+
+def _rewind(controller: RunController, keep: list[dict[str, Any]] | None) -> None:
+    """Drop the messages an edit discards, as an operation.
+
+    Through `controller.state` for the same reason `_append_pending` is: the
+    client applies our ops to the state it POSTed, so a truncation done to the
+    plain dict before `create_run` would leave the browser still holding the
+    replaced messages while every subsequent index we send points one place too
+    far along.
+
+    A whole-list `set` rather than a removal because the op vocabulary is only
+    `set` and `append-text` — see assistant_stream/state.py. `keep` must be
+    plain values sliced from the request, never read back out of
+    `controller.state`, whose `__getitem__` hands back further proxies.
+    """
+    if keep is None:
+        return
+    controller.state["messages"] = keep
 
 
 def _append_pending(controller: RunController, pending: list[dict[str, Any]]) -> None:
@@ -226,6 +285,7 @@ async def stream_turn_into(
     turn_id: str,
     *,
     pending: list[dict[str, Any]] | None = None,
+    keep: list[dict[str, Any]] | None = None,
     replay_from: str = "0",
     resuming: bool = False,
 ) -> None:
@@ -244,6 +304,9 @@ async def stream_turn_into(
     `controller.state` is assumed already shaped — see `ensure_shape`, which the
     route calls on the plain dict before handing it to `create_run`.
     """
+    # Before the append, so the pending message lands at the index the rewound
+    # history actually ends at rather than after the messages it replaces.
+    _rewind(controller, keep)
     _append_pending(controller, pending or [])
     index = _begin_assistant_turn(controller, resuming=resuming)
     saw_event = False
@@ -294,6 +357,7 @@ async def run_turn_inline_into(
     conversation_id: str | None,
     *,
     pending: list[dict[str, Any]] | None = None,
+    keep: list[dict[str, Any]] | None = None,
 ) -> None:
     """Drive a run directly from the pipeline, with no Valkey in between.
 
@@ -304,6 +368,7 @@ async def run_turn_inline_into(
     """
     from app.services.chat_pipeline import run_chat_turn
 
+    _rewind(controller, keep)
     _append_pending(controller, pending or [])
     index = _begin_assistant_turn(controller)
 

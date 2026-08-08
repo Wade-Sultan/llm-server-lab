@@ -54,7 +54,7 @@ WORKER_ID = os.getenv("HOSTNAME") or f"worker-{uuid.uuid4().hex[:8]}"
 
 def _decode(
     message: Any,
-) -> tuple[str, list[ChatMessage], dict | None, str | None, bool] | None:
+) -> tuple[str, list[ChatMessage], dict | None, str | None, bool, bool] | None:
     """Parse a Pub/Sub message into run_turn's arguments, or None if malformed.
 
     A malformed message is permanent: it will decode exactly as badly on every
@@ -79,6 +79,12 @@ def _decode(
         # real user's turn. Defaulting to False is the safe direction: the cost
         # of getting it wrong is a stubbed build shown to a real user.
         bool(payload.get("load_test")),
+        # This turn edits a message, so `messages` is a rewritten history rather
+        # than a longer one, and persistence has to delete the rows it replaced.
+        # Also absent on anything published before the field existed, and False
+        # is the safe direction for the same shape of reason: it degrades to the
+        # old append-only behaviour rather than deleting rows on a guess.
+        bool(payload.get("rewound")),
     )
 
 
@@ -119,6 +125,7 @@ async def _handle(
     user: dict | None,
     conversation_id: str | None,
     load_test: bool = False,
+    rewound: bool = False,
 ) -> None:
     if not await turn_stream.claim(
         turn_id, WORKER_ID, settings.PUBSUB_ACK_EXTENSION_S * 2
@@ -131,7 +138,7 @@ async def _handle(
         # behave identically either way, and the scope exists solely to put the
         # LM chokepoints into stub mode for the duration of the pipeline.
         with load_test_scope(load_test):
-            await run_turn(turn_id, messages, user, conversation_id)
+            await run_turn(turn_id, messages, user, conversation_id, rewound=rewound)
     except BaseException:
         # Includes CancelledError from a SIGTERM mid-turn. Releasing the claim is
         # what lets the redelivery actually re-run the turn instead of being
@@ -274,10 +281,11 @@ class Worker:
         if decoded is None:
             message.ack()  # permanent; see _decode
             return
-        turn_id, messages, user, conversation_id, load_test = decoded
+        turn_id, messages, user, conversation_id, load_test, rewound = decoded
 
         future = asyncio.run_coroutine_threadsafe(
-            _handle(turn_id, messages, user, conversation_id, load_test), self._loop
+            _handle(turn_id, messages, user, conversation_id, load_test, rewound),
+            self._loop,
         )
         try:
             future.result()

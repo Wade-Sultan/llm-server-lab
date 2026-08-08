@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
-from typing import Any
+from typing import Annotated, Any
 
 from assistant_stream import RunController, create_run
 from assistant_stream.serialization import DataStreamResponse
@@ -48,6 +48,22 @@ class ChatRequest(BaseModel):
     # option. Distinct from assistant-ui's own `threadId`, which tracks its
     # thread list rather than our Conversation rows.
     conversation_id: str | None = None
+    # The message the new one is appended after. This is what makes an edit an
+    # edit — see `rewind_prefix` in app/services/transport.py.
+    #
+    # `None` is a real value here (the first message was edited, so nothing
+    # survives) and is NOT the same as the field being absent, which is why the
+    # route tests `model_fields_set` rather than `parent_id is None`. Reading
+    # them as the same thing would let a request that never mentioned a parent
+    # delete an entire conversation.
+    #
+    # IGNORE THE WARNING THIS PRODUCES. Building the route makes pydantic 2.12
+    # emit `UnsupportedFieldAttributeWarning: The 'alias' attribute with value
+    # 'parentId' ... has no effect in the context it was used`. It is wrong —
+    # the alias does apply, and tests/test_chat_edit_rewind.py pins that through
+    # real HTTP requests precisely so nobody "fixes" it by reading the warning.
+    # `Annotated` is the spelling the warning recommends and it warns anyway.
+    parent_id: Annotated[str | None, Field(alias="parentId")] = None
 
 
 def _stream_response(callback, state: Any) -> DataStreamResponse:
@@ -59,6 +75,7 @@ async def _dispatch(
     messages: list,
     user: dict | None,
     conversation_id: str | None,
+    rewound: bool = False,
 ) -> bool:
     """Hand the turn to a worker. False means it must run in this process.
 
@@ -82,6 +99,11 @@ async def _dispatch(
             # middleware's ContextVar stops at this pod, and the worker is where
             # every LM call actually happens. See core/loadtest.py.
             "load_test": is_load_test(),
+            # `messages` is a rewritten history, not a longer one — the worker
+            # has to delete the rows this edit replaced rather than append to
+            # them. Only this pod can know: the evidence is `parentId`, which
+            # never leaves the request.
+            "rewound": rewound,
         },
     )
     return dispatched
@@ -106,7 +128,19 @@ async def chat(
     # the runtime drops its optimistic echo as soon as the first operation lands.
     state = transport.ensure_shape(req.state)
     pending = transport.command_messages(req.commands)
-    messages = transport.to_chat_messages(state["messages"] + pending)
+
+    # An edit rewrites history: the edited message and every turn that followed
+    # from it are discarded, and the pipeline must see the conversation as it now
+    # reads rather than as it was. Applied to `state` only inside the run (see
+    # `_rewind`), so the base stays exactly what the client POSTed.
+    keep = (
+        transport.rewind_prefix(state["messages"], req.parent_id)
+        if "parent_id" in req.model_fields_set
+        else None
+    )
+    history = state["messages"] if keep is None else keep
+
+    messages = transport.to_chat_messages(history + pending)
     if not messages:
         raise HTTPException(status_code=400, detail="No message to respond to.")
 
@@ -115,13 +149,17 @@ async def chat(
     turn_id = uuid.uuid4().hex
     conversation_id = req.conversation_id
 
-    dispatched = await _dispatch(turn_id, messages, user, conversation_id)
+    dispatched = await _dispatch(
+        turn_id, messages, user, conversation_id, rewound=keep is not None
+    )
 
     if not dispatched and await valkey_available():
         # Valkey but no Pub/Sub: still worth going through the stream, because
         # resumption works and this pod is no longer the only place the events
         # exist. Not awaited — the callback below consumes what it writes.
-        task = asyncio.create_task(run_turn(turn_id, messages, user, conversation_id))
+        task = asyncio.create_task(
+            run_turn(turn_id, messages, user, conversation_id, rewound=keep is not None)
+        )
         _background_turns.add(task)
         task.add_done_callback(_background_turns.discard)
         dispatched = True
@@ -133,13 +171,15 @@ async def chat(
             await turn_stream.set_active_turn(conversation_id, turn_id)
 
         async def run_callback(controller: RunController) -> None:
-            await transport.stream_turn_into(controller, turn_id, pending=pending)
+            await transport.stream_turn_into(
+                controller, turn_id, pending=pending, keep=keep
+            )
 
         return _stream_response(run_callback, state)
 
     async def inline_callback(controller: RunController) -> None:
         await transport.run_turn_inline_into(
-            controller, messages, conversation_id, pending=pending
+            controller, messages, conversation_id, pending=pending, keep=keep
         )
 
     return _stream_response(inline_callback, state)
