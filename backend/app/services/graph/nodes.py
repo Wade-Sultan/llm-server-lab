@@ -16,12 +16,14 @@ import asyncio
 import logging
 from typing import Any
 
+from langchain_core.messages import HumanMessage
 from langgraph.config import get_stream_writer
 
 from app.schemas.chat import BuildProfile
 from app.services import chat_pipeline as cp
 from app.services.chat_models import ChatModelConfig
 from app.services.graph.state import ChatTurnState, merge_profile, new_usage
+from app.services.llm import get_chat_model, usage_from_message
 
 logger = logging.getLogger(__name__)
 
@@ -107,33 +109,25 @@ async def _pick_question(
         )
     prompt += "\n\nReply with one number."
 
-    api_messages: list[dict] = [{"role": "system", "content": _ROUTER_SYSTEM}]
     # Only the tail of the conversation: the router needs the user's last beat
     # to judge what follows naturally, not the whole history it would otherwise
     # pay for on every turn.
-    for msg in messages[-4:]:
-        api_messages.append(
-            {
-                "role": msg.role if msg.role in ("user", "assistant") else "user",
-                "content": msg.content,
-            }
-        )
-    api_messages.append({"role": "user", "content": prompt})
+    api_messages = cp._to_langchain_messages(messages[-4:], _ROUTER_SYSTEM)
+    api_messages.append(HumanMessage(content=prompt))
 
     sink: dict[str, Any] = {}
     try:
-        client = cp._get_client()
-        response = await client.chat.completions.create(
-            model=ChatModelConfig.get_route_model(),
-            max_tokens=8,
+        model = get_chat_model(
+            ChatModelConfig.get_route_model(),
+            session_id=session_id,
             temperature=0.0,
-            messages=api_messages,
-            **cp._extra_body(session_id),
+            max_tokens=8,
         )
-        sink.update(cp._usage_from_openai(getattr(response, "usage", None)))
-        if getattr(response, "model", None):
-            sink["model"] = response.model
-        raw = (response.choices[0].message.content or "").strip()
+        # Not streamed — a single integer has nothing to stream — so cost comes
+        # back on the response itself and needs no second lookup.
+        response = await model.ainvoke(api_messages)
+        sink.update(usage_from_message(response))
+        raw = response.text.strip()
     except Exception:
         logger.warning(
             "router question selection failed; using priority order", exc_info=True
@@ -245,6 +239,9 @@ async def ask(state: ChatTurnState) -> dict[str, Any]:
     ):
         writer({"type": "token", "text": chunk})
 
+    # After the last token, never before: this reads the real dollar cost back
+    # from OpenRouter, and nothing the user is waiting on depends on it.
+    await cp._finalize_usage(sink)
     cp._merge_usage(usage, sink)
     return {"usage": usage}
 
@@ -366,6 +363,7 @@ async def present(state: ChatTurnState) -> dict[str, Any]:
     ):
         writer({"type": "token", "text": chunk})
 
+    await cp._finalize_usage(sink)
     cp._merge_usage(usage, sink)
     return {"usage": usage}
 

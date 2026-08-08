@@ -9,9 +9,9 @@ import uuid
 from collections.abc import AsyncIterator
 from typing import Any
 
-import openai
+from langchain_core.language_models import BaseChatModel
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 
-from app.core.config import settings
 from app.core.db import AsyncSessionLocal
 from app.data.refbuilds import Build
 from app.schemas.chat import (
@@ -22,6 +22,7 @@ from app.schemas.chat import (
     UserPreferences,
 )
 from app.services.chat_models import ChatModelConfig
+from app.services.llm import fetch_generation_cost, get_chat_model, usage_from_message
 from app.services.resolver import resolve_build
 
 logger = logging.getLogger(__name__)
@@ -30,48 +31,25 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # LLM cost/usage capture
 # ---------------------------------------------------------------------------
-# Every OpenRouter call in a conversation (profile extraction, elicitation,
-# recommendation) is billed to the conversation. Streaming calls opt into
-# OpenRouter's usage accounting so the final chunk carries tokens + real cost.
+# Every OpenRouter call in a conversation (profile extraction, routing,
+# elicitation, recommendation) is billed to the conversation.
+#
+# The chat calls go through LangChain's ChatOpenRouter (app/services/llm/), so
+# LangSmith sees real LLM runs with token counts rather than opaque HTTP spans.
+# Dollar cost is a separate lookup on the streaming paths — see that module's
+# header for why the two numbers are gathered differently.
 
-_STREAM_USAGE_OPTS: dict[str, Any] = {"stream_options": {"include_usage": True}}
 
+async def _finalize_usage(sink: dict) -> None:
+    """Fill in a streamed call's dollar cost before it is merged.
 
-def _extra_body(session_id: str | None) -> dict[str, Any]:
+    Streaming responses carry tokens but not cost, so this reads the real figure
+    back from OpenRouter using the generation id. Non-streaming calls already
+    have `cost_usd` and skip the request entirely.
     """
-    extra_body kwarg for an OpenRouter chat completion call. Always requests
-    usage/cost accounting; adds OpenRouter's `session_id` when one is given so
-    every call in a conversation turn groups into one session in OpenRouter's
-    dashboard.
-    """
-    body: dict[str, Any] = {"usage": {"include": True}}
-    if session_id:
-        body["session_id"] = session_id
-    return {"extra_body": body}
-
-
-def _usage_from_openai(usage_obj: Any) -> dict:
-    """Extract {tokens_in, tokens_out, cost_usd} from an OpenAI/OpenRouter usage object."""
-    if usage_obj is None:
-        return {}
-    tokens_in = getattr(usage_obj, "prompt_tokens", None)
-    tokens_out = getattr(usage_obj, "completion_tokens", None)
-    # OpenRouter returns real dollar cost as an extra `cost` field on usage.
-    cost = getattr(usage_obj, "cost", None)
-    if cost is None:
-        extra = getattr(usage_obj, "model_extra", None) or {}
-        cost = extra.get("cost")
-    return {"tokens_in": tokens_in, "tokens_out": tokens_out, "cost_usd": cost}
-
-
-def _capture_chunk_model(chunk: Any, usage_sink: dict | None) -> None:
-    """Record the actual model that served this streaming call (OpenRouter may
-    route to a different underlying model than requested)."""
-    if usage_sink is None or "model" in usage_sink:
+    if sink.get("cost_usd") is not None:
         return
-    model = getattr(chunk, "model", None)
-    if model:
-        usage_sink["model"] = model
+    sink["cost_usd"] = await fetch_generation_cost(sink.get("generation_id"))
 
 
 def _merge_usage(total: dict, part: dict | None) -> None:
@@ -87,34 +65,47 @@ def _merge_usage(total: dict, part: dict | None) -> None:
         total["models"].append(model)
 
 
-# ---------------------------------------------------------------------------
-# Client
-# ---------------------------------------------------------------------------
+def _to_langchain_messages(
+    messages: list[ChatMessage], system: str
+) -> list[BaseMessage]:
+    """Render the conversation for a chat model call.
 
-_client: openai.AsyncOpenAI | None = None
+    Anything that is not already an assistant turn is sent as a user turn, which
+    is what the previous OpenAI-shaped call did — the pipeline only ever stores
+    'user' and 'assistant', and a third role reaching here would be a bug
+    upstream rather than something to represent faithfully.
+    """
+    out: list[BaseMessage] = [SystemMessage(content=system)]
+    for msg in messages:
+        if msg.role == "assistant":
+            out.append(AIMessage(content=msg.content))
+        else:
+            out.append(HumanMessage(content=msg.content))
+    return out
 
 
-def _get_client() -> openai.AsyncOpenAI:
-    global _client
-    # Load-test requests never reach OpenRouter. Checked before the cached
-    # client so a stubbed request cannot fall through to the real one, and NOT
-    # cached itself — the decision is per-request, not per-process.
-    from app.core.loadtest import is_load_test
+async def _stream_text(
+    model: BaseChatModel,
+    messages: list[BaseMessage],
+    usage_sink: dict | None,
+) -> AsyncIterator[str]:
+    """Stream text from a chat model, capturing usage as it goes.
 
-    if is_load_test():
-        from app.core.loadtest_stubs import StubOpenAIClient
+    Usage arrives on its own trailing chunk with empty content, so accumulating
+    across every chunk (rather than reading the last one) is what makes both the
+    text and the numbers come out right.
+    """
+    aggregate: Any = None
+    async for chunk in model.astream(messages):
+        # Summed rather than tracked separately: adding chunks is how LangChain
+        # merges content *and* metadata, so the usage-only trailing chunk lands
+        # on the aggregate without needing to be recognised as it goes past.
+        aggregate = chunk if aggregate is None else aggregate + chunk
+        if text := chunk.text:
+            yield text
 
-        return StubOpenAIClient()  # type: ignore[return-value]
-
-    if _client is None:
-        api_key = settings.OPENROUTER_API_KEY
-        if not api_key:
-            raise OSError("OPENROUTER_API_KEY is not set.")
-        _client = openai.AsyncOpenAI(
-            api_key=api_key,
-            base_url="https://openrouter.ai/api/v1",
-        )
-    return _client
+    if usage_sink is not None and aggregate is not None:
+        usage_sink.update(usage_from_message(aggregate))
 
 
 # ---------------------------------------------------------------------------
@@ -417,42 +408,25 @@ async def stream_recommendation(
     Stream the recommendation response token-by-token.
     Yields raw text chunks (not SSE-formatted — the route handles that).
 
-    If usage_sink is provided, it's filled with this call's tokens + cost from
-    OpenRouter's final usage chunk. session_id groups this call with the rest
-    of the turn's calls in OpenRouter's dashboard.
+    If usage_sink is provided, it's filled with this call's tokens and the
+    generation id its dollar cost is read back from. session_id groups this call
+    with the rest of the turn's calls in OpenRouter's dashboard.
     """
-    client = _get_client()
-
-    context = _format_build_context(profile, build_key, build)
-
-    api_messages: list[dict] = [{"role": "system", "content": _RECOMMEND_SYSTEM}]
-    for msg in messages:
-        api_messages.append(
-            {
-                "role": msg.role if msg.role in ("user", "assistant") else "user",
-                "content": msg.content,
-            }
-        )
-    api_messages.append({"role": "user", "content": context})
-
-    stream = await client.chat.completions.create(
-        model=ChatModelConfig.get_recommend_model(),
-        max_tokens=128,
+    model = get_chat_model(
+        ChatModelConfig.get_recommend_model(),
+        session_id=session_id,
         temperature=0.5,
-        messages=api_messages,
-        stream=True,
-        **_STREAM_USAGE_OPTS,
-        **_extra_body(session_id),
+        max_tokens=128,
+        streaming=True,
     )
-    async for chunk in stream:
-        _capture_chunk_model(chunk, usage_sink)
-        if getattr(chunk, "usage", None) and usage_sink is not None:
-            usage_sink.update(_usage_from_openai(chunk.usage))
-        if not chunk.choices:
-            continue
-        delta = chunk.choices[0].delta.content
-        if delta:
-            yield delta
+
+    api_messages = _to_langchain_messages(messages, _RECOMMEND_SYSTEM)
+    api_messages.append(
+        HumanMessage(content=_format_build_context(profile, build_key, build))
+    )
+
+    async for text in _stream_text(model, api_messages, usage_sink):
+        yield text
 
 
 # ---------------------------------------------------------------------------
@@ -592,12 +566,10 @@ async def stream_elicitation(
     reference build's total already rounded to the nearest $100 — the model
     is told to mention this figure, not invent its own.
 
-    If usage_sink is provided, it's filled with this call's tokens + cost from
-    OpenRouter's final usage chunk. session_id groups this call with the rest
-    of the turn's calls in OpenRouter's dashboard.
+    If usage_sink is provided, it's filled with this call's tokens and the
+    generation id its dollar cost is read back from. session_id groups this call
+    with the rest of the turn's calls in OpenRouter's dashboard.
     """
-    client = _get_client()
-
     system_content = _ELICIT_SYSTEM
     if missing_fields:
         system_content += (
@@ -612,33 +584,18 @@ async def stream_elicitation(
             f"their budget — don't invent a different number."
         )
 
-    api_messages: list[dict] = [{"role": "system", "content": system_content}]
-    for msg in messages:
-        api_messages.append(
-            {
-                "role": msg.role if msg.role in ("user", "assistant") else "user",
-                "content": msg.content,
-            }
-        )
-
-    stream = await client.chat.completions.create(
-        model=ChatModelConfig.get_elicit_model(),
-        max_tokens=256,
+    model = get_chat_model(
+        ChatModelConfig.get_elicit_model(),
+        session_id=session_id,
         temperature=0.6,
-        messages=api_messages,
-        stream=True,
-        **_STREAM_USAGE_OPTS,
-        **_extra_body(session_id),
+        max_tokens=256,
+        streaming=True,
     )
-    async for chunk in stream:
-        _capture_chunk_model(chunk, usage_sink)
-        if getattr(chunk, "usage", None) and usage_sink is not None:
-            usage_sink.update(_usage_from_openai(chunk.usage))
-        if not chunk.choices:
-            continue
-        delta = chunk.choices[0].delta.content
-        if delta:
-            yield delta
+
+    async for text in _stream_text(
+        model, _to_langchain_messages(messages, system_content), usage_sink
+    ):
+        yield text
 
 
 # Checks if the extracted profile actually carries enough signal to recommend.

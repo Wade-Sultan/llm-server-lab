@@ -22,7 +22,7 @@ checkpointer.
 from __future__ import annotations
 
 import asyncio
-from types import SimpleNamespace
+from langchain_core.messages import AIMessage
 
 import pytest
 
@@ -58,35 +58,39 @@ def _state(profile: dict, **overrides) -> dict:
     return state
 
 
-class StubChoice:
-    def __init__(self, content: str) -> None:
-        self.message = SimpleNamespace(content=content)
+class StubRouterModel:
+    """A chat model that returns one canned answer and counts invocations.
 
-
-class StubClient:
-    """An OpenRouter client that returns one canned completion and counts calls."""
+    Shaped like ChatOpenRouter's non-streaming response: the router reads
+    `usage_metadata` for tokens and `response_metadata` for the real cost and
+    the model that actually served the call.
+    """
 
     def __init__(self, reply: str) -> None:
         self.reply = reply
         self.calls = 0
-        self.chat = SimpleNamespace(completions=SimpleNamespace(create=self._create))
+        self.last_messages: list = []
 
-    async def _create(self, **kwargs):
+    async def ainvoke(self, messages, **kwargs):
         self.calls += 1
-        self.last_kwargs = kwargs
-        return SimpleNamespace(
-            choices=[StubChoice(self.reply)],
-            usage=SimpleNamespace(prompt_tokens=10, completion_tokens=1, cost=0.0001),
-            model="stub/router",
+        self.last_messages = messages
+        return AIMessage(
+            content=self.reply,
+            usage_metadata={
+                "input_tokens": 10,
+                "output_tokens": 1,
+                "total_tokens": 11,
+            },
+            response_metadata={"cost": 0.0001, "model_name": "stub/router"},
         )
 
 
 @pytest.fixture
 def stub_router(monkeypatch):
-    def _install(reply: str) -> StubClient:
-        client = StubClient(reply)
-        monkeypatch.setattr(cp, "_get_client", lambda: client)
-        return client
+    def _install(reply: str) -> StubRouterModel:
+        model = StubRouterModel(reply)
+        monkeypatch.setattr(nodes, "get_chat_model", lambda *a, **kw: model)
+        return model
 
     return _install
 
@@ -137,10 +141,10 @@ def test_an_unusable_router_reply_falls_back_to_priority_order(stub_router, repl
 
 
 def test_a_router_failure_falls_back_rather_than_failing_the_turn(monkeypatch):
-    def _boom():
+    def _boom(*a, **kw):
         raise RuntimeError("openrouter is down")
 
-    monkeypatch.setattr(cp, "_get_client", _boom)
+    monkeypatch.setattr(nodes, "get_chat_model", _boom)
     profile = _profile(gaming_resolution=None, gaming_fps=None)
     result = asyncio.run(nodes.route(_state(profile)))
 
@@ -172,7 +176,7 @@ def test_already_asked_fields_are_shown_to_the_router(stub_router):
     )
     asyncio.run(nodes.route(state))
 
-    prompt = client.last_kwargs["messages"][-1]["content"]
+    prompt = client.last_messages[-1].content
     assert "Already asked" in prompt
     assert "target frame rate" in prompt
 

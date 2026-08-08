@@ -90,13 +90,17 @@ def _build_scope_filter_processor(inner):
     return ScopeFilterSpanProcessor(inner)
 
 
-def _instrument_llm_clients() -> None:
-    """Attach span emission to the LLM calls that are not LangGraph's own.
+def _instrument_llm_clients(langsmith_enabled: bool) -> None:
+    """Attach span emission to the LLM calls LangChain does not already cover.
 
-    Three different libraries reach OpenRouter in this codebase and none of them
-    is instrumented by LangGraph: the raw openai client in chat_pipeline, and
-    litellm underneath DSPy in the recommender. Each failure is caught
-    separately — losing DSPy spans should not also lose the openai ones.
+    The chat pipeline's own calls go through ChatOpenRouter and are traced by
+    LangChain itself — nothing to do for those. What is left is the recommender:
+    DSPy's ten build steps reach OpenRouter through litellm, and they are where
+    most of a completed build's spend goes, so leaving them out would make the
+    per-conversation total in LangSmith an understatement rather than a number.
+
+    Each failure is caught separately; losing the DSPy spans should not also
+    lose the openai ones.
     """
     try:
         from opentelemetry.instrumentation.openai_v2 import OpenAIInstrumentor
@@ -108,14 +112,21 @@ def _instrument_llm_clients() -> None:
     try:
         import litellm
 
-        # DSPy calls litellm, which emits OTel spans through its callback list
-        # rather than an instrumentor. Appended, not assigned — DSPy installs
-        # its own callbacks and overwriting them would break its LM history,
-        # which app/services/recommender/recording.py reads for cost capture.
+        # Appended, not assigned — DSPy installs its own callbacks and
+        # overwriting them would break its LM history, which
+        # app/services/recommender/recording.py reads for cost capture.
         if "otel" not in litellm.callbacks:
             litellm.callbacks.append("otel")
+
+        # Distinct from the OTel callback above and not redundant with it: the
+        # OTel one produces spans, this one produces LangSmith *runs* with token
+        # counts attached, which is what the spend view actually reads. Only
+        # when a key is configured, since litellm would otherwise fail per call
+        # trying to post them.
+        if langsmith_enabled and "langsmith" not in litellm.callbacks:
+            litellm.callbacks.append("langsmith")
     except Exception:
-        logger.warning("litellm OTel callback setup failed", exc_info=True)
+        logger.warning("litellm callback setup failed", exc_info=True)
 
 
 def configure_tracing(service_name: str) -> None:
@@ -199,7 +210,7 @@ def configure_tracing(service_name: str) -> None:
     trace.set_tracer_provider(provider)
     _provider = provider
 
-    _instrument_llm_clients()
+    _instrument_llm_clients(langsmith_enabled=bool(langsmith_key))
 
 
 def shutdown_tracing() -> None:

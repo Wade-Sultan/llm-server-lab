@@ -20,6 +20,10 @@ from collections.abc import AsyncIterator
 from types import SimpleNamespace
 from typing import Any
 
+from langchain_core.language_models import BaseChatModel
+from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage
+from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
+
 # Time-to-first-byte, mimicking an LLM thinking before it streams.
 _TTFT_S = int(os.environ.get("LOAD_TEST_STUB_TTFT_MS", "400")) / 1000
 # Inter-token delay while streaming.
@@ -32,65 +36,126 @@ _STUB_TEXT = (
 
 
 # ---------------------------------------------------------------------------
-# OpenAI/OpenRouter streaming client
+# Raw OpenAI/OpenRouter client, for the discovery pipeline
 # ---------------------------------------------------------------------------
-
-
-async def _stream_chunks(text: str, model: str) -> AsyncIterator[Any]:
-    """Yield chunks shaped like OpenRouter's streaming deltas.
-
-    The consumer in chat_pipeline reads chunk.model, chunk.usage and
-    chunk.choices[0].delta.content, and tolerates chunks with no choices — so
-    the usage-only final chunk below matches what OpenRouter really sends when
-    stream_options.include_usage is set.
-    """
-    await asyncio.sleep(_TTFT_S)
-
-    for word in text.split(" "):
-        if _TOKEN_S:
-            await asyncio.sleep(_TOKEN_S)
-        yield SimpleNamespace(
-            model=model,
-            usage=None,
-            choices=[SimpleNamespace(delta=SimpleNamespace(content=word + " "))],
-        )
-
-    # Final usage chunk. cost_usd is explicitly 0.0 rather than absent: the
-    # per-conversation cost column should record that this turn was free, not
-    # that its cost is unknown.
-    yield SimpleNamespace(
-        model=model,
-        usage=SimpleNamespace(
-            prompt_tokens=0,
-            completion_tokens=0,
-            cost=0.0,
-            model_extra={"cost": 0.0},
-        ),
-        choices=[],
-    )
+# Two client stubs, because two real clients are in use: chat goes through
+# LangChain (StubChatModel below) and discovery stays on the openai SDK for its
+# response_format and multimodal parts. See
+# app/services/discovery/openrouter_client.py for why they diverged.
 
 
 class _StubCompletions:
-    async def create(
-        self, *, model: str = "stub", stream: bool = False, **kwargs: Any
-    ) -> Any:
-        text = _STUB_TEXT * 2
-        if stream:
-            # Not awaited — an async generator object, which is what the real
-            # client returns and what `async for` downstream expects.
-            return _stream_chunks(text, model)
+    async def create(self, *, model: str = "stub", **kwargs: Any) -> Any:
+        await asyncio.sleep(_TTFT_S)
         return SimpleNamespace(
             model=model,
             usage=SimpleNamespace(prompt_tokens=0, completion_tokens=0, cost=0.0),
-            choices=[SimpleNamespace(message=SimpleNamespace(content=text))],
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(content=_STUB_TEXT),
+                    finish_reason="stop",
+                )
+            ],
         )
 
 
 class StubOpenAIClient:
-    """Drop-in for openai.AsyncOpenAI covering the surface chat_pipeline uses."""
+    """Drop-in for openai.AsyncOpenAI covering the surface discovery uses."""
 
     def __init__(self) -> None:
         self.chat = SimpleNamespace(completions=_StubCompletions())
+
+
+# ---------------------------------------------------------------------------
+# Chat model (LangChain), standing in for ChatOpenRouter
+# ---------------------------------------------------------------------------
+
+
+def _stub_usage() -> dict[str, Any]:
+    """Token counts for a stubbed call.
+
+    Zeros rather than invented figures: the point of load-test mode is that no
+    tokens were spent, and a fabricated count would land in
+    conversations.total_tokens_* and misreport real usage.
+    """
+    return {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+        "input_token_details": {},
+        "output_token_details": {},
+    }
+
+
+def _stub_response_metadata(model: str) -> dict[str, Any]:
+    # cost is explicitly 0.0 rather than absent: the per-conversation cost
+    # column should record that this turn was free, not that its cost is
+    # unknown. No generation id, so nothing tries to look the cost up over the
+    # network — see app/services/llm/openrouter.py.
+    return {"model_name": model, "cost": 0.0, "model_provider": "openrouter"}
+
+
+class StubChatModel(BaseChatModel):
+    """Drop-in for ChatOpenRouter that never leaves the process.
+
+    Implements the BaseChatModel hooks app/services/llm/ actually calls —
+    `ainvoke` (via `_agenerate`) and `astream` (via `_astream`). The synchronous
+    halves raise, because reaching them would mean a call site changed and a
+    load test had quietly started billing OpenRouter.
+    """
+
+    model_name: str = "stub"
+
+    @property
+    def _llm_type(self) -> str:
+        return "stub-chat-model"
+
+    def _generate(self, *args: Any, **kwargs: Any) -> Any:
+        raise NotImplementedError("load-test stub is async-only")
+
+    async def _agenerate(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: Any = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        await asyncio.sleep(_TTFT_S)
+        message = AIMessage(
+            content=_STUB_TEXT,
+            usage_metadata=_stub_usage(),
+            response_metadata=_stub_response_metadata(self.model_name),
+        )
+        return ChatResult(generations=[ChatGeneration(message=message)])
+
+    async def _astream(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: Any = None,
+        **kwargs: Any,
+    ) -> AsyncIterator[ChatGenerationChunk]:
+        """Stream word by word, then a usage-only chunk.
+
+        The trailing empty-content chunk carrying usage is what ChatOpenRouter
+        really emits when stream_options.include_usage is set, and
+        chat_pipeline._stream_text sums across every chunk to find it — so the
+        shape matters as much as the timing.
+        """
+        await asyncio.sleep(_TTFT_S)
+
+        for word in (_STUB_TEXT * 2).split(" "):
+            if _TOKEN_S:
+                await asyncio.sleep(_TOKEN_S)
+            yield ChatGenerationChunk(message=AIMessageChunk(content=word + " "))
+
+        yield ChatGenerationChunk(
+            message=AIMessageChunk(
+                content="",
+                usage_metadata=_stub_usage(),
+                response_metadata=_stub_response_metadata(self.model_name),
+            )
+        )
 
 
 # ---------------------------------------------------------------------------

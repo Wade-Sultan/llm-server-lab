@@ -162,35 +162,46 @@ def test_load_test_scope_refuses_when_secret_unset(monkeypatch) -> None:
     assert is_load_test() is False
 
 
-def test_stub_client_streams_like_openrouter() -> None:
-    """The stub must satisfy the consumer loop in chat_pipeline verbatim."""
-    from app.core.loadtest_stubs import StubOpenAIClient
-    from app.services.chat_pipeline import _capture_chunk_model, _usage_from_openai
+def test_stub_chat_model_streams_like_chatopenrouter() -> None:
+    """The stub must satisfy chat_pipeline's consumer loop verbatim.
+
+    Driven through `_stream_text` rather than by iterating the stub directly, so
+    what is under test is the pair actually used in production: a stub that
+    stops matching ChatOpenRouter's chunk shape would let a load test silently
+    stop measuring the real streaming path.
+    """
+    from app.core.loadtest_stubs import StubChatModel
+    from app.services.chat_pipeline import _stream_text
 
     async def drive() -> tuple[str, dict]:
-        client = StubOpenAIClient()
         sink: dict = {}
-        stream = await client.chat.completions.create(
-            model="stub-model", messages=[], stream=True
-        )
-        parts = []
-        async for chunk in stream:
-            _capture_chunk_model(chunk, sink)
-            if getattr(chunk, "usage", None):
-                sink.update(_usage_from_openai(chunk.usage))
-            if not chunk.choices:
-                continue
-            if delta := chunk.choices[0].delta.content:
-                parts.append(delta)
+        parts = [chunk async for chunk in _stream_text(StubChatModel(), [], sink)]
         return "".join(parts), sink
 
     text, sink = asyncio.run(drive())
 
     assert text.strip()
     # A stubbed turn is free, and must record as free rather than as unknown —
-    # the conversations table sums this column.
+    # the conversations table sums this column. Non-None also means
+    # _finalize_usage will skip the network lookup entirely, which is the point.
     assert sink["cost_usd"] == 0.0
     assert sink["tokens_in"] == 0
+    assert sink["generation_id"] is None
+
+
+def test_stub_chat_model_answers_a_non_streaming_call() -> None:
+    """The router calls ainvoke, not astream — a stub that only streams would
+    make every load-test turn fall back to priority ordering and never exercise
+    the router at all."""
+    from app.core.loadtest_stubs import StubChatModel
+    from app.services.llm import usage_from_message
+
+    message = asyncio.run(StubChatModel().ainvoke([]))
+    usage = usage_from_message(message)
+
+    assert message.content.strip()
+    assert usage["cost_usd"] == 0.0
+    assert usage["tokens_in"] == 0
 
 
 def test_stub_lm_satisfies_typed_signatures() -> None:

@@ -6,8 +6,16 @@ from typing import Any, Generic, Literal, TypeVar
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from app.services.chat_models import ChatModelConfig
-from app.services.chat_pipeline import _extra_body, _get_client, _usage_from_openai
 from app.services.discovery.fetch import FetchedDoc
+from app.services.discovery.openrouter_client import (
+    extra_body as _extra_body,
+)
+from app.services.discovery.openrouter_client import (
+    get_client as _get_client,
+)
+from app.services.discovery.openrouter_client import (
+    usage_from_openai as _usage_from_openai,
+)
 
 logger = logging.getLogger(__name__)
 
