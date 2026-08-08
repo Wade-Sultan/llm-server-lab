@@ -31,6 +31,7 @@ import {
 import { MarkdownText } from "@/components/assistant-ui/markdown-text"
 import { ToolFallback } from "@/components/assistant-ui/tool-fallback"
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button"
+import { useSecretCodeInterceptor } from "@/components/Chat/secret-codes"
 import { LoadingIndicator } from "@/components/Common/LoadingIndicator"
 import { Button } from "@/components/ui/button"
 import { usePipelineStatusStore } from "@/hooks/usePipelineStatus"
@@ -138,8 +139,15 @@ const ThreadSuggestionItem: FC = () => {
 }
 
 const Composer: FC = () => {
+  // The Enter path. The Send button is guarded separately in ComposerAction —
+  // see the note on useSecretCodeInterceptor for why both are needed.
+  const interceptSecretCode = useSecretCodeInterceptor()
+
   return (
-    <ComposerPrimitive.Root className="aui-composer-root relative flex w-full flex-col">
+    <ComposerPrimitive.Root
+      onSubmit={interceptSecretCode}
+      className="aui-composer-root relative flex w-full flex-col"
+    >
       <ComposerPrimitive.AttachmentDropzone asChild>
         <div
           data-slot="composer-shell"
@@ -161,11 +169,15 @@ const Composer: FC = () => {
 }
 
 const ComposerAction: FC = () => {
+  // The click path. Send is a `type="button"` that never submits the form, so
+  // the Root onSubmit in Composer does not cover it.
+  const interceptSecretCode = useSecretCodeInterceptor()
+
   return (
     <div className="aui-composer-action-wrapper relative flex items-center justify-between">
       <ComposerAddAttachment />
       <AuiIf condition={(s) => !s.thread.isRunning}>
-        <ComposerPrimitive.Send asChild>
+        <ComposerPrimitive.Send asChild onClick={interceptSecretCode}>
           <TooltipIconButton
             tooltip="Send message"
             side="bottom"
@@ -331,9 +343,25 @@ const UserActionBar: FC = () => {
 }
 
 const EditComposer: FC = () => {
+  // Both submit paths again, and `aui.composer()` inside this subtree resolves
+  // to THIS message's edit composer rather than the thread's — so clearing the
+  // code clears the edit box, not the message box below.
+  //
+  // WHAT MAKES CANCEL STILL RESTORE THE ORIGINAL. Entering a code here clears
+  // the edit draft, which leaves the box empty and Update disabled (send is
+  // disabled on an empty composer), so the way out is Cancel. That is safe
+  // because editing never touches the stored message until a send actually
+  // happens: `setText` writes a draft field, and cancelling only discards the
+  // edit composer. The message the user was editing is still whatever it always
+  // was, and it reappears intact.
+  const interceptSecretCode = useSecretCodeInterceptor()
+
   return (
     <MessagePrimitive.Root className="aui-edit-composer-wrapper mx-auto flex w-full max-w-(--thread-max-width) flex-col px-2 py-3">
-      <ComposerPrimitive.Root className="aui-edit-composer-root ml-auto flex w-full max-w-[85%] flex-col rounded-2xl bg-muted">
+      <ComposerPrimitive.Root
+        onSubmit={interceptSecretCode}
+        className="aui-edit-composer-root ml-auto flex w-full max-w-[85%] flex-col rounded-2xl bg-muted"
+      >
         <ComposerPrimitive.Input
           className="aui-edit-composer-input min-h-14 w-full resize-none bg-transparent p-4 text-foreground text-sm outline-none"
           autoFocus
@@ -344,7 +372,7 @@ const EditComposer: FC = () => {
               Cancel
             </Button>
           </ComposerPrimitive.Cancel>
-          <ComposerPrimitive.Send asChild>
+          <ComposerPrimitive.Send asChild onClick={interceptSecretCode}>
             <Button size="sm">Update</Button>
           </ComposerPrimitive.Send>
         </div>
