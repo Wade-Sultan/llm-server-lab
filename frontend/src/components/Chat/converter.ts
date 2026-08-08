@@ -6,57 +6,50 @@ import type {
 import { unstable_createMessageConverter as createMessageConverter } from "@assistant-ui/react"
 import type { ReadonlyJSONValue } from "assistant-stream/utils"
 
-import type { BuildData } from "@/hooks/useConversationState"
+import type { BuildData } from "@/types/build"
 import { stepMessage } from "./pipeline-steps"
 
 /**
  * The state shape the backend owns.
  *
- * Mirrors `initial_state()` in backend/app/services/transport.py. `build` and
- * `pipeline` are state rather than events, which is the substantive change from
- * the SSE adapter this replaced: the browser no longer accumulates them as they
- * stream past, so a reconnect mid-build gets the BuildCard and the progress line
- * back without having kept anything.
+ * Mirrors `initial_state()` in backend/app/services/transport.py. The build is
+ * state rather than an event, which is the substantive change from the SSE
+ * adapter this replaced: the browser no longer accumulates it as it streams
+ * past, so a reconnect mid-build gets the BuildCard back without having kept
+ * anything.
+ *
+ * `build` hangs off the message that produced it rather than sitting in a
+ * top-level slot. A conversation can contain several builds, and a single slot
+ * both loses the older ones and re-attaches the survivor to whichever assistant
+ * message happens to be last — so asking a follow-up after a build dragged the
+ * card down onto the reply.
  */
 export interface ChatMessageState {
   role: "user" | "assistant"
   content: string
+  build?: BuildData | null
 }
 
 export interface ChatAgentState {
   messages: ChatMessageState[]
-  build: BuildData | null
   pipeline: { step?: string | null; message?: string | null } | null
 }
 
 export const initialAgentState: ChatAgentState = {
   messages: [],
-  build: null,
   pipeline: null,
-}
-
-/**
- * Attach the BuildCard to the message it belongs to.
- *
- * The card is rendered by `makeAssistantDataUI({name: "build"})`, which looks
- * for a data part of that name — the same shape the SSE adapter produced and the
- * same shape `ConversationLoader` rebuilds from persisted metadata, so BuildCard
- * itself is untouched by this migration.
- *
- * It hangs off the last assistant message because that is the turn that produced
- * it; a build never arrives without one.
- */
-/** One message plus, on the turn that produced it, the build it produced. */
-interface RenderableMessage extends ChatMessageState {
-  build?: BuildData | null
 }
 
 /**
  * `toThreadMessages` does the assistant-ui bookkeeping — ids, statuses, message
  * metadata — that a hand-built `ThreadMessageLike[]` does not satisfy. This
  * callback only has to say what each message *is*.
+ *
+ * The BuildCard is rendered by `makeAssistantDataUI({name: "build"})`, which
+ * looks for a data part of that name — the same shape `ConversationLoader`
+ * rebuilds from persisted metadata, so BuildCard itself is untouched.
  */
-const messageConverter = createMessageConverter<RenderableMessage>(
+const messageConverter = createMessageConverter<ChatMessageState>(
   (message): ThreadMessageLike => {
     if (message.role !== "assistant" || !message.build) {
       return { role: message.role, content: message.content }
@@ -79,19 +72,12 @@ export function createConverter() {
     state: ChatAgentState,
     metadata: AssistantTransportConnectionMetadata,
   ) => {
-    const messages = state.messages ?? []
-    const lastAssistant = messages.reduce(
-      (acc, m, i) => (m.role === "assistant" ? i : acc),
-      -1,
-    )
+    const renderable: ChatMessageState[] = [...(state.messages ?? [])]
 
-    const renderable: RenderableMessage[] = messages.map((message, i) =>
-      i === lastAssistant ? { ...message, build: state.build } : message,
-    )
-
-    // Optimistic echo: commands the runtime has queued but not yet sent. Without
-    // this the user's own message vanishes between pressing enter and the server
-    // acknowledging it.
+    // Optimistic echo: commands the runtime has queued but not yet sent. This
+    // covers only the gap before the request goes out — once the first state
+    // operation lands, the runtime drops these and the server's copy of the
+    // same message takes over (see `_append_pending` in transport.py).
     for (const command of metadata.pendingCommands) {
       if (command.type !== "add-message") continue
       // `parts` is a union across user (text|image) and assistant (text)
@@ -110,10 +96,10 @@ export function createConverter() {
         metadata.isSending,
       ),
       isRunning: metadata.isSending,
-      // Re-exposed so `useAssistantTransportState` can read build and pipeline.
-      // Cast because the option is typed as plain JSON and ChatAgentState is an
-      // interface without an index signature; the value really is JSON — it
-      // round-trips to the server on every request.
+      // Re-exposed so the transition layer can read messages and pipeline back
+      // out. Cast because the option is typed as plain JSON and ChatAgentState
+      // is an interface without an index signature; the value really is JSON —
+      // it round-trips to the server on every request.
       state: state as unknown as ReadonlyJSONValue,
     }
   }

@@ -29,9 +29,10 @@ import asyncio
 import logging
 import time
 import uuid
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 
 from app.core.turn_metrics import (
     TURN_COMMITS,
@@ -49,6 +50,44 @@ logger = logging.getLogger(__name__)
 # `checkpoint` is the graph state mirrored into Postgres. Forwarding the first
 # would leak cost data to the browser and the last is meaningless to it.
 _INTERNAL_EVENTS = frozenset({"usage", "reference_estimate", "checkpoint"})
+
+
+def messages_to_write(
+    stored: list[tuple[str, str]], incoming: list[tuple[str, str]]
+) -> list[tuple[str, str]]:
+    """Which of `incoming` is not yet in `stored`, in order.
+
+    Both lists are (role, content). The contract is the one the reported bug
+    violated: every message the user sent or the assistant returned ends up
+    recorded, exactly once.
+
+    Reconciling by content rather than by count is the whole point. The previous
+    implementation counted stored rows and sliced `incoming` at that number,
+    which silently wrote nothing at all once the two drifted out of step — and
+    they did drift, because the transport was dropping user turns from the state
+    it round-tripped.
+
+    Matching the tail past the common prefix, rather than just appending it,
+    keeps conversations that the old path already scrambled from gaining
+    duplicates: their rows are out of order but they are still there, and this
+    fills in what is missing around them.
+    """
+    prefix = 0
+    while (
+        prefix < len(stored)
+        and prefix < len(incoming)
+        and stored[prefix] == incoming[prefix]
+    ):
+        prefix += 1
+
+    unmatched = stored[prefix:]
+    out: list[tuple[str, str]] = []
+    for entry in incoming[prefix:]:
+        if entry in unmatched:
+            unmatched.remove(entry)
+            continue
+        out.append(entry)
+    return out
 
 
 def save_turn(
@@ -132,29 +171,66 @@ def save_turn(
             db.add(conversation)
             db.flush()
 
-        # Count already-saved messages so we only append new ones. This is also
-        # what makes a Pub/Sub redelivery safe: a turn that committed and was
-        # then redelivered re-counts the same rows and appends nothing.
-        saved_count = db.execute(
-            select(func.count(Message.id)).where(Message.conversation_id == conv_uuid)
-        ).scalar_one()
-
-        for msg in messages[saved_count:]:
-            db.add(
-                Message(
-                    conversation_id=conv_uuid,
-                    role=msg.role,
-                    content=msg.content,
-                )
+        # WHAT THIS USED TO DO, AND WHY IT LOST MESSAGES. It counted the rows
+        # already stored and then sliced the incoming list at that number —
+        # a row count used as a list index. That is only correct while the
+        # incoming list is exactly the stored sequence, and it silently was not:
+        # the transport dropped user turns from the state it round-tripped, so
+        # the count ran ahead of the list, `messages[saved_count:]` came back
+        # empty, and every user message after the first was never written. No
+        # error, no log line — just a conversation missing half of itself.
+        #
+        # Reconciling against the stored rows themselves has no such failure
+        # mode. Whatever is in the incoming conversation but not in the database
+        # gets written, which is the property actually wanted: every message the
+        # user sent or the assistant returned ends up recorded.
+        existing = (
+            db.execute(
+                select(Message)
+                .where(Message.conversation_id == conv_uuid)
+                .order_by(Message.created_at, Message.id)
             )
+            .scalars()
+            .all()
+        )
 
+        # This turn's reply is reconciled alongside the history rather than
+        # appended unconditionally, which is what keeps a Pub/Sub redelivery
+        # idempotent: the second delivery matches the stored rows end to end and
+        # writes nothing.
+        incoming = [(m.role, m.content or "") for m in messages]
         if assistant_text:
+            incoming.append(("assistant", assistant_text))
+
+        to_write = messages_to_write(
+            [(m.role, m.content or "") for m in existing], incoming
+        )
+
+        # Explicit, strictly increasing timestamps. `created_at` defaulted to
+        # server_default=func.now(), which in Postgres is the *transaction*
+        # timestamp — identical for every row of a turn — and the relationship
+        # orders by that column, so a turn's own messages came back in whatever
+        # order the planner felt like. The reply could sort above the question
+        # that prompted it.
+        written_at = datetime.now(UTC)
+        for offset, (role, content) in enumerate(to_write):
+            is_this_turns_reply = (
+                assistant_text
+                and role == "assistant"
+                and content == assistant_text
+                and offset == len(to_write) - 1
+            )
             db.add(
                 Message(
                     conversation_id=conv_uuid,
-                    role="assistant",
-                    content=assistant_text,
-                    metadata_={"build": build_data} if build_data else None,
+                    role=role,
+                    content=content,
+                    metadata_=(
+                        {"build": build_data}
+                        if is_this_turns_reply and build_data
+                        else None
+                    ),
+                    created_at=written_at + timedelta(microseconds=offset),
                 )
             )
 

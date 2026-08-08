@@ -99,7 +99,14 @@ async def chat(
     can pick it up mid-build (see /chat/resume). Otherwise it runs inline and
     dies with the request, which is the local-development path.
     """
-    messages = transport.messages_from_commands(req.commands, req.state)
+    # The base handed to create_run must stay exactly what the client sent —
+    # operations are deltas applied on top of the client's own copy, so mutating
+    # it here would misalign every message index. This turn's new messages are
+    # appended inside the run instead, which is also what keeps them on screen:
+    # the runtime drops its optimistic echo as soon as the first operation lands.
+    state = transport.ensure_shape(req.state)
+    pending = transport.command_messages(req.commands)
+    messages = transport.to_chat_messages(state["messages"] + pending)
     if not messages:
         raise HTTPException(status_code=400, detail="No message to respond to.")
 
@@ -126,14 +133,16 @@ async def chat(
             await turn_stream.set_active_turn(conversation_id, turn_id)
 
         async def run_callback(controller: RunController) -> None:
-            await transport.stream_turn_into(controller, turn_id)
+            await transport.stream_turn_into(controller, turn_id, pending=pending)
 
-        return _stream_response(run_callback, req.state)
+        return _stream_response(run_callback, state)
 
     async def inline_callback(controller: RunController) -> None:
-        await transport.run_turn_inline_into(controller, messages, conversation_id)
+        await transport.run_turn_inline_into(
+            controller, messages, conversation_id, pending=pending
+        )
 
-    return _stream_response(inline_callback, req.state)
+    return _stream_response(inline_callback, state)
 
 
 class ResumeRequest(BaseModel):
@@ -176,6 +185,8 @@ async def chat_resume(req: ResumeRequest) -> Response:
         raise HTTPException(status_code=404, detail="No turn to resume.")
 
     async def run_callback(controller: RunController) -> None:
-        await transport.stream_turn_into(controller, turn_id)
+        # `resuming` so the replay reuses the half-finished assistant message the
+        # client already has rather than stacking a second one above it.
+        await transport.stream_turn_into(controller, turn_id, resuming=True)
 
-    return _stream_response(run_callback, req.state)
+    return _stream_response(run_callback, transport.ensure_shape(req.state))

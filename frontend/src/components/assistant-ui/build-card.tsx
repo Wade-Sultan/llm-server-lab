@@ -13,8 +13,8 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
-import type { BuildData } from "@/hooks/useConversationState"
 import { fetchListingsByPart, type PartListings } from "@/lib/listings"
+import type { BuildData } from "@/types/build"
 
 const formatPrice = (value: number, currency = "USD") =>
   value.toLocaleString("en-US", { style: "currency", currency })

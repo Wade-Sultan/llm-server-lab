@@ -8,6 +8,20 @@ tests below exist to keep that property true. If the reader ever starts
 depending on what a client already saw, resume quietly stops working for exactly
 the case it exists for: a phone that locked during a three-minute build.
 
+WHY THE USER'S OWN MESSAGE IS TESTED AT ALL. It looks like the client's job, and
+it is not: the runtime drops its optimistic echo of the message the moment the
+first state operation lands, and renders only what state says. A run that never
+adds the message leaves the thread empty — which is the condition assistant-ui
+puts the welcome screen back on screen for — and the next turn round-trips a
+history with no user turns in it, a silent degradation of every elicitation
+answer rather than a visible error.
+
+WHY ONE TEST USES THE REAL `create_run`. Operations are deltas against the state
+the *client* POSTed; nothing transmits the server's own copy. A fake controller
+mutating a plain dict cannot see that distinction, and both real bugs here lived
+in it — an index computed against the wrong base, and a `StateProxy` mistaken for
+a plain `list`. See `test_the_browser_rebuilds_exactly_what_the_server_holds`.
+
 The event vocabulary these assert against is the one `run_chat_turn` has always
 emitted. Nothing in the pipeline knows this layer exists, and these tests are
 what keeps that boundary honest.
@@ -50,13 +64,109 @@ def _events(*events):
     return _tail
 
 
-def _drive(monkeypatch, *events, state=None):
+def _drive(monkeypatch, *events, state=None, resuming=False, pending=None):
     monkeypatch.setattr(turn_stream, "tail", _events(*events))
     controller = _FakeController(
         state if state is not None else transport.initial_state()
     )
-    asyncio.run(transport.stream_turn_into(controller, "turn-1"))
+    asyncio.run(
+        transport.stream_turn_into(
+            controller, "turn-1", pending=pending, resuming=resuming
+        )
+    )
     return controller.state
+
+
+def _user_command(text, role="user"):
+    return {
+        "type": "add-message",
+        "message": {"role": role, "parts": [{"type": "text", "text": text}]},
+    }
+
+
+# ------------------------------------------------------- commands into state --
+
+
+def test_the_users_own_message_is_put_into_state_by_the_run(monkeypatch):
+    """The regression that put the welcome screen back on screen mid-send.
+
+    The runtime drops its optimistic echo of the message as soon as the first
+    operation arrives, and renders only what state says. A run that never adds
+    the message leaves a thread with zero messages in it, which is exactly the
+    condition assistant-ui renders ThreadWelcome for.
+    """
+    state = _drive(
+        monkeypatch,
+        {"type": "token", "text": "What resolution?"},
+        state=transport.ensure_shape({"messages": [], "pipeline": None}),
+        pending=transport.command_messages(
+            [_user_command("I want a gaming PC for 1440p")]
+        ),
+    )
+
+    assert state["messages"][0] == {
+        "role": "user",
+        "content": "I want a gaming PC for 1440p",
+        "build": None,
+    }
+
+
+def test_a_second_turn_still_carries_the_first_turns_question_and_answer():
+    """The silent half of the same bug. With user turns missing from state, the
+    extraction model never sees what the user actually said — it just answers
+    worse, with nothing in any log to say why."""
+    state = transport.ensure_shape(
+        {
+            "messages": [
+                {"role": "user", "content": "i want a gaming pc"},
+                {"role": "assistant", "content": "What resolution?"},
+            ],
+            "pipeline": None,
+        }
+    )
+    pending = transport.command_messages([_user_command("1440p")])
+    messages = transport.to_chat_messages(state["messages"] + pending)
+
+    assert [m.content for m in messages] == [
+        "i want a gaming pc",
+        "What resolution?",
+        "1440p",
+    ]
+    assert all(isinstance(m, ChatMessage) for m in messages)
+
+
+def test_non_message_commands_are_ignored():
+    pending = transport.command_messages(
+        [
+            {"type": "add-tool-result", "toolCallId": "t1", "result": {}},
+            _user_command("hello"),
+        ]
+    )
+
+    assert [m.content for m in transport.to_chat_messages(pending)] == ["hello"]
+
+
+def test_an_empty_assistant_turn_is_dropped():
+    """A turn cancelled mid-stream leaves one behind. Feeding it back would show
+    the extraction model a blank assistant reply."""
+    state = {
+        "messages": [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": ""},
+        ]
+    }
+
+    assert [m.content for m in transport.messages_from_state(state)] == ["hi"]
+
+
+def test_a_malformed_state_does_not_crash_the_run():
+    """The boundary with a browser. A bad shape must fail here, not deep inside
+    the run with a KeyError."""
+    assert transport.messages_from_state("not a dict") == []
+    assert transport.messages_from_state(None) == []
+    assert transport.ensure_shape("not a dict")["messages"] == []
+    assert transport.ensure_shape({"messages": "nope"})["messages"] == []
+    assert transport.command_messages([{"type": "add-message"}]) == []
 
 
 # ------------------------------------------------------------ state mapping --
@@ -70,7 +180,22 @@ def test_tokens_accumulate_into_one_assistant_message(monkeypatch):
         {"type": "done"},
     )
 
-    assert state["messages"][-1] == {"role": "assistant", "content": "Hello world"}
+    assert state["messages"][-1]["role"] == "assistant"
+    assert state["messages"][-1]["content"] == "Hello world"
+
+
+def test_the_assistant_turn_is_appended_after_the_user_message(monkeypatch):
+    """Order matters on screen, and the reply must not overwrite the prompt."""
+    state = _drive(
+        monkeypatch,
+        {"type": "token", "text": "Sure"},
+        pending=transport.command_messages([_user_command("build me a pc")]),
+    )
+
+    assert [(m["role"], m["content"]) for m in state["messages"]] == [
+        ("user", "build me a pc"),
+        ("assistant", "Sure"),
+    ]
 
 
 def test_progress_is_visible_while_the_turn_runs(monkeypatch):
@@ -104,8 +229,31 @@ def test_a_build_clears_the_progress_line(monkeypatch):
         {"type": "build", "key": "custom_dspy", "data": {"label": "Custom Build"}},
     )
 
-    assert state["build"] == {"label": "Custom Build"}
+    assert state["messages"][-1]["build"] == {"label": "Custom Build"}
     assert state["pipeline"] is None
+
+
+def test_a_build_stays_on_the_turn_that_produced_it(monkeypatch):
+    """A top-level build slot re-attaches to whichever assistant message is last,
+    so a follow-up question after a build drags the card down onto the reply."""
+    state = _drive(
+        monkeypatch,
+        {"type": "build", "key": "custom_dspy", "data": {"label": "Custom Build"}},
+        {"type": "token", "text": "Here it is."},
+    )
+    build_index = len(state["messages"]) - 1
+
+    # A later turn, on the same conversation.
+    state = _drive(
+        monkeypatch,
+        {"type": "token", "text": "Yes."},
+        state=state,
+        pending=transport.command_messages([_user_command("can it run VR?")]),
+    )
+
+    assert state["messages"][build_index]["build"] == {"label": "Custom Build"}
+    assert state["messages"][-1]["content"] == "Yes."
+    assert state["messages"][-1]["build"] is None
 
 
 def test_the_progress_line_is_cleared_even_when_a_turn_dies_mid_build(monkeypatch):
@@ -134,6 +282,13 @@ def test_internal_events_never_reach_the_client(monkeypatch):
     assert state["messages"][-1]["content"] == "hi"
 
 
+def test_a_turn_of_only_internal_events_is_reported_as_empty(monkeypatch):
+    """Internal events are not evidence a worker produced anything renderable."""
+    state = _drive(monkeypatch, {"type": "usage", "cost_usd": 0.42})
+
+    assert "didn't start" in state["messages"][-1]["content"]
+
+
 # ----------------------------------------------------------------- resuming --
 
 
@@ -152,7 +307,35 @@ def test_a_replay_rebuilds_the_same_state_as_the_original_run(monkeypatch):
 
     assert first == resumed
     assert resumed["messages"][-1]["content"] == "Here is your build."
-    assert resumed["build"] == {"label": "Custom Build"}
+    assert resumed["messages"][-1]["build"] == {"label": "Custom Build"}
+
+
+def test_resuming_rebuilds_the_partial_reply_instead_of_stacking_a_second_one(
+    monkeypatch,
+):
+    """The client reconnects holding the half-finished text it already saw.
+    Replay is from zero, so that text must be replaced, not appended to — and it
+    must not be left behind above the finished reply."""
+    partial = transport.initial_state()
+    partial["messages"].append(
+        {"role": "user", "content": "build me a pc", "build": None}
+    )
+    partial["messages"].append(
+        {"role": "assistant", "content": "Here is ", "build": None}
+    )
+
+    state = _drive(
+        monkeypatch,
+        {"type": "token", "text": "Here is "},
+        {"type": "token", "text": "your build."},
+        state=partial,
+        resuming=True,
+    )
+
+    assert [(m["role"], m["content"]) for m in state["messages"]] == [
+        ("user", "build me a pc"),
+        ("assistant", "Here is your build."),
+    ]
 
 
 def test_a_cancelled_reader_stops_without_touching_the_turn(monkeypatch):
@@ -186,62 +369,90 @@ def test_an_empty_stream_says_so_rather_than_hanging(monkeypatch):
     assert "didn't start" in state["messages"][-1]["content"]
 
 
-# --------------------------------------------------------------- commands --
+# ------------------------------------------------- ops against a real client --
 
 
-def test_history_and_the_new_turn_combine_in_order():
-    state = {
+def _apply_ops(base, operations):
+    """Apply wire operations the way the browser does.
+
+    The client's own state is the base — `create_run` does not transmit the
+    state it was given, so anything the server fails to emit an operation for
+    simply is not there as far as the browser is concerned.
+    """
+    for op in operations:
+        target = base
+        for key in op["path"][:-1]:
+            target = target[int(key)] if isinstance(target, list) else target[key]
+        if not op["path"]:
+            base = op["value"]
+            continue
+        last = op["path"][-1]
+        if isinstance(target, list):
+            index = int(last)
+            if op["type"] == "append-text":
+                target[index] += op["value"]
+            elif index == len(target):
+                target.append(op["value"])
+            else:
+                target[index] = op["value"]
+        elif op["type"] == "append-text":
+            target[last] = (target[last] or "") + op["value"]
+        else:
+            target[last] = op["value"]
+    return base
+
+
+def test_the_browser_rebuilds_exactly_what_the_server_holds(monkeypatch):
+    """The integration a fake controller cannot check, and where the real bugs
+    were: operations are deltas against the state the *client* POSTed, so an
+    index computed from a different base silently writes to the wrong message.
+
+    Runs the driver through the real create_run/StateManager rather than a stub,
+    which is what makes it able to catch a proxy being mistaken for a plain dict.
+    """
+    import copy
+
+    from assistant_stream import create_run
+
+    client_state = {
         "messages": [
-            {"role": "user", "content": "i want a gaming pc"},
-            {"role": "assistant", "content": "What resolution?"},
-        ]
+            {"role": "user", "content": "i want a gaming pc", "build": None},
+            {"role": "assistant", "content": "What resolution?", "build": None},
+        ],
+        "pipeline": None,
     }
-    commands = [
-        {
-            "type": "add-message",
-            "message": {"role": "user", "parts": [{"type": "text", "text": "1440p"}]},
-        }
+    server_state = copy.deepcopy(client_state)
+    pending = transport.command_messages([_user_command("1440p")])
+
+    monkeypatch.setattr(
+        turn_stream,
+        "tail",
+        _events(
+            {"type": "progress", "step": "gpu", "message": "Choosing GPU…"},
+            {"type": "token", "text": "Here is your build."},
+            {"type": "build", "data": {"label": "Custom Build"}},
+        ),
+    )
+
+    async def _run():
+        ops = []
+        async for chunk in create_run(
+            lambda c: transport.stream_turn_into(c, "turn-1", pending=pending),
+            state=server_state,
+        ):
+            ops.extend(getattr(chunk, "operations", []))
+        return ops
+
+    rebuilt = _apply_ops(copy.deepcopy(client_state), asyncio.run(_run()))
+
+    assert [(m["role"], m["content"]) for m in rebuilt["messages"]] == [
+        ("user", "i want a gaming pc"),
+        ("assistant", "What resolution?"),
+        ("user", "1440p"),
+        ("assistant", "Here is your build."),
     ]
-
-    messages = transport.messages_from_commands(commands, state)
-
-    assert [m.content for m in messages] == [
-        "i want a gaming pc",
-        "What resolution?",
-        "1440p",
-    ]
-    assert all(isinstance(m, ChatMessage) for m in messages)
-
-
-def test_an_empty_assistant_turn_is_dropped():
-    """A turn cancelled mid-stream leaves one behind. Feeding it back would show
-    the extraction model a blank assistant reply."""
-    state = {
-        "messages": [
-            {"role": "user", "content": "hi"},
-            {"role": "assistant", "content": ""},
-        ]
-    }
-
-    assert [m.content for m in transport.messages_from_commands([], state)] == ["hi"]
-
-
-def test_non_message_commands_are_ignored():
-    commands = [
-        {"type": "add-tool-result", "toolCallId": "t1", "result": {}},
-        {
-            "type": "add-message",
-            "message": {"role": "user", "parts": [{"type": "text", "text": "hello"}]},
-        },
-    ]
-
-    assert [m.content for m in transport.messages_from_commands(commands, None)] == [
-        "hello"
-    ]
-
-
-def test_a_malformed_state_does_not_crash_the_run():
-    """The boundary with a browser. A bad shape must fail here, not deep inside
-    the run with a KeyError."""
-    assert transport.messages_from_commands([], "not a dict") == []
-    assert transport.messages_from_commands([], None) == []
+    assert rebuilt["messages"][-1]["build"] == {"label": "Custom Build"}
+    assert rebuilt["pipeline"] is None
+    # The history the client round-trips next turn must be intact, or the
+    # elicitation model answers without seeing what was asked of it.
+    assert len(transport.messages_from_state(rebuilt)) == 4

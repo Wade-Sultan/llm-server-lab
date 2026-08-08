@@ -20,17 +20,15 @@ import { toast } from "sonner"
 
 import { BuildCard } from "@/components/assistant-ui/build-card"
 import { getAccessToken } from "@/hooks/useAuth"
-import {
-  type BuildData,
-  useConversationStateStore,
-} from "@/hooks/useConversationState"
 import { usePipelineStatusStore } from "@/hooks/usePipelineStatus"
+import type { BuildData } from "@/types/build"
 import {
   type ChatAgentState,
   createConverter,
   initialAgentState,
   pipelineMessage,
 } from "./converter"
+import { type AgentTransition, diffAgentState } from "./transitions"
 
 const BuildDataUI = makeAssistantDataUI({ name: "build", render: BuildCard })
 
@@ -128,18 +126,14 @@ function ConversationLoader({
           status: "ready",
           meta: { title: data.title, created_at: data.created_at },
           initialState: {
+            // Each build stays on the message it was persisted against, so a
+            // conversation containing several of them renders all of them, each
+            // under the turn that produced it.
             messages: persisted.map((m) => ({
               role: m.role as "user" | "assistant",
               content: m.content ?? "",
+              build: m.metadata?.build ?? null,
             })),
-            // The most recent persisted build. Only the newest is carried
-            // forward — the converter hangs it off the last assistant message,
-            // and older builds stay where BuildCard's own fetch can reach them.
-            build:
-              persisted.reduce<BuildData | null>(
-                (acc, m) => m.metadata?.build ?? acc,
-                null,
-              ) ?? null,
             pipeline: null,
           },
         })
@@ -216,8 +210,11 @@ function ChatRuntimeMount({
   })
 
   useEffect(() => {
+    // Both stores are module singletons, so anything left set here shows up on
+    // the next conversation — including a progress line queued behind the
+    // store's own display-time delay, which would land after the navigation.
     return () => {
-      useConversationStateStore.getState().reset()
+      usePipelineStatusStore.getState().reset()
     }
   }, [])
 
@@ -231,15 +228,17 @@ function ChatRuntimeMount({
 }
 
 /**
- * Mirrors server state into the two Zustand stores the surrounding UI reads.
+ * Watches the backend's state and acts on what *changed* in it.
  *
- * These used to be written by `model-adapter.ts` as it parsed SSE frames, which
- * meant the progress line and the build phase were client-side accumulations
- * that a reconnect lost. They are derived from server state now; the stores
- * remain only because other components already subscribe to them.
+ * The distinction is the whole point. Server state is a snapshot, and a
+ * snapshot cannot tell "a build just finished" from "a build is present" — so
+ * anything driven off the value fires again every time the value is merely
+ * observed. That is what made opening a finished build from history announce
+ * "Build ready!" all over again. `diffAgentState` turns the snapshots into
+ * transitions and this decides, one by one, which of them should do something.
  *
  * Rendered inside AssistantRuntimeProvider because it reads the active thread's
- * state from that context. It returns null until a Thread is actually mounted —
+ * state from that context. It does nothing until a Thread is actually mounted —
  * see the note in the body.
  */
 function AgentStateSync() {
@@ -253,35 +252,58 @@ function AgentStateSync() {
     const extras = s.thread?.extras as { state?: ChatAgentState } | undefined
     return extras?.state ?? null
   })
-  const phase = useConversationStateStore((s) => s.phase)
+
+  // The last state actually observed. `null` means nothing has been seen yet,
+  // which is deliberately distinct from "seen an empty conversation": the first
+  // observation establishes a baseline and emits no transitions, so rehydrated
+  // history arrives silently while a build finishing does not.
+  const previous = useRef<ChatAgentState | null>(null)
 
   useEffect(() => {
     if (!state) return
-    usePipelineStatusStore.getState().setMessage(pipelineMessage(state))
-  }, [state])
 
-  useEffect(() => {
-    if (!state) return
-    const store = useConversationStateStore.getState()
-    if (state.build) {
-      store.setBuildData(state.build)
-      store.setPhase("complete")
-    } else if (state.pipeline) {
-      // Progress only ever appears on the recommendation path, never during
-      // elicitation — so its presence is what distinguishes the two.
-      store.setPhase("recommending")
+    const prev = previous.current
+    previous.current = state
+    if (prev === null) return
+
+    for (const transition of diffAgentState(prev, state)) {
+      handleTransition(transition)
     }
   }, [state])
-
-  // Listings for the recommended parts are fetched by BuildCard itself (from
-  // the commerce service), so they work for historical builds too.
-  useEffect(() => {
-    if (phase === "complete") {
-      toast.success("Build ready!")
-    }
-  }, [phase])
 
   return null
+}
+
+/**
+ * Which transitions are worth acting on, and what they do.
+ *
+ * Kept as a flat switch on purpose: it is the one place to look to answer "why
+ * did the UI do that", and adding a side effect means adding a case here rather
+ * than finding another value somewhere to watch.
+ */
+function handleTransition(transition: AgentTransition): void {
+  switch (transition.type) {
+    case "build-completed":
+      // Listings for the recommended parts are fetched by BuildCard itself
+      // (from the commerce service), so historical builds render without this.
+      toast.success("Build ready!")
+      break
+    case "pipeline-step":
+      usePipelineStatusStore.getState().setMessage(
+        pipelineMessage({
+          messages: [],
+          pipeline: { step: transition.step, message: transition.message },
+        }),
+      )
+      break
+    case "pipeline-idle":
+      usePipelineStatusStore.getState().setMessage(null)
+      break
+    case "message-added":
+      // Nothing yet. Listed rather than defaulted so the next person can see
+      // that it is a transition the layer already reports.
+      break
+  }
 }
 
 export { INITIAL_SUGGESTIONS }

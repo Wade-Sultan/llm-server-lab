@@ -209,7 +209,7 @@ const MessageError: FC = () => {
 
 const AssistantMessage: FC = () => {
   const statusMessage = usePipelineStatusStore((s) => s.message)
-  const isRunning = useAuiState((s) => s.thread.isRunning)
+  const isRunning = useAuiState((s) => s.thread.isRunning && s.message.isLast)
 
   return (
     <MessagePrimitive.Root
