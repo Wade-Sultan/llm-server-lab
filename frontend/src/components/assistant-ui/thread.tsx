@@ -22,7 +22,7 @@ import {
   PencilIcon,
   SquareIcon,
 } from "lucide-react"
-import type { FC } from "react"
+import { type FC, useState } from "react"
 import {
   ComposerAddAttachment,
   ComposerAttachments,
@@ -32,6 +32,7 @@ import { MarkdownText } from "@/components/assistant-ui/markdown-text"
 import { ToolFallback } from "@/components/assistant-ui/tool-fallback"
 import { TooltipIconButton } from "@/components/assistant-ui/tooltip-icon-button"
 import { useSecretCodeInterceptor } from "@/components/Chat/secret-codes"
+import { pickStatusMessage } from "@/components/Chat/status-messages"
 import { LoadingIndicator } from "@/components/Common/LoadingIndicator"
 import { Button } from "@/components/ui/button"
 import { usePipelineStatusStore } from "@/hooks/usePipelineStatus"
@@ -221,6 +222,13 @@ const MessageError: FC = () => {
 const AssistantMessage: FC = () => {
   const statusMessage = usePipelineStatusStore((s) => s.message)
   const isRunning = useAuiState((s) => s.thread.isRunning && s.message.isLast)
+  // The opening turn is [user, assistant], so anything longer has history behind
+  // it. Read at mount, which is when the pair lands: the backend's first
+  // operation sets both messages (see `_begin_assistant_turn` in transport.py).
+  const isFirstTurn = useAuiState((s) => s.thread.messages.length <= 2)
+  // Once per mounted message, never per render — `pickStatusMessage` is random,
+  // and this component re-renders on every token that arrives.
+  const [idleMessage] = useState(() => pickStatusMessage(isFirstTurn))
 
   return (
     <MessagePrimitive.Root
@@ -228,10 +236,11 @@ const AssistantMessage: FC = () => {
       data-role="assistant"
     >
       <div className="aui-assistant-message-content wrap-break-word px-2 text-foreground leading-relaxed">
-        {isRunning && statusMessage && (
-          <LoadingIndicator message={statusMessage} />
+        {/* A real pipeline step always wins; the idle phrase only fills the
+            stretches that have none. See components/Chat/status-messages.ts. */}
+        {isRunning && (
+          <LoadingIndicator message={statusMessage ?? idleMessage} />
         )}
-        {isRunning && !statusMessage && <LoadingIndicator message="" />}
         <MessagePrimitive.Parts>
           {({ part }) => {
             if (part.type === "text") return <MarkdownText />
