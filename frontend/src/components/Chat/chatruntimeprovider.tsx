@@ -1,10 +1,10 @@
 "use client"
 
-import type { DataMessagePart, ThreadMessageLike } from "@assistant-ui/react"
 import {
   AssistantRuntimeProvider,
   makeAssistantDataUI,
-  useLocalRuntime,
+  useAssistantTransportRuntime,
+  useAssistantTransportState,
 } from "@assistant-ui/react"
 import { useParams, useRouter } from "next/navigation"
 import type { ReactNode } from "react"
@@ -24,7 +24,13 @@ import {
   type BuildData,
   useConversationStateStore,
 } from "@/hooks/useConversationState"
-import { createModelAdapter } from "./model-adapter"
+import { usePipelineStatusStore } from "@/hooks/usePipelineStatus"
+import {
+  type ChatAgentState,
+  createConverter,
+  initialAgentState,
+  pipelineMessage,
+} from "./converter"
 
 const BuildDataUI = makeAssistantDataUI({ name: "build", render: BuildCard })
 
@@ -73,7 +79,7 @@ type LoaderState =
   | {
       status: "ready"
       meta: ConversationMeta
-      initialMessages: ThreadMessageLike[]
+      initialState: ChatAgentState
     }
 
 function ConversationLoader({
@@ -104,48 +110,38 @@ function ConversationLoader({
         const data = await res.json()
         if (cancelled) return
 
+        const persisted = (
+          data.messages as Array<{
+            id: string
+            role: string
+            content: string | null
+            created_at: string
+            metadata?: { build?: BuildData }
+          }>
+        ).filter((m) => m.role === "user" || m.role === "assistant")
+
+        // History is rehydrated as agent state rather than as thread messages,
+        // because state is what the transport round-trips: the next turn POSTs
+        // this back, which is how the backend reconstructs the conversation
+        // without re-reading Postgres.
         setState({
           status: "ready",
           meta: { title: data.title, created_at: data.created_at },
-          initialMessages: (
-            data.messages as Array<{
-              id: string
-              role: string
-              content: string | null
-              created_at: string
-              metadata?: { build?: BuildData }
-            }>
-          )
-            .filter((m) => m.role === "user" || m.role === "assistant")
-            .map((m) => {
-              const base = {
-                id: m.id,
-                role: m.role as "user" | "assistant",
-                createdAt: new Date(m.created_at),
-              }
-
-              // Reconstruct build data messages from persisted metadata
-              const buildData = m.metadata?.build
-              if (buildData) {
-                const buildPart: DataMessagePart<BuildData> = {
-                  type: "data" as const,
-                  name: "build",
-                  data: buildData,
-                }
-                return {
-                  ...base,
-                  content: [
-                    { type: "text" as const, text: m.content ?? "" },
-                    buildPart,
-                  ],
-                }
-              }
-
-              return {
-                ...base,
-                content: m.content ?? "",
-              }
-            }),
+          initialState: {
+            messages: persisted.map((m) => ({
+              role: m.role as "user" | "assistant",
+              content: m.content ?? "",
+            })),
+            // The most recent persisted build. Only the newest is carried
+            // forward — the converter hangs it off the last assistant message,
+            // and older builds stay where BuildCard's own fetch can reach them.
+            build:
+              persisted.reduce<BuildData | null>(
+                (acc, m) => m.metadata?.build ?? acc,
+                null,
+              ) ?? null,
+            pipeline: null,
+          },
         })
       } catch {
         if (!cancelled) {
@@ -177,7 +173,7 @@ function ConversationLoader({
     <ConversationMetaContext.Provider value={state.meta}>
       <ChatRuntimeMount
         conversationId={conversationId}
-        initialMessages={state.initialMessages}
+        initialState={state.initialState}
       >
         {children}
       </ChatRuntimeMount>
@@ -187,32 +183,87 @@ function ConversationLoader({
 
 function ChatRuntimeMount({
   conversationId,
-  initialMessages,
+  initialState,
   children,
 }: {
   conversationId?: string
-  initialMessages?: ThreadMessageLike[]
+  initialState?: ChatAgentState
   children: ReactNode
 }) {
   const conversationIdRef = useRef<string>(
     conversationId ?? crypto.randomUUID(),
   )
-  const adapter = useMemo(
-    () => createModelAdapter(conversationIdRef.current),
-    [],
-  )
+  const converter = useMemo(() => createConverter(), [])
 
-  const runtime = useLocalRuntime(adapter, {
-    initialMessages: initialMessages ?? [],
+  const runtime = useAssistantTransportRuntime<ChatAgentState>({
+    api: `${API_BASE}/api/v1/chat`,
+    // Reconnects to a turn that is still running on a worker — after a reload,
+    // a tab switch, or a dropped connection. This is what the 218-line manual
+    // retry loop in the old model-adapter used to do; the backend resolves
+    // which turn from the conversation id, since the protocol sends no run id.
+    resumeApi: `${API_BASE}/api/v1/chat/resume`,
+    initialState: initialState ?? initialAgentState,
+    converter,
+    // Async, and re-read per request on purpose: a Firebase ID token lives an
+    // hour, and a long build outlasts one.
+    headers: async (): Promise<Record<string, string>> => {
+      const token = await getAccessToken()
+      return token ? { Authorization: `Bearer ${token}` } : {}
+    },
+    // Our conversation id, not assistant-ui's threadId — that tracks its own
+    // thread list, which this app does not use.
+    body: { conversation_id: conversationIdRef.current },
   })
-
-  const phase = useConversationStateStore((s) => s.phase)
 
   useEffect(() => {
     return () => {
       useConversationStateStore.getState().reset()
     }
   }, [])
+
+  return (
+    <AssistantRuntimeProvider runtime={runtime}>
+      <BuildDataUI />
+      <AgentStateSync />
+      {children}
+    </AssistantRuntimeProvider>
+  )
+}
+
+/**
+ * Mirrors server state into the two Zustand stores the surrounding UI reads.
+ *
+ * These used to be written by `model-adapter.ts` as it parsed SSE frames, which
+ * meant the progress line and the build phase were client-side accumulations
+ * that a reconnect lost. They are derived from server state now; the stores
+ * remain only because other components already subscribe to them.
+ *
+ * Rendered inside AssistantRuntimeProvider because useAssistantTransportState
+ * reads from that context.
+ */
+function AgentStateSync() {
+  // The hook is typed against a generic external-state record; the shape is
+  // whatever `initialState` established, which is ChatAgentState.
+  const state = useAssistantTransportState(
+    (s) => s as unknown as ChatAgentState,
+  )
+  const phase = useConversationStateStore((s) => s.phase)
+
+  useEffect(() => {
+    usePipelineStatusStore.getState().setMessage(pipelineMessage(state))
+  }, [state])
+
+  useEffect(() => {
+    const store = useConversationStateStore.getState()
+    if (state.build) {
+      store.setBuildData(state.build)
+      store.setPhase("complete")
+    } else if (state.pipeline) {
+      // Progress only ever appears on the recommendation path, never during
+      // elicitation — so its presence is what distinguishes the two.
+      store.setPhase("recommending")
+    }
+  }, [state])
 
   // Listings for the recommended parts are fetched by BuildCard itself (from
   // the commerce service), so they work for historical builds too.
@@ -222,12 +273,7 @@ function ChatRuntimeMount({
     }
   }, [phase])
 
-  return (
-    <AssistantRuntimeProvider runtime={runtime}>
-      <BuildDataUI />
-      {children}
-    </AssistantRuntimeProvider>
-  )
+  return null
 }
 
 export { INITIAL_SUGGESTIONS }

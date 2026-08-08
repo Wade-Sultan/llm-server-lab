@@ -114,11 +114,20 @@ def test_chat_publishes_the_load_test_flag(monkeypatch) -> None:
     app.add_middleware(LoadTestMiddleware)
     app.include_router(chat_route.router, prefix="/api/v1")
 
-    body = {"messages": [{"role": "user", "content": "hi"}]}
+    # assistant-transport's request shape: the new turn arrives as an
+    # add-message command, and prior turns ride along in `state`.
+    body = {
+        "commands": [
+            {
+                "type": "add-message",
+                "message": {"role": "user", "parts": [{"type": "text", "text": "hi"}]},
+            }
+        ],
+        "state": None,
+    }
     with TestClient(app) as c:
-        # The response body is the relay, which needs a live Valkey; only the
-        # published payload matters here, and it is written before any streaming
-        # begins.
+        # The response body streams from Valkey, which is faked here; only the
+        # published payload matters, and it is written before streaming begins.
         c.post("/api/v1/chat", json=body, headers={HEADER: SECRET})
         c.post("/api/v1/chat", json=body)
 

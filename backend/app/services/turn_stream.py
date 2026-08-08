@@ -162,6 +162,67 @@ async def tail(
     )
 
 
+def active_turn_key(conversation_id: str) -> str:
+    # Same hash tag as the stream and the buffer, so a conversation's pointer
+    # and the stream it points at land on one shard.
+    return f"chat:active:{{{conversation_id}}}"
+
+
+async def set_active_turn(conversation_id: str, turn_id: str) -> bool:
+    """Record which turn is currently running for a conversation.
+
+    THIS IS WHAT MAKES RESUME POSSIBLE. assistant-transport's resume request
+    carries the thread id and its own last state, but no run id — so the server
+    is the only party that can say which turn a reconnecting browser should be
+    reattached to. Without this pointer a reload mid-build has no way back to a
+    turn that is still running, which is the case the whole dispatch
+    architecture exists to serve.
+
+    Last writer wins, deliberately. Turns for one conversation are serialised by
+    the Pub/Sub ordering key, so a second turn starting means the first is over.
+
+    TTL matches the stream's: a pointer that outlived the stream it names would
+    send a reconnecting client to a 404 instead of to a fresh turn.
+    """
+    client = await get_client()
+    if client is None:
+        return False
+    try:
+        await client.set(
+            active_turn_key(conversation_id),
+            turn_id,
+            ex=settings.TURN_STREAM_TTL_S,
+        )
+        return True
+    except (RedisError, OSError):
+        logger.warning(
+            "could not record active turn for conversation %s; a reconnect "
+            "mid-build will not find it",
+            conversation_id,
+            exc_info=True,
+        )
+        return False
+
+
+async def get_active_turn(conversation_id: str) -> str | None:
+    """The turn currently running for a conversation, if any.
+
+    A returned id is not a promise the turn is still running — it may have
+    finished, in which case its stream replays to completion and terminates
+    immediately, which is exactly what a reconnecting client wants anyway.
+    """
+    client = await get_client()
+    if client is None:
+        return None
+    try:
+        return await client.get(active_turn_key(conversation_id))
+    except (RedisError, OSError):
+        logger.warning(
+            "active-turn lookup failed for %s", conversation_id, exc_info=True
+        )
+        return None
+
+
 async def claim(turn_id: str, owner: str, ttl_s: int) -> bool:
     """Take exclusive ownership of a turn. False means someone else has it.
 
