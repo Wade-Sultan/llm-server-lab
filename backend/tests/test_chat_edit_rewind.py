@@ -171,6 +171,33 @@ def test_an_absent_parent_id_is_not_read_as_a_null_one(dispatches) -> None:
     assert payload["rewound"] is False
 
 
+def test_the_unaliased_spelling_does_not_rewind(dispatches) -> None:
+    """`parent_id` is not `parentId`, and must not be mistaken for a null one.
+
+    The field parses under its alias only, so an unaliased `parent_id` leaves it
+    None. But `extra` is "allow", so that key is kept as an extra and its name
+    joins `model_fields_set` — making a set-ness test alone read this body as
+    "parent is null, keep nothing" and delete the history it meant to append to.
+    Any value at all triggers it, including one that would never resolve to an
+    index, so the unresolvable-parent guard below is no protection either.
+    """
+    dispatches.post(
+        {
+            "commands": [_command("$2000")],
+            "state": _state("1440p", "What budget?"),
+            "parent_id": "1",
+        },
+    )
+
+    payload = dispatches.one()
+    assert [m["content"] for m in payload["messages"]] == [
+        "1440p",
+        "What budget?",
+        "$2000",
+    ]
+    assert payload["rewound"] is False
+
+
 def test_an_unresolvable_parent_id_appends_instead_of_deleting(dispatches) -> None:
     """Degrade to the old behaviour, never to data loss."""
     dispatches.post(

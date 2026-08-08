@@ -10,23 +10,32 @@ TWO NUMBERS, AND THEY ARE NOT THE SAME NUMBER.
            entry for models like `google/gemma-4-31b-it`, so its dollar estimate
            is not a substitute.
 
-WHY COST NEEDS A SECOND CALL WHEN STREAMING. langchain-openrouter surfaces
-`cost` in `response_metadata` only on the non-streaming path (chat_models.py
-:846). When streaming, the usage-only chunk is emitted as
-`AIMessageChunk(content="", usage_metadata=...)` and `_create_usage_metadata`
-copies token counts alone — cost is dropped before it ever reaches a caller.
+WHERE COST COMES FROM. As of langchain-openrouter 0.2.7 `cost` (and
+`cost_details`) arrive in `response_metadata` on BOTH paths, streaming included —
+the usage-only chunk carries them alongside the token counts. So the ordinary
+case needs no second request: `usage_from_message` reads the figure straight off
+the response.
 
-So streaming calls read it back from OpenRouter's generation endpoint, keyed by
-the generation id the package *does* preserve in `response_metadata["id"]`. That
-is OpenRouter's final accounting rather than an inference from token counts, so
-it is the more accurate figure, and the request happens after the last token has
-already been streamed to the user — it costs latency on the turn's bookkeeping,
-not on anything anyone is waiting to read.
+`fetch_generation_cost` remains the fallback for when it does not arrive, and
+`_finalize_usage` in chat_pipeline.py calls it only when `cost_usd` came back
+None. It reads OpenRouter's final accounting from the generation endpoint, keyed
+by the id preserved in `response_metadata["id"]`, after the last token has
+already been streamed — so it costs latency on the turn's bookkeeping, never on
+anything the user is waiting to read.
 
-The alternative was overriding `_astream` to re-emit cost inline. Rejected: it
-means duplicating the package's streaming loop, which would then rot silently on
-any upgrade, in exchange for saving one request on a path that has already spent
-several seconds talking to a model.
+An earlier version of this module had it the other way round: the package used to
+drop cost when streaming, so the generation lookup was the primary path rather
+than the fallback. If you are wondering why the fallback looks over-built for
+something that rarely fires, that is why.
+
+WHAT LANGSMITH DOES AND DOES NOT READ. Neither number above reaches LangSmith
+directly. Its OTel ingestion maps token counts only — `gen_ai.usage.input_tokens`
+, `output_tokens`, `total_tokens` and the two `*_token_details` — and there is no
+cost attribute in that mapping at all. Dollars are computed server-side by
+multiplying those counts against LangSmith's model price map, so a model it has
+no price entry for shows tokens and a blank cost no matter what this module
+attaches to the response. Making spend appear there is a matter of registering
+prices for the `google/gemma-*` slugs in LangSmith, not of sending it more data.
 """
 
 from __future__ import annotations
@@ -90,11 +99,18 @@ def get_chat_model(
         max_tokens=max_tokens,
         streaming=streaming,
         session_id=session_id,
-        # OpenRouter returns `cost` only when the request asks for it. The
-        # package sets stream_options.include_usage but never this, so without
-        # it there is no cost to read back on any path — including the
-        # non-streaming one, where the package would otherwise surface it.
-        model_kwargs={"usage": {"include": True}},
+        # NO `model_kwargs={"usage": {"include": True}}` HERE, however much the
+        # REST API's `usage.include` invites it. `model_kwargs` is splatted
+        # straight into `openrouter.chat.Chat.send_async`, whose signature is
+        # generated from the API spec and takes no `usage` parameter — so it
+        # raises TypeError before a request is ever made, on every call, on both
+        # the streaming and non-streaming paths. It does not degrade cost
+        # accounting; it removes chat.
+        #
+        # Cost still arrives: `fetch_generation_cost` reads it from the
+        # generation endpoint whenever `usage_from_message` came back without
+        # one, which the header describes and which the streaming path has
+        # always depended on regardless.
     )
 
 

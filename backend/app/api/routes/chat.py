@@ -133,9 +133,16 @@ async def chat(
     # from it are discarded, and the pipeline must see the conversation as it now
     # reads rather than as it was. Applied to `state` only inside the run (see
     # `_rewind`), so the base stays exactly what the client POSTed.
+    # `model_extra` is not redundant with `model_fields_set`. Because `extra` is
+    # "allow", a body carrying the *unaliased* key `parent_id` files it under
+    # extras AND adds that name to `model_fields_set`, while `req.parent_id` —
+    # which only `parentId` populates — stays None. Testing set-ness alone would
+    # read such a body as "parent is null" and wipe the conversation, the exact
+    # loss the absent-versus-null distinction above exists to prevent.
     keep = (
         transport.rewind_prefix(state["messages"], req.parent_id)
         if "parent_id" in req.model_fields_set
+        and "parent_id" not in (req.model_extra or {})
         else None
     )
     history = state["messages"] if keep is None else keep
