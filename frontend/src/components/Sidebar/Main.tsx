@@ -5,7 +5,7 @@ import {
   BookOpen,
   ChevronRight,
   Hammer,
-  MapPin,
+  //MapPin,
   MessagesSquare,
   Newspaper,
   ScrollText,
@@ -43,7 +43,7 @@ const items: Item[] = [
   { icon: Hammer, title: "New Build", path: "/build/new" },
   { icon: MessagesSquare, title: "My Builds", path: "/buildhistory" },
   { icon: BookOpen, title: "Guides", path: "/guides" },
-  { icon: MapPin, title: "Find a Builder", path: "/findbuilder" },
+  // { icon: MapPin, title: "Find a Builder", path: "/findbuilder" },
 ]
 
 export function Main() {
