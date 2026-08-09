@@ -58,9 +58,7 @@ async def list_posts(
     if tag:
         where.append(BlogPost.tags.any(tag))
 
-    count_result = await db.execute(
-        select(func.count(BlogPost.id)).where(*where)
-    )
+    count_result = await db.execute(select(func.count(BlogPost.id)).where(*where))
     count = count_result.scalar_one()
 
     rows_result = await db.execute(
@@ -74,9 +72,7 @@ async def list_posts(
         .limit(limit)
     )
 
-    return BlogPostList(
-        data=[_summary(row) for row in rows_result.all()], count=count
-    )
+    return BlogPostList(data=[_summary(row) for row in rows_result.all()], count=count)
 
 
 @router.get("/posts/{slug}", response_model=BlogPostDetail)

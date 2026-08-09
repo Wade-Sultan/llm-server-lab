@@ -10,7 +10,6 @@ const GUEST_ALLOWED_PATHS = [
   "/build/new",
   "/buildhistory",
   "/guides",
-  "/changelog",
   "/findbuilder",
 ]
 
