@@ -73,3 +73,6 @@ deploy/observability.md
 deploy/messaging.md
 deployment.md
 development.md
+
+# Local state written by `langgraph dev` (Studio). Regenerated per run.
+backend/.langgraph_api/

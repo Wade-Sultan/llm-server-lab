@@ -32,7 +32,13 @@ _graph: CompiledStateGraph | None = None
 _fallback_graph: CompiledStateGraph | None = None
 
 
-def _build(checkpointer: BaseCheckpointSaver) -> CompiledStateGraph:
+def build_graph() -> StateGraph:
+    """The graph's shape, uncompiled and with no checkpointer bound.
+
+    Split out from _build so LangGraph Studio can reach the topology without
+    reaching the Valkey checkpointer with it — the dev server brings its own
+    persistence and rejects a graph that arrives with one already attached.
+    """
     builder: StateGraph = StateGraph(ChatTurnState)
 
     builder.add_node("collect", nodes.collect)
@@ -52,7 +58,11 @@ def _build(checkpointer: BaseCheckpointSaver) -> CompiledStateGraph:
     builder.add_edge("present", "finalize")
     builder.add_edge("finalize", END)
 
-    return builder.compile(checkpointer=checkpointer)
+    return builder
+
+
+def _build(checkpointer: BaseCheckpointSaver) -> CompiledStateGraph:
+    return build_graph().compile(checkpointer=checkpointer)
 
 
 async def get_graph() -> CompiledStateGraph:

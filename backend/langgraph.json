@@ -1,0 +1,10 @@
+{
+  "//": "LangGraph Studio only. Nothing in app/ reads this, no image installs the",
+  "//dev": "server, and prod drives the same graph from app/services/chat_pipeline.py",
+  "//run": "over Pub/Sub instead. See 'Studio' in deploy/observability.md.",
+  "dependencies": ["."],
+  "graphs": {
+    "chat_turn": "./app/services/graph/graph.py:build_graph"
+  },
+  "env": "../.env"
+}
