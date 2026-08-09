@@ -3,7 +3,10 @@
 import Image from "next/image"
 import { useEffect, useState } from "react"
 
+import { useLogoAssets } from "@/hooks/useLogoAssets"
+
 export function LoadingIndicator({ message }: { message: string }) {
+  const { icon } = useLogoAssets()
   const [dots, setDots] = useState(0)
 
   useEffect(() => {
@@ -19,7 +22,7 @@ export function LoadingIndicator({ message }: { message: string }) {
     return (
       <div className="flex items-center py-1">
         <Image
-          src="/assets/images/palladium-logo.svg"
+          src={icon}
           alt=""
           width={18}
           height={18}
@@ -32,7 +35,7 @@ export function LoadingIndicator({ message }: { message: string }) {
   return (
     <div className="flex items-center gap-2.5 py-1">
       <Image
-        src="/assets/images/palladium-logo.svg"
+        src={icon}
         alt=""
         width={18}
         height={18}

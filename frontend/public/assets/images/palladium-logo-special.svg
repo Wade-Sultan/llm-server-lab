@@ -1,0 +1,21 @@
+<svg width="300" height="300" viewBox="0 0 300 300" fill="none" xmlns="http://www.w3.org/2000/svg">
+<!-- Stop offsets are equal-AREA quantiles of the star itself, not even
+     spacing across the bounding box. The star fills only ~29% of its box,
+     with the mass bunched at the centre of this diagonal axis, so evenly
+     spaced stops gave the two middle bands ~40% of the visible star each
+     and the outer bands ~0.1% - it read as a green star with red and
+     magenta invisible in the tips. These offsets give every band ~16.7%.
+     Recompute them if the star geometry ever changes. -->
+<defs>
+<linearGradient id="palladium-rainbow-icon" x1="0" y1="0" x2="1" y2="1">
+<stop offset="0.148" stop-color="#FF0000"/>
+<stop offset="0.368" stop-color="#FF7A00"/>
+<stop offset="0.450" stop-color="#FFE500"/>
+<stop offset="0.500" stop-color="#00E53D"/>
+<stop offset="0.550" stop-color="#00B2FF"/>
+<stop offset="0.632" stop-color="#4D00FF"/>
+<stop offset="0.852" stop-color="#FF00B8"/>
+</linearGradient>
+</defs>
+<path d="M150 0L171.926 97.0664L256.066 43.934L202.934 128.074L300 150L202.934 171.926L256.066 256.066L171.926 202.934L150 300L128.074 202.934L43.934 256.066L97.0664 171.926L0 150L97.0664 128.074L43.934 43.934L128.074 97.0664L150 0Z" fill="url(#palladium-rainbow-icon)"/>
+</svg>

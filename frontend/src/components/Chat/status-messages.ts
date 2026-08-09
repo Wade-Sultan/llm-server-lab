@@ -24,41 +24,64 @@
  * punctuation at all next to the animation.
  */
 
+import type { SiteMode } from "@/hooks/useSiteMode"
+
 /**
- * Shown while the first turn of a conversation gets going.
+ * The pools, by site mode and then by which wait they cover.
  *
- * Distinct from the generic pool because the first turn is the one wait the user
- * has no context for yet — nothing is on screen, so the copy carries the weight
- * of "something is happening" rather than "still going".
+ * TWO DIMENSIONS. `firstTurn` versus `thinking` is about *when* in a
+ * conversation the wait happens; normal versus degenerate is about what voice
+ * the site is speaking in. They are independent, so this is a 2x2 rather than
+ * one list with special cases in it.
+ *
+ * `firstTurn` is distinct from `thinking` because the first turn is the one wait
+ * the user has no context for yet — nothing is on screen, so the copy carries
+ * the weight of "something is happening" rather than "still going".
+ *
+ * The pools are deliberately NOT required to be the same length. Picking scales
+ * a random fraction by whichever pool was selected, so degenerate can carry
+ * three openers against normal's five without anything needing to line up.
  */
-export const FIRST_TURN_MESSAGES = [
-  "Booting up…",
-  "Starting up…",
-  "Warming up…",
-  "Spinning up…",
-  "Getting started…",
-] as const
-
-/** Shown for every later turn that is not on a fixed build step. */
-export const THINKING_MESSAGES = [
-  "Thinking…",
-  "Pondering…",
-  "Just a moment…",
-  "Working on it…",
-  "Mulling it over…",
-  "Considering your options…",
-  "Weighing it up…",
-  "Give me a second…",
-] as const
+const STATUS_MESSAGES = {
+  normal: {
+    firstTurn: [
+      "Booting up…",
+      "Starting up…",
+      "Warming up…",
+      "Spinning up…",
+      "Getting started…",
+    ],
+    thinking: [
+      "Thinking…",
+      "Pondering…",
+      "Just a moment…",
+      "Working on it…",
+      "Mulling it over…",
+      "Considering your options…",
+      "Weighing it up…",
+      "Give me a second…",
+    ],
+  },
+  degenerate: {
+    firstTurn: ["Locking in…", "Entering flow state…", "I am the sigma…"],
+    thinking: ["Cooking…", "Bet…", "Low key…", "High key…", "Vibing…"],
+  },
+} as const satisfies Record<
+  SiteMode,
+  { firstTurn: readonly string[]; thinking: readonly string[] }
+>
 
 /**
- * One phrase from the pool that fits this turn.
+ * One phrase from whichever pool fits this turn and this mode.
  *
  * Call this once per message rather than per render — it is random, so a caller
  * that invokes it in a render body deals a fresh phrase on every token that
  * arrives.
  */
-export function pickStatusMessage(isFirstTurn: boolean): string {
-  const pool = isFirstTurn ? FIRST_TURN_MESSAGES : THINKING_MESSAGES
+export function pickStatusMessage(
+  isFirstTurn: boolean,
+  mode: SiteMode,
+): string {
+  const pool = STATUS_MESSAGES[mode][isFirstTurn ? "firstTurn" : "thinking"]
   return pool[Math.floor(Math.random() * pool.length)]
 }

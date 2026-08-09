@@ -36,6 +36,7 @@ import { pickStatusMessage } from "@/components/Chat/status-messages"
 import { LoadingIndicator } from "@/components/Common/LoadingIndicator"
 import { Button } from "@/components/ui/button"
 import { usePipelineStatusStore } from "@/hooks/usePipelineStatus"
+import { useSiteMode } from "@/hooks/useSiteMode"
 import { cn } from "@/lib/utils"
 
 export const Thread: FC = () => {
@@ -226,9 +227,16 @@ const AssistantMessage: FC = () => {
   // it. Read at mount, which is when the pair lands: the backend's first
   // operation sets both messages (see `_begin_assistant_turn` in transport.py).
   const isFirstTurn = useAuiState((s) => s.thread.messages.length <= 2)
+  const siteMode = useSiteMode()
   // Once per mounted message, never per render — `pickStatusMessage` is random,
   // and this component re-renders on every token that arrives.
-  const [idleMessage] = useState(() => pickStatusMessage(isFirstTurn))
+  //
+  // Sampling the mode at mount rather than tracking it is safe because the mode
+  // cannot change while a turn runs: both composers refuse to send mid-run (send
+  // is disabled on `thread.isRunning`, and the Enter handler returns early), and
+  // the composer is the only way to enter a code. If that ever stops being true
+  // the phrase is merely stale for one turn, which is cosmetic.
+  const [idleMessage] = useState(() => pickStatusMessage(isFirstTurn, siteMode))
 
   return (
     <MessagePrimitive.Root

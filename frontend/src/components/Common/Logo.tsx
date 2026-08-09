@@ -1,14 +1,9 @@
 "use client"
 import Image from "next/image"
 import Link from "next/link"
-import { useEffect, useState } from "react"
 
-import { useTheme } from "@/components/theme-provider"
+import { useLogoAssets } from "@/hooks/useLogoAssets"
 import { cn } from "@/lib/utils"
-
-const iconLogo = "/assets/images/palladium-logo.svg"
-const fullLogoDark = "/assets/images/palladium-combined-dark-mode.svg"
-const fullLogoLight = "/assets/images/palladium-combined-light-mode.svg"
 
 interface LogoProps {
   variant?: "full" | "icon" | "responsive"
@@ -21,14 +16,7 @@ export function Logo({
   className,
   asLink = true,
 }: LogoProps) {
-  const { resolvedTheme } = useTheme()
-  const [mounted, setMounted] = useState(false)
-
-  useEffect(() => setMounted(true), [])
-
-  const isDark = mounted && resolvedTheme === "dark"
-
-  const fullLogo = isDark ? fullLogoDark : fullLogoLight
+  const { icon: iconLogo, full: fullLogo } = useLogoAssets()
 
   const content =
     variant === "responsive" ? (
