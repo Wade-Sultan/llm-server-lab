@@ -2,6 +2,7 @@ from app.models.reference_build import ReferenceBuild, ReferenceBuildPart
 
 from .ai_catalog import AIModel, AIModelFamily, AITask, AIWorkload
 from .benchmarks import BenchmarkType, CPUBenchmarkScores, GPUBenchmarkScores
+from .blog import BlogPost, BlogPostStatus
 from .build_session import BuildSession, BuildSessionStatus, ModuleDecision
 from .conversation import Conversation
 from .discovery import DiscoveredItem, DiscoveryRun, DiscoverySource

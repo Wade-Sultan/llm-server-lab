@@ -20,6 +20,7 @@ import {
   Gamepad2,
   AppWindow,
   BrainCircuit,
+  Newspaper,
   Radar,
 } from 'lucide-react';
 
@@ -49,6 +50,8 @@ const navItems: NavItem[] = [
   { label: 'Games', href: '/games', icon: Gamepad2 },
   { label: 'Software', href: '/software', icon: AppWindow },
   { label: 'AI Models', href: '/ai-models', icon: BrainCircuit },
+  { type: 'separator', label: 'Content' },
+  { label: 'Blog', href: '/blog', icon: Newspaper },
   { type: 'separator', label: 'Discovery' },
   { label: 'Discovery', href: '/discovery', icon: Radar },
   { type: 'separator', label: 'Users' },

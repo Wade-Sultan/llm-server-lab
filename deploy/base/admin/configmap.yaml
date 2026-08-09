@@ -4,3 +4,15 @@ metadata:
   name: admin-config
 data:
   BACKEND_API_URL: "http://builder"
+  # Public GCS bucket holding blog cover images and in-post images. Written by
+  # the admin's /api/blog/upload route using the palladium-admin GSA (Workload
+  # Identity — see deploy/overlays/prod/patches/workload-identity.yaml), and
+  # read directly by browsers from storage.googleapis.com.
+  #
+  # Not a secret: the bucket is public-read by design, and the name appears in
+  # every image URL on the blog. Overridden per overlay if a separate bucket is
+  # ever wanted for local authoring.
+  #
+  # If this key is absent the upload route returns a 400 explaining it is
+  # unconfigured — posting still works, image upload does not.
+  BLOG_MEDIA_BUCKET: "palladium-blog-media"

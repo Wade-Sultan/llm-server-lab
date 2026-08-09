@@ -48,3 +48,28 @@ spec:
             - name: gcp-adc
               mountPath: /var/run/gcp
               readOnly: true
+---
+# admin only needs ADC lazily, for blog image uploads to GCS — unlike the two
+# above it starts fine without credentials, and only /api/blog/upload fails.
+# Mounted anyway so authoring a post locally behaves the same as in prod, where
+# the credentials come from Workload Identity instead.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: admin
+spec:
+  template:
+    spec:
+      volumes:
+        - name: gcp-adc
+          secret:
+            secretName: gcp-adc
+      containers:
+        - name: admin
+          env:
+            - name: GOOGLE_APPLICATION_CREDENTIALS
+              value: /var/run/gcp/application_default_credentials.json
+          volumeMounts:
+            - name: gcp-adc
+              mountPath: /var/run/gcp
+              readOnly: true

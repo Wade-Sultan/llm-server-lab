@@ -213,29 +213,29 @@ model Gpu {
 }
 
 model Motherboard {
-  id             String  @id @db.Uuid
-  pcPart         PcPart  @relation(fields: [id], references: [id], onDelete: Cascade)
-  socket         String?
-  formFactor     String? @map("form_factor")
-  ddrGeneration  String? @map("ddr_generation")
-  memorySlots    Int?    @map("memory_slots")
-  hasWifi        Boolean @default(false) @map("has_wifi")
-  m2Slots        Int?    @map("m2_slots")
-  m2PcieGen      Int?    @map("m2_pcie_gen")
-  chipset        String?
-  maxMemoryGb    Int?    @map("max_memory_gb")
-  sataPorts      Int?    @map("sata_ports")
-  pcieX16Slots   Int?    @map("pcie_x16_slots")
-  pcieGeneration Int?    @map("pcie_generation")
-  hasBluetooth   Boolean @default(false) @map("has_bluetooth")
-  usbTypeACount  Int?    @map("usb_type_a_count")
-  usbTypeCCount  Int?    @map("usb_type_c_count")
-  audioCodec     String? @map("audio_codec")
+  id                String   @id @db.Uuid
+  pcPart            PcPart   @relation(fields: [id], references: [id], onDelete: Cascade)
+  socket            String?
+  formFactor        String?  @map("form_factor")
+  ddrGeneration     String?  @map("ddr_generation")
+  memorySlots       Int?     @map("memory_slots")
+  hasWifi           Boolean  @default(false) @map("has_wifi")
+  m2Slots           Int?     @map("m2_slots")
+  m2PcieGen         Int?     @map("m2_pcie_gen")
+  chipset           String?
+  maxMemoryGb       Int?     @map("max_memory_gb")
+  sataPorts         Int?     @map("sata_ports")
+  pcieX16Slots      Int?     @map("pcie_x16_slots")
+  pcieGeneration    Int?     @map("pcie_generation")
+  hasBluetooth      Boolean  @default(false) @map("has_bluetooth")
+  usbTypeACount     Int?     @map("usb_type_a_count")
+  usbTypeCCount     Int?     @map("usb_type_c_count")
+  audioCodec        String?  @map("audio_codec")
   // Server-board spec. hasIpmi is the clearest single signal that a board is a
   // server board rather than a workstation board.
-  supportsEcc    Boolean? @map("supports_ecc")
-  hasIpmi        Boolean? @map("has_ipmi")
-  memoryChannels Int?     @map("memory_channels")
+  supportsEcc       Boolean? @map("supports_ecc")
+  hasIpmi           Boolean? @map("has_ipmi")
+  memoryChannels    Int?     @map("memory_channels")
   // Empty = unconstrained. Populated is what stops a TRX50/WRX90 board being
   // paired with unbuffered kits it will not POST on.
   memoryModuleTypes String[] @map("memory_module_types")
@@ -767,4 +767,31 @@ model DiscoveredItem {
   createdAt            DateTime     @default(now()) @map("created_at")
 
   @@map("discovered_items")
+}
+
+// --- Blog ---
+
+// Editorial posts written here and read by the public frontend through the
+// FastAPI /blog endpoints. Body is Markdown (the editor is WYSIWYG but
+// serializes to Markdown), so nothing has to sanitize author HTML downstream.
+// Table owned by backend alembic migration a1c3e5b7d9f0.
+model BlogPost {
+  id              String    @id @default(uuid()) @db.Uuid
+  slug            String    @unique
+  title           String
+  excerpt         String?
+  contentMarkdown String    @default("") @map("content_markdown")
+  coverImageUrl   String?   @map("cover_image_url")
+  coverImageAlt   String?   @map("cover_image_alt")
+  authorName      String?   @map("author_name")
+  tags            String[]  @default([])
+  status          String    @default("draft") // draft | published
+  publishedAt     DateTime? @map("published_at")
+  readingMinutes  Int?      @map("reading_minutes")
+  isFeatured      Boolean   @default(false) @map("is_featured")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  @@index([status, publishedAt], map: "ix_blog_posts_status_published_at")
+  @@map("blog_posts")
 }

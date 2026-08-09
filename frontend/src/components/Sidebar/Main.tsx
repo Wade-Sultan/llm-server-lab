@@ -7,6 +7,7 @@ import {
   Hammer,
   MapPin,
   MessagesSquare,
+  Newspaper,
   ScrollText,
   Sparkles,
 } from "lucide-react"
@@ -48,7 +49,11 @@ const items: Item[] = [
 export function Main() {
   const { isMobile, setOpenMobile } = useSidebar()
   const currentPath = usePathname()
-  const [moreOpen, setMoreOpen] = useState(false)
+  // Open by default when the current page lives under "More", so the active
+  // item isn't hidden inside a collapsed group.
+  const [moreOpen, setMoreOpen] = useState(
+    () => currentPath.startsWith("/blog") || currentPath === "/changelog",
+  )
 
   const handleMenuClick = () => {
     if (isMobile) {
@@ -117,7 +122,21 @@ export function Main() {
                             </SidebarMenuSubButton>
                           </SidebarMenuSubItem>
                           <SidebarMenuSubItem>
-                            <SidebarMenuSubButton asChild>
+                            <SidebarMenuSubButton
+                              asChild
+                              isActive={currentPath.startsWith("/blog")}
+                            >
+                              <Link href="/blog" onClick={handleMenuClick}>
+                                <Newspaper className="size-3.5" />
+                                <span>Blog</span>
+                              </Link>
+                            </SidebarMenuSubButton>
+                          </SidebarMenuSubItem>
+                          <SidebarMenuSubItem>
+                            <SidebarMenuSubButton
+                              asChild
+                              isActive={currentPath === "/changelog"}
+                            >
                               <Link href="/changelog" onClick={handleMenuClick}>
                                 <ScrollText className="size-3.5" />
                                 <span>Changelog</span>
