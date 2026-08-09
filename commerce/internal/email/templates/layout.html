@@ -1,0 +1,126 @@
+{{/*
+  Shared shell for every transactional email. Pages supply "preheader" and
+  "content"; everything else (fonts, masthead, card, footer) lives here so
+  branding changes land in one file.
+
+  Comments in this package are Go template comments, not HTML ones, so they
+  are stripped before send rather than riding along in every recipient's
+  message source.
+
+  On the table markup: cellpadding/cellspacing/border="0", width="100%" and
+  align="center" are deprecated presentational attributes everywhere except
+  here. Outlook renders mail through Word rather than a browser engine, reads
+  those attributes, and ignores the CSS equivalents (border-collapse, width,
+  margin:0 auto). Removing them looks like a cleanup and shows up as broken
+  spacing and left-aligned content in desktop Outlook only. Layout that CSS
+  alone can carry is inline styles; this set is deliberate.
+*/}}
+{{define "layout"}}<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{.Subject}}</title>
+    {{/*
+      Raleway (headings) and DM Sans (body) match the website. Apple Mail, iOS
+      Mail and Samsung Mail honour this link; Gmail and Outlook strip it and
+      fall back to the Helvetica/Arial tail of every font-family below, which
+      is why each one carries the full stack rather than just the webfont.
+    */}}
+    <link
+      href="https://fonts.googleapis.com/css2?family=Raleway:wght@600;700&family=DM+Sans:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body style="margin:0; padding:0; background-color:#f4f4f5; font-family:'DM Sans', 'Helvetica Neue', Helvetica, Arial, sans-serif; -webkit-font-smoothing:antialiased;">
+    {{/*
+      Preheader: the grey snippet inboxes show next to the subject. Hidden in
+      the body itself, then padded so the client does not pull footer text in
+      after it.
+    */}}
+    <div style="display:none; max-height:0; overflow:hidden; opacity:0; mso-hide:all;">
+      {{template "preheader" .}}
+      &#8199;&#847;&#8199;&#847;&#8199;&#847;&#8199;&#847;&#8199;&#847;&#8199;&#847;&#8199;&#847;&#8199;&#847;&#8199;&#847;&#8199;&#847;&#8199;&#847;&#8199;&#847;&#8199;&#847;&#8199;&#847;
+    </div>
+
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#f4f4f5; padding:32px 16px;">
+      <tr>
+        <td align="center">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:560px; margin:0 auto;">
+
+            {{/*
+              Masthead. The mark is a PNG, not the site's SVG, because Gmail
+              drops SVG entirely. Served at 100px and drawn at 44 so it stays
+              sharp on retina. The wordmark is live Raleway text rather than
+              part of the image so it survives the images-blocked-by-default
+              state that Gmail and Outlook start in.
+            */}}
+            <tr>
+              <td align="center" style="padding-bottom:24px;">
+                <a href="https://palladiumtech.ai" style="text-decoration:none;">
+                  {{/*
+                    width/height stay as attributes, not CSS: Outlook reads the
+                    attributes and drops the properties, so the CSS copy would
+                    be the redundant one. border/outline are the standard reset
+                    for the frame older clients draw around a linked image.
+                  */}}
+                  <img
+                    src="https://palladiumtech.ai/assets/images/palladium-logo-main.png"
+                    width="44"
+                    height="44"
+                    alt="Palladium"
+                    style="display:inline-block; vertical-align:middle; border:0; outline:none;"
+                  />
+                  <span style="display:inline-block; vertical-align:middle; padding-left:12px; font-family:'Raleway', 'Helvetica Neue', Helvetica, Arial, sans-serif; font-size:24px; font-weight:700; letter-spacing:-0.02em; color:#18181b;">
+                    Palladium
+                  </span>
+                </a>
+              </td>
+            </tr>
+
+            <tr>
+              <td style="background-color:#ffffff; border-radius:12px; padding:40px;">
+                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                  {{template "content" .}}
+                </table>
+              </td>
+            </tr>
+
+            <tr>
+              <td align="center" style="padding-top:24px; font-family:'DM Sans', 'Helvetica Neue', Helvetica, Arial, sans-serif; font-size:12px; line-height:1.5; color:#a1a1aa;">
+                <a href="https://palladiumtech.ai" style="color:#a1a1aa; text-decoration:none;">palladiumtech.ai</a>
+              </td>
+            </tr>
+
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>
+{{end}}
+
+{{/*
+  Shared building blocks. Pages compose these instead of repeating the inline
+  styles, since every style here has to be inline (email clients discard most
+  of a <style> block) and drift between templates is otherwise invisible until
+  a message lands in someone's inbox looking wrong.
+
+  Each takes the string it renders as its argument, not the page data.
+*/}}
+
+{{define "heading"}}
+<tr>
+  <td style="font-family:'Raleway', 'Helvetica Neue', Helvetica, Arial, sans-serif; font-size:22px; font-weight:700; letter-spacing:-0.01em; color:#18181b; padding-bottom:16px;">
+    {{.}}
+  </td>
+</tr>
+{{end}}
+
+{{define "footnote"}}
+<tr>
+  <td style="font-family:'DM Sans', 'Helvetica Neue', Helvetica, Arial, sans-serif; font-size:13px; line-height:1.5; color:#a1a1aa; border-top:1px solid #e4e4e7; padding-top:16px;">
+    {{.}}
+  </td>
+</tr>
+{{end}}

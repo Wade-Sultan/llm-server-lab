@@ -1,41 +1,25 @@
-<!doctype html>
-<html>
-  <body style="margin:0; padding:0; background-color:#f4f4f5; font-family:Helvetica, Arial, sans-serif;">
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f4f4f5; padding:32px 16px;">
-      <tr>
-        <td>
-          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px; margin:0 auto; background-color:#ffffff; border-radius:12px; padding:40px;">
-            <tr>
-              <td style="font-size:20px; font-weight:bold; color:#18181b; padding-bottom:16px;">
-                Welcome to Palladium
-              </td>
-            </tr>
-            <tr>
-              <td style="font-size:15px; line-height:1.6; color:#3f3f46; padding-bottom:24px;">
-                Your account is ready. Tell us what you want your PC to do &mdash;
-                gaming, creative work, AI &mdash; and we&rsquo;ll walk you through
-                picking every part, with live prices and compatibility checked
-                along the way.
-              </td>
-            </tr>
-            <tr>
-              <td style="padding-bottom:24px; text-align:center;">
-                <a href="https://palladiumtech.ai/build/new"
-                   style="display:inline-block; background-color:#18181b; color:#ffffff; text-decoration:none; font-size:15px; font-weight:bold; padding:12px 28px; border-radius:8px;">
-                  Start a build
-                </a>
-              </td>
-            </tr>
-            <tr>
-              <td style="font-size:13px; line-height:1.5; color:#a1a1aa; border-top:1px solid #e4e4e7; padding-top:16px;">
-                This email was sent to {{.Email}} because an account was created
-                with it at palladiumtech.ai. If that wasn&rsquo;t you, reply to
-                this email and we&rsquo;ll sort it out.
-              </td>
-            </tr>
-          </table>
-        </td>
-      </tr>
-    </table>
-  </body>
-</html>
+{{define "preheader"}}Your account is ready. Tell us what you want your PC to do and we will handle the parts.{{end}}
+
+{{define "content"}}
+{{template "heading" "Welcome to Palladium!"}}
+
+<tr>
+  <td style="font-family:'DM Sans', 'Helvetica Neue', Helvetica, Arial, sans-serif; font-size:15px; line-height:1.6; color:#3f3f46; padding-bottom:24px;">
+    This e-mail confirms that your account is ready. Tell us what you want your
+    PC to do, whether it be gaming, creative work, AI, or even something else,
+    and we&rsquo;ll walk you through picking every part, with live prices and
+    compatibility checked along the way.
+  </td>
+</tr>
+
+<tr>
+  <td align="center" style="padding-bottom:24px;">
+    <a href="https://palladiumtech.ai/build/new"
+       style="display:inline-block; background-color:#18181b; color:#ffffff; text-decoration:none; font-family:'Raleway', 'Helvetica Neue', Helvetica, Arial, sans-serif; font-size:15px; font-weight:600; padding:12px 28px; border-radius:8px;">
+      Start a build
+    </a>
+  </td>
+</tr>
+
+{{template "footnote" (printf "This email was sent to %s because an account was created with it at palladiumtech.ai. If that wasn't you, reply to this email and we'll sort it out." .Email)}}
+{{end}}

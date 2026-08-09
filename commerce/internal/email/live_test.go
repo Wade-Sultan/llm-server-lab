@@ -28,16 +28,27 @@ func TestSendLive(t *testing.T) {
 		t.Fatal("RESEND_API_KEY is empty — nothing would be sent")
 	}
 
-	builders := map[string]func(string) (Message, error){
-		"welcome": WelcomeMessage,
+	builders := map[string]func() (Message, error){
+		"welcome": func() (Message, error) { return WelcomeMessage(to) },
 	}
 	if os.Getenv("RESEND_LIVE_ALL") != "" {
-		builders["account deleted"] = AccountDeletedMessage
+		builders["account deleted"] = func() (Message, error) { return AccountDeletedMessage(to) }
+		builders["price alert"] = func() (Message, error) {
+			return PriceAlertMessage(PriceAlert{
+				Email:       to,
+				PartName:    "AMD Ryzen 7 9800X3D",
+				Marketplace: "Amazon",
+				OldCents:    54999,
+				NewCents:    42950,
+				Currency:    "USD",
+				URL:         "https://palladiumtech.ai",
+			})
+		}
 	}
 
 	for name, build := range builders {
 		t.Run(name, func(t *testing.T) {
-			msg, err := build(to)
+			msg, err := build()
 			if err != nil {
 				t.Fatalf("build: %v", err)
 			}
