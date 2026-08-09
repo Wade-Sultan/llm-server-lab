@@ -70,7 +70,13 @@ def _get_publisher() -> tuple[Any, str] | None:
         # which is a good failure but a confusing one if you have not seen it.
         client = pubsub_v1.PublisherClient(
             publisher_options=pubsub_v1.types.PublisherOptions(
-                enable_message_ordering=True
+                enable_message_ordering=True,
+                # Pub/Sub carries its own OTel support rather than having an
+                # instrumentation package, and it ships off. On, it injects
+                # trace context into the message so the worker's turn continues
+                # the API request's trace instead of starting an orphan — which
+                # is the whole reason a queued turn is traceable end to end.
+                enable_open_telemetry_tracing=True,
             )
         )
         path = client.topic_path(_project_id(), settings.PUBSUB_TOPIC)

@@ -90,6 +90,60 @@ def _build_scope_filter_processor(inner):
     return ScopeFilterSpanProcessor(inner)
 
 
+def _instrument_infra(fastapi_app) -> None:
+    """Attach span emission to the non-LLM half of a turn.
+
+    These are the spans the scope filter deliberately keeps out of LangSmith:
+    the inbound request, the SQL it runs, the Valkey checkpoint reads, the
+    outbound HTTP. They exist for Cloud Trace, and they are the reason the
+    Google pipe is worth turning on at all — without them it carries the same
+    LLM spans LangSmith already has and nothing else.
+
+    Managed OpenTelemetry for GKE does not supply any of this. It runs a
+    collector and injects OTEL_EXPORTER_OTLP_ENDPOINT; instrumenting the
+    process is still the process's job.
+
+    Each instrumentor is caught separately — a missing optional dependency or
+    a version skew in one should not cost the others.
+    """
+    if fastapi_app is not None:
+        try:
+            from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+
+            # instrument_app, not the global instrument(): configure_tracing runs
+            # from the lifespan hook, which is long after app.main built the
+            # FastAPI object, and the global form only patches instances
+            # constructed after it is called.
+            FastAPIInstrumentor.instrument_app(fastapi_app)
+        except Exception:
+            logger.warning("FastAPI OTel instrumentation failed", exc_info=True)
+
+    try:
+        from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
+
+        SQLAlchemyInstrumentor().instrument()
+    except Exception:
+        logger.warning("SQLAlchemy OTel instrumentation failed", exc_info=True)
+
+    try:
+        from opentelemetry.instrumentation.redis import RedisInstrumentor
+
+        RedisInstrumentor().instrument()
+    except Exception:
+        logger.warning("Redis/Valkey OTel instrumentation failed", exc_info=True)
+
+    try:
+        from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+
+        # Catches ChatOpenRouter too, which reaches OpenRouter over a bare httpx
+        # client rather than the openai SDK. Those spans carry no prompt or
+        # token counts — they are transport timing, which is what Cloud Trace
+        # wants and what the LangSmith scope filter is right to drop.
+        HTTPXClientInstrumentor().instrument()
+    except Exception:
+        logger.warning("httpx OTel instrumentation failed", exc_info=True)
+
+
 def _instrument_llm_clients(langsmith_enabled: bool) -> None:
     """Attach span emission to the LLM calls LangChain does not already cover.
 
@@ -129,12 +183,15 @@ def _instrument_llm_clients(langsmith_enabled: bool) -> None:
         logger.warning("litellm callback setup failed", exc_info=True)
 
 
-def configure_tracing(service_name: str) -> None:
+def configure_tracing(service_name: str, fastapi_app=None) -> None:
     """Install the tracer provider for this process. Idempotent.
 
     service_name distinguishes the API pod from the worker pod in both
     backends — they run the same image and the same pipeline, so without it a
     trace gives no clue which one produced it.
+
+    fastapi_app is the object to attach request instrumentation to; the worker
+    has no such object and passes nothing.
     """
     global _provider
 
@@ -197,11 +254,21 @@ def configure_tracing(service_name: str) -> None:
         provider.add_span_processor(
             _build_scope_filter_processor(BatchSpanProcessor(langsmith_exporter))
         )
+        # Attaches LangChain's tracer to every chain, graph node and model call.
+        # Without it LangChain never instruments anything and the LangSmith pipe
+        # below carries only the DSPy/litellm spans — ChatOpenRouter subclasses
+        # BaseChatModel over raw httpx, so the openai instrumentor does not see
+        # the chat pipeline either, and the graph goes entirely untraced.
+        os.environ["LANGSMITH_TRACING"] = "true"
         # Makes LangGraph/LangChain emit OTel spans instead of posting to
         # LangSmith's own REST API. Set here rather than in the environment so
         # it cannot be true while this provider is absent, which would send the
         # graph's spans nowhere at all.
-        os.environ["LANGSMITH_OTEL_ENABLED"] = "true"
+        #
+        # LANGSMITH_TRACING_MODE, not the older LANGSMITH_OTEL_ENABLED: that one
+        # is now a legacy alias resolving to "hybrid", which keeps the REST
+        # posts *as well as* the spans and bills LangSmith for each run twice.
+        os.environ["LANGSMITH_TRACING_MODE"] = "otel"
         logger.info(
             "tracing: exporting LLM spans to LangSmith project %r",
             settings.LANGSMITH_PROJECT,
@@ -211,6 +278,7 @@ def configure_tracing(service_name: str) -> None:
     _provider = provider
 
     _instrument_llm_clients(langsmith_enabled=bool(langsmith_key))
+    _instrument_infra(fastapi_app)
 
 
 def shutdown_tracing() -> None:

@@ -187,7 +187,14 @@ class Worker:
 
         from app.core.pubsub import _project_id  # deliberate: same resolution logic
 
-        self._subscriber = pubsub_v1.SubscriberClient()
+        # Matches the publisher in app/core/pubsub.py: this is the side that
+        # reads the injected trace context back out, so a turn's worker spans
+        # hang off the /chat request that queued it.
+        self._subscriber = pubsub_v1.SubscriberClient(
+            subscriber_options=pubsub_v1.types.SubscriberOptions(
+                enable_open_telemetry_tracing=True
+            )
+        )
         path = self._subscriber.subscription_path(
             _project_id(), settings.PUBSUB_SUBSCRIPTION
         )

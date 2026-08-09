@@ -11,6 +11,15 @@ kind: Kustomization
 labels:
   - pairs:
       app.kubernetes.io/part-of: palladium
+    # Managed OpenTelemetry selects PODS, not Deployments. Without this the
+    # label lands on Deployment metadata only, the Instrumentation CR in
+    # deploy/observability.md §4d matches nothing, OTEL_EXPORTER_OTLP_ENDPOINT
+    # is never injected, and tracing.py quietly skips the Google exporter —
+    # with a green deploy and no error anywhere.
+    #
+    # Distinct from includeSelectors, which stays off for the reason above:
+    # this adds a label to the pod template, it does not touch spec.selector.
+    includeTemplates: true
 
 resources:
   - builder/serviceaccount.yaml

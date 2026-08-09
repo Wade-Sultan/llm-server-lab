@@ -60,7 +60,7 @@ async def lifespan(app: FastAPI):
     # Before the warm-up task, so the DSPy/litellm import chain it triggers is
     # itself traced — that chain is the slowest thing a cold pod does, and a
     # trace that starts after it hides exactly the part worth seeing.
-    configure_tracing("palladium-api")
+    configure_tracing("palladium-api", fastapi_app=app)
 
     # Fire-and-forget: don't await, so lifespan startup (and thus port
     # binding) isn't blocked on the dspy/litellm import chain.

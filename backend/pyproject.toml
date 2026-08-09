@@ -48,12 +48,21 @@ dependencies = [
     "langgraph>=0.2.60",
     "langgraph-checkpoint>=2.0.24",
     # Emits the graph's spans through OpenTelemetry rather than LangSmith's
-    # native REST transport (see LANGSMITH_OTEL_ENABLED in app/core/tracing.py).
+    # native REST transport (see LANGSMITH_TRACING_MODE in app/core/tracing.py).
     "langsmith[otel]>=0.2.0",
     # opentelemetry-api/-sdk arrive transitively via dspy; the exporter and the
     # openai instrumentor do not, and both are needed on the tracing path.
     "opentelemetry-exporter-otlp-proto-http>=1.44.0",
     "opentelemetry-instrumentation-openai-v2>=2.0b0",
+    # The non-LLM half of the trace, and the only half Google gets that
+    # LangSmith does not — the scope filter in app/core/tracing.py drops every
+    # one of these. Managed OTel for GKE injects a collector endpoint but does
+    # NOT auto-instrument Python, so without these packages the Google pipe
+    # carries nothing but the same LLM spans LangSmith already has.
+    "opentelemetry-instrumentation-fastapi>=0.65b0",
+    "opentelemetry-instrumentation-httpx>=0.65b0",
+    "opentelemetry-instrumentation-sqlalchemy>=0.65b0",
+    "opentelemetry-instrumentation-redis>=0.65b0",
     "langchain>=1.3.14",
     "langchain-openai>=1.4.2",
     "langchain-openrouter>=0.2.7",
