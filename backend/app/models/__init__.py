@@ -7,6 +7,7 @@ from .build_session import BuildSession, BuildSessionStatus, ModuleDecision
 from .conversation import Conversation
 from .discovery import DiscoveredItem, DiscoveryRun, DiscoverySource
 from .games_catalog import Game, GameMinimumPart
+from .guide_video import GuideVideo
 from .listing import AmazonListing, EbayListing, Listing
 from .message import Message
 from .pcbuild import BuildPart, PCBuild

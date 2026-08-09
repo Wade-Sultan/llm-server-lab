@@ -22,6 +22,7 @@ import {
   BrainCircuit,
   Newspaper,
   Radar,
+  Video,
 } from 'lucide-react';
 
 type NavItem =
@@ -52,6 +53,7 @@ const navItems: NavItem[] = [
   { label: 'AI Models', href: '/ai-models', icon: BrainCircuit },
   { type: 'separator', label: 'Content' },
   { label: 'Blog', href: '/blog', icon: Newspaper },
+  { label: 'Guide Videos', href: '/guide-videos', icon: Video },
   { type: 'separator', label: 'Discovery' },
   { label: 'Discovery', href: '/discovery', icon: Radar },
   { type: 'separator', label: 'Users' },

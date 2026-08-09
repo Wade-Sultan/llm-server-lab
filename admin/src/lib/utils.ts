@@ -46,6 +46,52 @@ export function slugify(value: string): string {
     .replace(/^-+|-+$/g, '');
 }
 
+// Pull the 11-character video ID out of any of the YouTube link shapes you get
+// from a browser address bar or a share button. Returns null for anything else
+// — a non-YouTube link is still a valid guide entry, it just renders as an
+// outbound link instead of an embed.
+export function extractYouTubeId(url: string): string | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(url.trim());
+  } catch {
+    return null;
+  }
+
+  const host = parsed.hostname.replace(/^(www|m)\./, '');
+  const isId = (v: string | undefined | null): v is string => !!v && /^[\w-]{11}$/.test(v);
+
+  // https://youtu.be/<id>
+  if (host === 'youtu.be') {
+    const id = parsed.pathname.slice(1).split('/')[0];
+    return isId(id) ? id : null;
+  }
+
+  if (host !== 'youtube.com' && host !== 'youtube-nocookie.com') return null;
+
+  // https://youtube.com/watch?v=<id>
+  const v = parsed.searchParams.get('v');
+  if (isId(v)) return v;
+
+  // https://youtube.com/{embed,shorts,live,v}/<id>
+  const [prefix, id] = parsed.pathname.split('/').filter(Boolean);
+  if (['embed', 'shorts', 'live', 'v'].includes(prefix) && isId(id)) return id;
+
+  return null;
+}
+
+export const youtubeUrlSchema = z
+  .string()
+  .min(1, 'URL is required')
+  .refine((v) => {
+    try {
+      const u = new URL(v.trim());
+      return u.protocol === 'http:' || u.protocol === 'https:';
+    } catch {
+      return false;
+    }
+  }, { message: 'Must be a valid http(s) URL' });
+
 export const asinSchema = z
   .string()
   .min(1, 'ASIN is required')

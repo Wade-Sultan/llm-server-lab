@@ -795,3 +795,22 @@ model BlogPost {
   @@index([status, publishedAt], map: "ix_blog_posts_status_published_at")
   @@map("blog_posts")
 }
+
+// PC-building guide videos listed on the public /guides page. Links to
+// third-party videos, not hosted media. Replaces the hardcoded array that used
+// to live in the frontend component.
+// Table owned by backend alembic migration b2d4f6a8c0e1.
+model GuideVideo {
+  id             String   @id @default(uuid()) @db.Uuid
+  title          String
+  description    String?
+  url            String
+  youtubeVideoId String?  @map("youtube_video_id")
+  isPublished    Boolean  @default(true) @map("is_published")
+  sortOrder      Int      @default(0) @map("sort_order")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  @@index([isPublished, sortOrder], map: "ix_guide_videos_published_order")
+  @@map("guide_videos")
+}
