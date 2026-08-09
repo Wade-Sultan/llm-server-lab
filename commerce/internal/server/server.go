@@ -17,11 +17,41 @@ import (
 	"github.com/palladium/commerce/internal/store"
 )
 
+// dataStore is the slice of *store.Store the handlers actually call. It exists
+// so tests can substitute a fake without a live Postgres; *store.Store is the
+// only production implementation. Close() is deliberately absent — lifecycle
+// belongs to New, which holds the concrete value.
+type dataStore interface {
+	Ping(ctx context.Context) error
+
+	GetUserByFirebaseUID(ctx context.Context, firebaseUID string) (*store.User, error)
+	GetUserByEmail(ctx context.Context, email string) (*store.User, error)
+	CreateUser(ctx context.Context, firebaseUID, email string) (*store.User, error)
+	LinkFirebaseUID(ctx context.Context, userID, firebaseUID string) (*store.User, error)
+	DeleteUserByFirebaseUID(ctx context.Context, firebaseUID string) error
+
+	ListListings(ctx context.Context, f store.ListingFilter) ([]*store.Listing, error)
+	CountListings(ctx context.Context, f store.ListingFilter) (int, error)
+	GetListingByID(ctx context.Context, id string) (*store.Listing, error)
+	GetListingsByPartID(ctx context.Context, partID string) ([]*store.Listing, error)
+	PartExists(ctx context.Context, partID string) (bool, error)
+	CreateListing(ctx context.Context, in store.CreateListingInput) (*store.Listing, error)
+	UpdateListing(ctx context.Context, id string, in store.UpdateListingInput) (*store.Listing, error)
+	DeleteListing(ctx context.Context, id string) error
+}
+
+// mailer is the transactional-email seam, satisfied by *email.Client. Tests
+// use it to assert which messages a handler triggers without hitting Resend.
+type mailer interface {
+	Enabled() bool
+	Send(ctx context.Context, msg email.Message) error
+}
+
 // handlers holds the dependencies shared by all route handlers.
 type handlers struct {
-	store          *store.Store
+	store          dataStore
 	auth           *fbauth.Client
-	email          *email.Client
+	email          mailer
 	associateTag   string
 	ebayCampaignID string
 	logger         *slog.Logger
