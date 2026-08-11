@@ -62,9 +62,24 @@ _ENTITY_TYPES = [
 
 
 def upgrade():
-    # Cloud SQL for PostgreSQL ships pgvector; the extension still has to be
-    # created per-database. Requires the cloudsqlsuperuser role, which the
-    # migration user has.
+    # Cloud SQL for PostgreSQL ships pgvector, but the extension still has to be
+    # created once per database, and CREATE EXTENSION requires superuser —
+    # verified: a plain LOGIN role gets
+    #   ERROR: permission denied to create extension "vector"
+    #   HINT:  Must be superuser to create this extension.
+    #
+    # The migrate Job runs as POSTGRES_USER (`palladium_app`, see
+    # deploy/base/builder/configmap.yaml), which only holds cloudsqlsuperuser if
+    # it was created through the Cloud SQL API/gcloud rather than with plain
+    # CREATE USER. Rather than depend on that, pre-create the extension once per
+    # database as an admin user:
+    #
+    #   psql -U postgres -d <db> -c 'CREATE EXTENSION IF NOT EXISTS vector;'
+    #
+    # This statement then becomes a no-op the app user is allowed to run — also
+    # verified: with the extension already present it returns CREATE EXTENSION
+    # plus a "already exists, skipping" NOTICE, with no privilege check. Which
+    # is what makes this line safe to leave in the migration either way.
     op.execute("CREATE EXTENSION IF NOT EXISTS vector")
 
     op.create_table(
