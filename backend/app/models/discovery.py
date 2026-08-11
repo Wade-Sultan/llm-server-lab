@@ -35,6 +35,9 @@ class DiscoveryRunType(str, enum.Enum):
     AI_MODELS = "ai_models"  # scheduled Hugging Face Hub run (monthly job)
     ON_DEMAND = "on_demand"  # admin-panel search button
     SWEEP = "sweep"  # admin-panel category sweep (one row, N items)
+    # Enrichment rather than discovery: fills benchmark_scores on CPUs and GPU
+    # chipsets already in the catalog. See services/discovery/benchmarks.py.
+    BENCHMARKS = "benchmarks"
 
 
 class DiscoveryRunStatus(str, enum.Enum):

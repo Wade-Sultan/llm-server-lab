@@ -6,8 +6,10 @@
 # still reports Programmed, you just get 404s).
 #
 # admin has no listener here, exactly as in the local overlay: it is reached
-# only by `kubectl port-forward svc/admin 3000:3000`, which replaces the GCE
-# IAP tunnel. Nothing about admin is exposed to the internet, so there is no
+# only by `kubectl port-forward -n palladium svc/admin 3000:80`, which replaces
+# the GCE IAP tunnel. The remote port is the Service's 80, not the container's
+# 3000 — port-forward matches the Service port, so `3000:3000` fails outright.
+# Nothing about admin is exposed to the internet, so there is no
 # IAP/OAuth backend config to maintain and no way to misconfigure it open.
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway

@@ -83,6 +83,19 @@ class Settings(BaseSettings):
 
     OPENROUTER_API_KEY: str
 
+    # --- Embeddings (pgvector) -----------------------------------------------
+    # Separate from OPENROUTER_API_KEY because OpenRouter has no embeddings
+    # endpoint — it proxies chat completions only. Optional at boot: without it
+    # the embedding service refuses to run and catalog matching degrades to
+    # "no matches", which the recommender already handles as its normal
+    # cold-start state. Nothing else in the app is affected.
+    OPENAI_API_KEY: str | None = None
+    EMBEDDING_MODEL: str = "text-embedding-3-small"
+    # Must match app.models.embeddings.EMBEDDING_DIMS and the vector(N) column
+    # width in migration c1d2e3f4a5b6. Overriding this alone will not resize the
+    # column — changing model width is a migration plus a full re-embed.
+    EMBEDDING_DIMS: int = 1536
+
     # Hugging Face Hub token for the AI-model discovery job. Public model
     # listing works without it, but a token raises rate limits and returns
     # metadata for gated models. Create at https://huggingface.co/settings/tokens

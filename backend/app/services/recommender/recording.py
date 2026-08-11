@@ -35,6 +35,10 @@ from app.models.pcparts import PCPart
 
 logger = logging.getLogger(__name__)
 
+# Stands in for model_name on decisions no model made. Filter it out of any GEPA
+# extraction query — see BuildRecorder.record_deterministic_decision.
+DETERMINISTIC_MODEL_NAME = "deterministic/dominance-gate"
+
 
 # ---------------------------------------------------------------------------
 # In-memory decision record (flushed to module_decisions at finish)
@@ -234,6 +238,58 @@ class BuildRecorder:
             )
         except Exception:  # pragma: no cover - defensive
             logger.debug("record_decision failed", exc_info=True)
+
+    def record_deterministic_decision(
+        self,
+        *,
+        category: str,
+        sequence_order: int,
+        signature_name: str,
+        signature_version: int,
+        candidates_json: str | None,
+        input_state: dict | None,
+        output_decision: dict,
+        chosen_name: str | None,
+        latency_ms: int | None,
+    ) -> None:
+        """Capture a step that was resolved without an LLM call.
+
+        Written by the dominance gate in app/services/recommender/scoring.py,
+        which short-circuits a step when one candidate is both cheaper and
+        faster than every alternative. The row is recorded so the session's
+        decision trail stays complete — a missing `cpu` or `gpu` row would read
+        as a pipeline failure rather than as a step that had nothing to decide.
+
+        model_name is the sentinel DETERMINISTIC_MODEL_NAME rather than NULL, so
+        GEPA extraction can exclude these rows explicitly. They must be excluded:
+        there is no prompt and no model output here, so as training examples
+        they would teach the optimizer to imitate a rule it does not have.
+        Token/cost fields stay NULL because nothing was spent — that is what
+        makes the saving visible in the per-session cost aggregate.
+        """
+        try:
+            self._decisions.append(
+                _DecisionRecord(
+                    category=category,
+                    sequence_order=sequence_order,
+                    signature_name=signature_name,
+                    signature_version=signature_version,
+                    candidate_set=_parse_candidates(candidates_json),
+                    input_state=input_state,
+                    raw_prompt_hash=None,
+                    output_decision=output_decision,
+                    tokens_in=None,
+                    tokens_out=None,
+                    cost_usd=None,
+                    latency_ms=latency_ms,
+                    was_override=False,
+                    model_name=DETERMINISTIC_MODEL_NAME,
+                    chosen_name=chosen_name,
+                    chosen_price_usd=(output_decision or {}).get("street_price_usd"),
+                )
+            )
+        except Exception:  # pragma: no cover - defensive
+            logger.debug("record_deterministic_decision failed", exc_info=True)
 
     def set_reference_build(self, build_key: str | None, build: Any | None) -> None:
         """

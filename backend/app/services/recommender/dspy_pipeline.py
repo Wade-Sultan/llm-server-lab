@@ -48,6 +48,10 @@ from app.core.config import settings
 from app.crud import components as crud_components
 from app.models.build_session import BuildSessionStatus
 from app.schemas.chat import NO_BUDGET_CEILING, BuildRequest
+from app.services.recommender.catalog_match import (
+    CatalogRequirements,
+    resolve_requirements,
+)
 from app.services.recommender.components.decidecase import DecideCase
 from app.services.recommender.components.decidecase import load_program as load_case
 from app.services.recommender.components.decidecpu import DecideCPU
@@ -87,6 +91,7 @@ from app.services.recommender.db.queries import (
     get_storage_candidates,
 )
 from app.services.recommender.recording import BuildRecorder
+from app.services.recommender.scoring import find_dominant
 from app.services.recommender.status_provider import BuildStatusProvider
 
 logger = logging.getLogger(__name__)
@@ -113,6 +118,14 @@ _SEQUENCE_ORDER: dict[str, int] = {
     "case": 8,
     "fans": 9,
 }
+
+
+# Use cases where a discrete GPU is a foregone conclusion, so the GPU step's
+# `gpu_required` output carries no real decision. Only these are eligible for
+# the dominance gate — see _step_gpu.
+_DISCRETE_GPU_USE_CASES = frozenset(
+    {"gaming", "streaming", "creator", "rendering", "aiml", "server"}
+)
 
 
 class NoValidCandidatesError(RuntimeError):
@@ -273,6 +286,80 @@ async def _call_streamified(
     if result is None:
         raise RuntimeError("DSPy streamify yielded no Prediction")
     return result
+
+
+def _try_dominance(
+    recorder: BuildRecorder | None,
+    program: dspy.Module,
+    candidates: str,
+    candidate_name_key: str,
+    output_field: str,
+    extra_outputs: dict[str, Any] | None = None,
+    **inputs: Any,
+) -> dspy.Prediction | None:
+    """Resolve a step without an LLM call when one candidate strictly dominates.
+
+    Two distinct key names, because they genuinely differ. `candidate_name_key`
+    is the field the *candidate row* carries — "name" for CPUs, "chipset" for
+    GPU chipsets, set by the serializers in db/queries.py. `output_field` is
+    what the *Decide\\* signature* emits — "cpu_name", "gpu_chipset" — and is
+    what the caller reads off the returned Prediction. Collapsing the two would
+    make the gate silently never fire, since `row.get("cpu_name")` is None on
+    every candidate.
+
+    Returns a Prediction shaped exactly like the one the Decide* module would
+    have produced (so the caller's field access is unchanged), or None to fall
+    through to the normal LLM path. `extra_outputs` supplies the fields the gate
+    cannot itself decide — see the GPU call site.
+
+    Never raises: a bug in scoring must degrade to "ask the model", which is the
+    behaviour that existed before the gate.
+    """
+    start = time.perf_counter()
+    try:
+        rows = json.loads(candidates)
+        if not isinstance(rows, list):
+            return None
+        dominant = find_dominant(rows, candidate_name_key)
+        if dominant is None:
+            return None
+
+        outputs: dict[str, Any] = {
+            output_field: dominant.name,
+            "reason": dominant.reason,
+            "reconsideration_threshold": dominant.reconsideration_threshold,
+            **(extra_outputs or {}),
+        }
+        category = getattr(program, "category", "unknown")
+        logger.info(
+            "dominance gate resolved %s step without an LLM call: %s "
+            "(%.1f%% ahead of runner-up, cheapest in a %d-candidate set)",
+            category,
+            dominant.name,
+            dominant.margin * 100,
+            len(rows),
+        )
+        if recorder is not None:
+            recorder.record_deterministic_decision(
+                category=category,
+                sequence_order=_SEQUENCE_ORDER.get(category, -1),
+                signature_name=getattr(program, "signature_name", category),
+                signature_version=getattr(program, "signature_version", 1),
+                candidates_json=candidates,
+                input_state=inputs,
+                output_decision={
+                    **outputs,
+                    "perf_score": dominant.row.get("perf_score"),
+                    "street_price_usd": dominant.row.get("street_price_usd"),
+                    "dominance_margin": round(dominant.margin, 4),
+                },
+                chosen_name=dominant.name,
+                latency_ms=int((time.perf_counter() - start) * 1000),
+            )
+        return dspy.Prediction(**outputs)
+    except Exception:  # pragma: no cover - defensive
+        logger.debug("dominance gate failed; falling back to LLM", exc_info=True)
+        return None
 
 
 async def _run_step(
@@ -507,6 +594,58 @@ def _request_summary(request: BuildRequest) -> str:
     return " | ".join(parts)
 
 
+def _catalog_terms(request: BuildRequest) -> list[str]:
+    """The free-text titles worth resolving against the catalogs.
+
+    chat_pipeline puts the user's named games under "gaming.games" and their
+    named apps/models under "general.workloads"; rendering.software carries a
+    single name from the profile's rendering_software field. Anything else in
+    `answers` is an enum the extraction step chose, not something the user
+    typed, so there is nothing to match it against.
+    """
+    terms: list[str] = []
+    for key in ("gaming.games", "general.workloads", "rendering.software"):
+        value = request.answers.get(key)
+        if isinstance(value, list):
+            terms.extend(str(v) for v in value)
+        elif value:
+            terms.append(str(value))
+    return terms
+
+
+async def _resolve_catalog_requirements(
+    session: AsyncSession, request: BuildRequest
+) -> CatalogRequirements | None:
+    """Look up catalog requirements, swallowing any failure.
+
+    Returns None when there was nothing to look up or the lookup failed. This
+    is enrichment layered on top of a pipeline that worked without it, so it
+    gets no ability to fail a build.
+    """
+    terms = _catalog_terms(request)
+    if not terms:
+        return None
+    try:
+        answers = request.answers
+        return await resolve_requirements(
+            session,
+            terms,
+            ai_workload=(
+                answers.get("ai.workload")
+                if isinstance(answers.get("ai.workload"), str)
+                else None
+            ),
+            workload_intensity=(
+                answers.get("general.workload_intensity")
+                if isinstance(answers.get("general.workload_intensity"), str)
+                else None
+            ),
+        )
+    except Exception:  # pragma: no cover - defensive
+        logger.warning("catalog requirement lookup failed", exc_info=True)
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Pipeline state
 # ---------------------------------------------------------------------------
@@ -527,6 +666,13 @@ class DSPyBuildState:
     # Flattened use cases + preferences + Q&A, passed as the `use_cases`
     # input to every Decide* module. Set once by run_pipeline.
     use_case_summary: str = ""
+
+    # Requirements resolved from the games / software / ai_models catalogs for
+    # the titles the user named. Already folded into use_case_summary; kept on
+    # state so later steps can read the structured floors (min_vram_gb and
+    # friends) rather than re-parsing prose. None when nothing was named or the
+    # lookup failed.
+    catalog_requirements: CatalogRequirements | None = None
 
     # Decisions (populated step by step)
     cpu_name: str = ""
@@ -670,17 +816,31 @@ async def _step_cpu(
 ) -> None:
     _emit(state, "cpu", "Choosing your CPU…")
     candidates = await get_cpu_candidates(
-        session, budget["cpu"], state.request.preferences
+        session,
+        budget["cpu"],
+        state.request.preferences,
+        state.request.use_cases,
+        state.request.answers,
     )
     _ensure_candidates("cpu", candidates)
-    result = await _run_step(
+    step_inputs: dict[str, Any] = {
+        "use_cases": state.use_case_summary or str(state.request.use_cases),
+        "budget_total": state.request.budget_usd,
+        "cpu_budget_ceiling": budget["cpu"],
+    }
+    result = _try_dominance(
+        recorder,
+        program,
+        candidates,
+        candidate_name_key="name",
+        output_field="cpu_name",
+        **step_inputs,
+    ) or await _run_step(
         recorder,
         program,
         status_fn=_noop_status,
-        use_cases=state.use_case_summary or str(state.request.use_cases),
-        budget_total=state.request.budget_usd,
-        cpu_budget_ceiling=budget["cpu"],
         candidates=candidates,
+        **step_inputs,
     )
     state.cpu_name = result.cpu_name
     state.thresholds["cpu"] = result.reconsideration_threshold
@@ -946,6 +1106,8 @@ async def _step_gpu(
         session,
         budget["gpu"],
         state.request.preferences,
+        state.request.use_cases,
+        state.request.answers,
     )
     _ensure_candidates("gpu", candidates)
     # The board was chosen three steps ago and its x16 slot count is now the
@@ -953,16 +1115,41 @@ async def _step_gpu(
     # back to a wider board from here. That asymmetry is why the motherboard
     # step is told to favour multi-slot boards for GPU-heavy use cases.
     max_gpu_slots = min(state.mobo_pcie_x16_slots, _MAX_GPUS)
-    result = await _run_step(
+    step_inputs: dict[str, Any] = {
+        "use_cases": state.use_case_summary or str(state.request.use_cases),
+        "budget_total": state.request.budget_usd,
+        "gpu_budget_ceiling": budget["gpu"],
+        "max_gpu_slots": max_gpu_slots,
+        "cpu_pcie_lanes": state.cpu_pcie_lanes,
+    }
+    # The gate ranks chipsets against each other; it cannot answer the GPU
+    # step's other two questions. So it only runs when both are already settled:
+    # a single-x16 board removes the gpu_count decision, and a use case in
+    # _DISCRETE_GPU_USE_CASES removes the gpu_required one. For productivity,
+    # dev, audio and NAS builds, "no discrete GPU at all" is a live and often
+    # correct answer that no amount of benchmark leadership can rule out —
+    # those always go to the model.
+    dominance_eligible = max_gpu_slots == 1 and all(
+        uc in _DISCRETE_GPU_USE_CASES for uc in state.request.use_cases
+    )
+    result = (
+        _try_dominance(
+            recorder,
+            program,
+            candidates,
+            candidate_name_key="chipset",
+            output_field="gpu_chipset",
+            extra_outputs={"gpu_count": 1, "gpu_required": True},
+            **step_inputs,
+        )
+        if dominance_eligible
+        else None
+    ) or await _run_step(
         recorder,
         program,
         status_fn=_noop_status,
-        use_cases=state.use_case_summary or str(state.request.use_cases),
-        budget_total=state.request.budget_usd,
-        gpu_budget_ceiling=budget["gpu"],
-        max_gpu_slots=max_gpu_slots,
-        cpu_pcie_lanes=state.cpu_pcie_lanes,
         candidates=candidates,
+        **step_inputs,
     )
     state.gpu_required = result.gpu_required
     if state.gpu_required:
@@ -1194,6 +1381,15 @@ async def run_pipeline(
     """
     state = DSPyBuildState(request=request, progress_callback=progress_callback)
     state.use_case_summary = _request_summary(request)
+    # Resolve the titles the user actually named against the games / software /
+    # ai_models catalogs and fold their published requirements into the summary
+    # every Decide* step reads. Best-effort by design: no embeddings backfilled
+    # (or no API key) yields an empty result and the summary is unchanged.
+    state.catalog_requirements = await _resolve_catalog_requirements(session, request)
+    if state.catalog_requirements is not None:
+        summary = state.catalog_requirements.summary()
+        if summary:
+            state.use_case_summary = f"{state.use_case_summary}\n{summary}"
     state.session_id = (
         str(recorder.session_id) if recorder is not None else str(uuid.uuid4())
     )

@@ -364,6 +364,44 @@ class AIModelExtraction(BaseModel):
     huggingface_id: Sourced[str]
 
 
+class CPUBenchmarkExtraction(BaseModel):
+    """Benchmark scores for a CPU that already exists in the catalog.
+
+    Distinct from CPUExtraction because this targets a different kind of page
+    (a review or a results database, not a vendor spec sheet) and a different
+    kind of run: the backfill in services/discovery/benchmarks.py enriches rows
+    that are already approved rather than staging a new product.
+
+    Field names match app/models/benchmarks.py::CPUBenchmarkScores exactly —
+    they are written straight into cpus.benchmark_scores, and
+    services/recommender/scoring.py reads them back by those names. A rename
+    here silently stops the scorer from seeing the value.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    cinebench_r24_single: Sourced[float]
+    cinebench_r24_multi: Sourced[float]
+    geekbench_6_single: Sourced[float]
+    geekbench_6_multi: Sourced[float]
+    night_raid: Sourced[float]
+
+
+class GPUBenchmarkExtraction(BaseModel):
+    """Benchmark scores for a GPU chipset already in the catalog.
+
+    Names match app/models/benchmarks.py::GPUBenchmarkScores — see
+    CPUBenchmarkExtraction for why that coupling matters.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    timespy: Sourced[float]
+    port_royal: Sourced[float]
+    speed_way: Sourced[float]
+    geekbench_6_compute: Sourced[float]
+
+
 CATEGORY_SCHEMAS: dict[str, type[BaseModel]] = {
     "cpu": CPUExtraction,
     "gpu_chipset": GPUChipsetExtraction,
@@ -376,6 +414,12 @@ CATEGORY_SCHEMAS: dict[str, type[BaseModel]] = {
     "case": CaseExtraction,
     "fan": FanExtraction,
     "ai_model": AIModelExtraction,
+    # Enrichment pseudo-categories. They never stage a new part — the backfill
+    # in services/discovery/benchmarks.py uses them to fill benchmark_scores on
+    # rows that already exist. Registered here so they inherit the same
+    # retry / snippet-enforcement / usage-accounting path as everything else.
+    "cpu_benchmark": CPUBenchmarkExtraction,
+    "gpu_benchmark": GPUBenchmarkExtraction,
 }
 
 

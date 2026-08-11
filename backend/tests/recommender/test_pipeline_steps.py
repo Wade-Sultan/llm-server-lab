@@ -51,9 +51,18 @@ def _state(**overrides) -> dp.DSPyBuildState:
 
 
 def _chipset(
-    *, name="RTX 5080", tdp=300, rec_psu=None, vram=16, has_rt=True, price=120000
+    *,
+    name="RTX 5080",
+    tdp=300,
+    rec_psu=None,
+    vram=16,
+    has_rt=True,
+    price=120000,
+    benchmarks=None,
 ):
     # Stands in for a GPUChipset (group) row — street price lives here now.
+    # benchmarks defaults to None (the catalog's state for an unmeasured
+    # chipset), which scoring.py treats as "unscorable" rather than as zero.
     return SimpleNamespace(
         id=name,
         name=name,
@@ -62,6 +71,7 @@ def _chipset(
         vram_gb=vram,
         has_ray_tracing=has_rt,
         street_price_cents=price,
+        benchmark_scores=benchmarks,
     )
 
 

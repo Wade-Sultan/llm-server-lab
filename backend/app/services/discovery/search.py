@@ -63,6 +63,12 @@ _CATEGORY_SWEEP_TERMS = {
 _CATEGORY_SPEC_SUFFIX = {
     "ai_model": "model card",
     "case": "specifications clearance dimensions",
+    # Benchmark backfill wants review outlets and results databases, not vendor
+    # spec sheets — a manufacturer page never publishes a competitor-comparable
+    # Cinebench or TimeSpy number. Naming the suites in the query is what ranks
+    # those pages above general reviews.
+    "cpu_benchmark": "Cinebench R24 Geekbench 6 benchmark scores review",
+    "gpu_benchmark": "3DMark Time Spy Port Royal benchmark scores review",
 }
 
 
