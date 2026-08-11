@@ -1,0 +1,57 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: benchmarks
+spec:
+  # Weekly, Sunday 05:00. Unlike the embeddings sweep this is NOT free when
+  # idle in the way that one is — it is, however, idempotent and self-limiting:
+  # it only ever selects rows where benchmark_scores is NULL or {}, so once
+  # coverage is complete a run finds nothing and makes no calls at all. Weekly
+  # is about picking up parts added since the last pass.
+  schedule: "0 5 * * 0"
+  timeZone: "America/Los_Angeles"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 300
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      # 0 retries, same reasoning as discovery: parts are processed serially and
+      # each costs a search plus up to 3 fetch+extract calls, so a retry
+      # re-pays for everything that already succeeded. Parts that found no
+      # usable source are left unscored and picked up next week.
+      backoffLimit: 0
+      # DISCOVERY_BENCHMARK_LIMIT (25) parts per category, two categories, each
+      # fetching and extracting up to 3 sources.
+      activeDeadlineSeconds: 5400
+      ttlSecondsAfterFinished: 86400
+      template:
+        spec:
+          restartPolicy: Never
+          serviceAccountName: builder
+          containers:
+            - name: benchmarks
+              image: palladium/builder
+              command: ["python", "-m", "app.jobs.benchmarks"]
+              envFrom:
+                - configMapRef:
+                    name: builder-config
+                - secretRef:
+                    name: palladium-secrets
+              # Same shape as discovery — search, HTTP fetch, LLM extraction,
+              # one part's documents in memory at a time.
+              resources:
+                requests:
+                  cpu: "500m"
+                  memory: 1Gi
+                limits:
+                  cpu: "1"
+                  memory: 2Gi
+# REQUIRES TAVILY_API_KEY (search) and the OpenRouter key the extraction path
+# already uses. Missing search config exits 1 rather than looping, because every
+# run would fail identically until it is fixed.
+#
+# Feeds services/recommender/scoring.py. Its dominance gate refuses to fire
+# unless EVERY candidate in a set is scored, so partial coverage is not a
+# partial benefit — one unmeasured chipset in a budget band disables the LLM
+# bypass for every build landing in that band.

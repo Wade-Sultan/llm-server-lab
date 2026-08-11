@@ -43,3 +43,5 @@ resources:
   - jobs/migrate-job.yaml
   - jobs/pricing-etl-cronjob.yaml
   - jobs/discovery-cronjob.yaml
+  - jobs/embeddings-cronjob.yaml
+  - jobs/benchmarks-cronjob.yaml

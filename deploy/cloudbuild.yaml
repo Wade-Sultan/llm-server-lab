@@ -219,6 +219,15 @@ steps:
           -o jsonpath='{.data.VALKEY_HOST}' 2>/dev/null | grep -q . \
           || echo "WARNING: VALKEY_HOST missing from palladium-secrets-builder — /chat will run turns inline and they will not survive client disconnect (deploy/messaging.md §1)" >&2
 
+        # OPENAI_API_KEY, same shape as VALKEY_HOST: a WARNING, because every
+        # read path degrades to "no semantic matches" without erroring and the
+        # build pipeline runs exactly as it did before pgvector existed. But the
+        # embeddings CronJob exits 1 without it, so an unnoticed absence shows
+        # up as a nightly red job and a permanently empty embeddings table.
+        kubectl -n "$_NAMESPACE" get secret palladium-secrets-builder \
+          -o jsonpath='{.data.OPENAI_API_KEY}' 2>/dev/null | grep -q . \
+          || echo "WARNING: OPENAI_API_KEY missing from palladium-secrets-builder — the embeddings CronJob will fail and catalog matching stays disabled" >&2
+
         # POSTGRES_SERVER lives only in the Secret. Validate the actual value:
         # a pasted-in placeholder or an empty host fails at runtime as DNS or
         # connection errors, which is far more expensive to diagnose than here.

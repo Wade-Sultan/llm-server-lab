@@ -1,0 +1,63 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: embeddings
+spec:
+  # Daily, 04:00 — after the pricing ETL and well clear of the monthly
+  # discovery window. Frequent because the sweep is content-addressed and costs
+  # nothing when nothing changed: an unchanged catalog is one indexed SELECT per
+  # entity type and zero API calls. Spend tracks churn, not catalog size or
+  # schedule frequency.
+  # 04:30, not 04:00 — pricing-etl already holds 04:00 daily, and on Autopilot
+  # two jobs requesting capacity at once is two nodes scaling up. There is no
+  # ordering requirement between them: price changes do not touch embedding
+  # hashes (services/embeddings/text.py excludes price precisely so the ETL
+  # never dirties a vector), so this is purely about not colliding.
+  schedule: "30 4 * * *"
+  timeZone: "America/Los_Angeles"
+  # Two concurrent sweeps would race on the same (entity_type, entity_id) rows
+  # and pay twice for identical vectors. The upsert makes that safe, not cheap.
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 300
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      # 1 retry, unlike discovery's 0: a failed row is simply left un-upserted,
+      # so the retry re-embeds only what did not land rather than re-paying for
+      # the whole sweep. The common failure here is a transient 429, which a
+      # retry actually fixes.
+      backoffLimit: 1
+      # Generous for the steady state (a handful of changed rows), and sized so
+      # a first full backfill of the catalog still completes inside it. Batches
+      # run sequentially by design — see services/embeddings/client.py.
+      activeDeadlineSeconds: 3600
+      ttlSecondsAfterFinished: 86400
+      template:
+        spec:
+          restartPolicy: Never
+          serviceAccountName: builder
+          containers:
+            - name: embeddings
+              image: palladium/builder
+              command: ["python", "-m", "app.jobs.embeddings"]
+              envFrom:
+                - configMapRef:
+                    name: builder-config
+                - secretRef:
+                    name: palladium-secrets
+              # Network-latency bound, like discovery: it holds one batch of
+              # 128 texts and their returned vectors in memory at a time, and
+              # spends the rest of its life waiting on HTTP.
+              resources:
+                requests:
+                  cpu: "250m"
+                  memory: 512Mi
+                limits:
+                  cpu: "500m"
+                  memory: 1Gi
+# REQUIRES OPENAI_API_KEY in the referenced secret. Without it the job exits 1
+# by design rather than no-oping, so an unconfigured key shows up as a red
+# CronJob instead of a silently empty embeddings table — which is the failure
+# mode that is otherwise invisible, since every read path degrades to "no
+# matches" without erroring.
