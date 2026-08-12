@@ -275,7 +275,7 @@ async def build(state: ChatTurnState) -> dict[str, Any]:
     progress_queue: asyncio.Queue = asyncio.Queue()
     ref_task = asyncio.create_task(cp._get_reference_build(profile, conversation_id))
     dspy_task = asyncio.create_task(
-        cp._run_dspy_build(profile, progress_queue, ref_task)
+        cp._run_dspy_build(profile, progress_queue, ref_task, conversation_id)
     )
 
     dspy_build: dict | None = None

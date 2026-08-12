@@ -59,6 +59,25 @@ class BuildSession(Base):
         index=True,
     )
 
+    # The conversation this build came out of — and the other half of the join
+    # to LangSmith, which groups a turn's spans into a Thread keyed on the same
+    # id (see app/core/tracing.py::attach_thread).
+    #
+    # Without it the two telemetry systems describe the same runs with no shared
+    # key: a low-scoring conversation in LangSmith could not be resolved to the
+    # candidate sets that produced it, nor a suspect build resolved back to the
+    # conversation that asked for it.
+    #
+    # Nullable and NOT a foreign key: guest turns have no conversations row at
+    # all (chat_pipeline synthesizes a "turn:<uuid>" thread id for them), and a
+    # FK would either reject those rows or silently drop the id. Telemetry must
+    # never constrain what the product is allowed to do.
+    conversation_id = Column(
+        UUID(as_uuid=True),
+        nullable=True,
+        index=True,
+    )
+
     # Git commit / semver of the DSPy pipeline code. GEPA cohort key.
     pipeline_version = Column(Text, nullable=False)
 

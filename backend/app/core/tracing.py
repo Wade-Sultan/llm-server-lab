@@ -296,3 +296,56 @@ def shutdown_tracing() -> None:
         provider.shutdown()
     except Exception:
         logger.debug("tracing shutdown failed (exiting anyway)", exc_info=True)
+
+
+# ---------------------------------------------------------------------------
+# Run metadata — the join key between LangSmith and our own telemetry
+# ---------------------------------------------------------------------------
+#
+# LangSmith's OTel ingestion promotes span attributes named
+# `langsmith.metadata.<key>` into a run's metadata, and groups runs into Threads
+# on the metadata keys `thread_id` / `session_id` / `conversation_id`. Without
+# one of those set, every chat turn arrives as an isolated trace and no
+# multi-turn question ("how many turns to a build?", "did they abandon?") can be
+# asked at all — which is the whole reason this exists.
+#
+# Several aliases are written rather than one, because which key LangSmith
+# groups on has changed across versions and writing three costs nothing.
+#
+# THE JOIN. `build_session_id` is not a LangSmith concept; it is the primary key
+# of our own `build_sessions` row. Putting it in run metadata is what lets a bad
+# trace in LangSmith be traced back to the exact candidate sets and chosen parts
+# in `module_decisions`, and — with conversation_id on both sides — back again.
+_THREAD_METADATA_ALIASES = ("thread_id", "session_id", "conversation_id")
+
+
+def attach_run_metadata(**values: object) -> None:
+    """Attach metadata to the current span, for LangSmith to promote onto the run.
+
+    A no-op when tracing is unconfigured or no span is recording, so call sites
+    need no guard of their own. Never raises: losing a metadata tag must not
+    fail a chat turn.
+    """
+    try:
+        from opentelemetry import trace as _trace
+
+        span = _trace.get_current_span()
+        if span is None or not span.is_recording():
+            return
+        for key, value in values.items():
+            if value is None:
+                continue
+            span.set_attribute(f"langsmith.metadata.{key}", str(value))
+    except Exception:  # pragma: no cover - defensive
+        logger.debug("attach_run_metadata failed", exc_info=True)
+
+
+def attach_thread(conversation_id: object) -> None:
+    """Mark the current span as belonging to a conversation Thread.
+
+    Writes every alias LangSmith has used for thread grouping — see
+    _THREAD_METADATA_ALIASES.
+    """
+    if conversation_id is None:
+        return
+    attach_run_metadata(**{k: conversation_id for k in _THREAD_METADATA_ALIASES})

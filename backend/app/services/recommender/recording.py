@@ -30,6 +30,7 @@ import dspy
 from sqlalchemy import func, select
 
 from app.core.logging import set_build_session_id
+from app.core.tracing import attach_run_metadata
 from app.models.build_session import BuildSession, BuildSessionStatus, ModuleDecision
 from app.models.pcparts import PCPart
 
@@ -166,11 +167,33 @@ class BuildRecorder:
         request: Any,
         pipeline_version: str,
         user_id: uuid.UUID | str | None = None,
+        conversation_id: uuid.UUID | str | None = None,
     ) -> None:
         self.session_id = uuid.uuid4()
         # Tag every log line emitted for the rest of this run, so a build can be
         # followed across replicas without threading the id through call sites.
         set_build_session_id(str(self.session_id))
+        # Same id onto the trace, which is the join between the two telemetry
+        # systems: LangSmith holds the conversation and the prompts, Postgres
+        # holds the candidate sets and the chosen parts, and this is the only
+        # key that appears in both. Without it a low-scoring trace cannot be
+        # resolved to the candidate list that produced it.
+        attach_run_metadata(build_session_id=self.session_id)
+        # Coerced rather than stored raw: build_sessions.conversation_id is a
+        # UUID column, and a guest turn's thread id is the synthetic string
+        # "turn:<uuid>" (see chat_pipeline.run_chat_turn). Passing that straight
+        # through would fail the whole telemetry flush on a DataError — and
+        # telemetry is never allowed to break a build. Anything unparseable
+        # becomes NULL, which is already the guest case's correct answer.
+        self.conversation_id: uuid.UUID | None = None
+        if conversation_id is not None:
+            try:
+                self.conversation_id = uuid.UUID(str(conversation_id))
+            except (ValueError, AttributeError, TypeError):
+                logger.debug(
+                    "conversation_id %r is not a UUID; recording it as NULL",
+                    conversation_id,
+                )
         self.pipeline_version = pipeline_version
         self.user_id = user_id
         try:
@@ -396,6 +419,7 @@ class BuildRecorder:
                     BuildSession(
                         id=self.session_id,
                         user_id=self.user_id,
+                        conversation_id=self.conversation_id,
                         pipeline_version=self.pipeline_version,
                         budget_cents=self.budget_cents,
                         input_profile=self.input_profile,

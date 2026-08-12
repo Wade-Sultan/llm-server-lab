@@ -13,6 +13,7 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 
 from app.core.db import AsyncSessionLocal
+from app.core.tracing import attach_run_metadata, attach_thread
 from app.data.refbuilds import Build
 from app.schemas.chat import (
     NO_BUDGET_CEILING,
@@ -927,6 +928,7 @@ async def _run_dspy_build(
     profile: BuildProfile,
     progress_queue: asyncio.Queue,
     ref_task: asyncio.Task,
+    conversation_id: str | None = None,
 ) -> dict | None:
     """
     Run the full DSPy pipeline for a chat turn on its own DB session.
@@ -952,7 +954,7 @@ async def _run_dspy_build(
     from app.services.recommender.recording import BuildRecorder
 
     request = _profile_to_build_request(profile)
-    recorder = BuildRecorder(request, PIPELINE_VERSION)
+    recorder = BuildRecorder(request, PIPELINE_VERSION, conversation_id=conversation_id)
 
     def _progress(step: str, message: str) -> None:
         progress_queue.put_nowait(
@@ -1130,6 +1132,17 @@ async def run_chat_turn(
     config: dict = {"configurable": {"thread_id": thread_id}}
 
     graph = await get_graph()
+
+    # Group this turn's spans into a LangSmith Thread. Set before astream so the
+    # attribute lands on the span every node's work descends from — LangSmith
+    # reads thread metadata off the trace root, and setting it inside a node
+    # would tag that node's subtree only.
+    #
+    # thread_id, not conversation_id: a guest turn has no conversation row, and
+    # its synthetic "turn:<uuid>" still deserves to be a (single-turn) thread
+    # rather than an untagged orphan.
+    attach_thread(thread_id)
+    attach_run_metadata(is_guest=is_guest)
 
     initial: dict = {
         "messages": [m.model_dump() for m in messages],
