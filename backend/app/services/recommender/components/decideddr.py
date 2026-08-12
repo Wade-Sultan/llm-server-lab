@@ -5,6 +5,8 @@ from pathlib import Path
 
 import dspy
 
+from app.services.recommender.optimizing import run_gepa
+
 WEIGHTS_PATH = Path(__file__).parent / "weights" / "decideddr.json"
 
 
@@ -86,8 +88,8 @@ def load_program() -> DecideDDR:
 def optimize(
     trainset: list[dspy.Example],
     metric,
-    num_iterations: int = 10,
     save: bool = True,
+    **gepa_kwargs,
 ) -> DecideDDR:
     """
     Run GEPA to optimize the DDR selection prompt.
@@ -100,15 +102,15 @@ def optimize(
         - reason (str)             ← optional, used by metric
         - reconsideration_threshold (str)  ← optional, used by metric
 
-    The metric function receives (example, prediction, trace=None) and
-    returns a float in [0, 1].
+    The metric follows GEPA's protocol — (gold, pred, trace, pred_name,
+    pred_trace) returning dspy.Prediction(score, feedback). The feedback text is
+    what GEPA reflects on to rewrite this instruction; a bare float reduces it
+    to random search.
+
+    No appropriateness metric ships for this step: DDR generation is a platform
+    choice whose consequences land on the CPU, board and RAM steps rather than
+    here, so it is best judged by their scores rather than by one of its own.
     """
-    module = DecideDDR()
-    optimizer = dspy.GEPA(metric=metric, num_iterations=num_iterations)
-    optimized = optimizer.compile(module, trainset=trainset)
-
-    if save:
-        WEIGHTS_PATH.parent.mkdir(parents=True, exist_ok=True)
-        optimized.save(str(WEIGHTS_PATH))
-
-    return optimized
+    return run_gepa(
+        DecideDDR(), trainset, metric, WEIGHTS_PATH, save=save, **gepa_kwargs
+    )

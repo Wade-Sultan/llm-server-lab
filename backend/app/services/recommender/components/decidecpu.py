@@ -5,6 +5,8 @@ from pathlib import Path
 
 import dspy
 
+from app.services.recommender.optimizing import run_gepa
+
 WEIGHTS_PATH = Path(__file__).parent / "weights" / "decidecpu.json"
 
 
@@ -98,8 +100,8 @@ def load_program() -> DecideCPU:
 def optimize(
     trainset: list[dspy.Example],
     metric,
-    num_iterations: int = 10,
     save: bool = True,
+    **gepa_kwargs,
 ) -> DecideCPU:
     """
     Run GEPA to optimize the CPU selection prompt.
@@ -113,16 +115,14 @@ def optimize(
         - reason (str)             ← optional, used by metric
         - reconsideration_threshold (str)  ← optional, used by metric
 
-    The metric function receives (example, prediction, trace=None) and
-    returns a float in [0, 1].  Include price-gap reasoning quality in
-    the metric — not just name correctness.
+    The metric follows GEPA's protocol — (gold, pred, trace, pred_name,
+    pred_trace) returning dspy.Prediction(score, feedback). Use
+    appropriateness.make_gepa_metric("DecideCPU"), which scores sufficiency
+    against the workload's core floor and prices the overshoot against the
+    cheapest candidate that would also have sufficed. Name correctness alone is
+    the wrong target: there is rarely one right CPU, and several candidates are
+    usually equally defensible.
     """
-    module = DecideCPU()
-    optimizer = dspy.GEPA(metric=metric, num_iterations=num_iterations)
-    optimized = optimizer.compile(module, trainset=trainset)
-
-    if save:
-        WEIGHTS_PATH.parent.mkdir(parents=True, exist_ok=True)
-        optimized.save(str(WEIGHTS_PATH))
-
-    return optimized
+    return run_gepa(
+        DecideCPU(), trainset, metric, WEIGHTS_PATH, save=save, **gepa_kwargs
+    )

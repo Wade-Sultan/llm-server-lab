@@ -4,6 +4,8 @@ from pathlib import Path
 
 import dspy
 
+from app.services.recommender.optimizing import run_gepa
+
 WEIGHTS_PATH = Path(__file__).parent / "weights" / "extractprofile.json"
 
 
@@ -161,8 +163,8 @@ def load_program() -> ExtractProfile:
 def optimize(
     trainset: list[dspy.Example],
     metric,
-    num_iterations: int = 10,
     save: bool = True,
+    **gepa_kwargs,
 ) -> ExtractProfile:
     """
     Run GEPA to optimize the profile extraction prompt.
@@ -184,15 +186,14 @@ def optimize(
         - workloads (str)         ← comma-separated, or empty string
         - notes (str)
 
-    Metric receives (example, prediction, trace=None) and returns float in [0, 1].
-    Weight primary_use and budget_tier heavily — they drive all downstream routing.
+    The metric follows GEPA's protocol — (gold, pred, trace, pred_name,
+    pred_trace) returning dspy.Prediction(score, feedback). The feedback string
+    is what GEPA reflects on to rewrite this instruction, so returning a bare
+    float reduces the optimizer to random search.
+
+    Weight primary_use and budget_tier heavily — they drive all downstream
+    routing, and an error in either is unrecoverable by any later step.
     """
-    module = ExtractProfile()
-    optimizer = dspy.GEPA(metric=metric, num_iterations=num_iterations)
-    optimized = optimizer.compile(module, trainset=trainset)
-
-    if save:
-        WEIGHTS_PATH.parent.mkdir(parents=True, exist_ok=True)
-        optimized.save(str(WEIGHTS_PATH))
-
-    return optimized
+    return run_gepa(
+        ExtractProfile(), trainset, metric, WEIGHTS_PATH, save=save, **gepa_kwargs
+    )

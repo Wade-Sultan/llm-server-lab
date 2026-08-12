@@ -5,6 +5,8 @@ from pathlib import Path
 
 import dspy
 
+from app.services.recommender.optimizing import run_gepa
+
 WEIGHTS_PATH = Path(__file__).parent / "weights" / "decidestorage.json"
 
 
@@ -96,11 +98,12 @@ def load_program() -> DecideStorage:
     return module
 
 
-def optimize(trainset, metric, num_iterations=10, save=True) -> DecideStorage:
-    module = DecideStorage()
-    optimizer = dspy.GEPA(metric=metric, num_iterations=num_iterations)
-    optimized = optimizer.compile(module, trainset=trainset)
-    if save:
-        WEIGHTS_PATH.parent.mkdir(parents=True, exist_ok=True)
-        optimized.save(str(WEIGHTS_PATH))
-    return optimized
+def optimize(
+    trainset: list[dspy.Example],
+    metric,
+    save: bool = True,
+    **gepa_kwargs,
+) -> DecideStorage:
+    return run_gepa(
+        DecideStorage(), trainset, metric, WEIGHTS_PATH, save=save, **gepa_kwargs
+    )
