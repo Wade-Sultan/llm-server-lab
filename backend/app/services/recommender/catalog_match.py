@@ -14,12 +14,22 @@ So a user who said "I want to run Llama 3.1 70B" got a build chosen by a model
 reasoning about the words "Llama 70B", when the catalog knew the workload needs
 40GB+ of VRAM and multi-GPU sharding.
 
-WHY VECTOR SEARCH RATHER THAN A LOOKUP. The input side is unbounded: users
-abbreviate ("Resolve", "Tarkov"), misspell, use community names rather than
-published titles, and name sequels loosely. Exact and trigram matching both
-fail on the abbreviation case, which is the common one. This is the retrieval
-problem embeddings are genuinely good at — unlike ranking parts by price and
-performance, which is arithmetic and lives in scoring.py.
+TWO-TIER MATCHING, and the order matters.
+
+  1. Exact name or curated alias (`_match_by_alias`). A synonym someone typed
+     into the admin panel is a *fact*: "R6" IS Rainbow Six Siege. Resolving a
+     known fact by approximate nearest neighbour is both slower (an embedding
+     API call) and less reliable — a two-character query has to out-compete
+     every other row's prose to clear the distance cutoff, and often will not.
+  2. Vector search, for everything aliases do not cover: misspellings, loose
+     sequel names, phrasings nobody thought to curate. This is the unbounded
+     tail, and it is the retrieval problem embeddings are genuinely good at —
+     unlike ranking parts by price and performance, which is arithmetic and
+     lives in scoring.py.
+
+Aliases also go into the embedded source text, so tier 2 benefits from them
+too: "r6 siege" misses the exact match but lands much closer to a row whose
+text now contains "Also known as R6, Siege".
 
 EVERYTHING HERE DEGRADES TO EMPTY. No API key, no vectors backfilled, no match
 above threshold — all produce `CatalogRequirements()` with nothing set, and the
@@ -30,8 +40,10 @@ a precondition.
 from __future__ import annotations
 
 import logging
+import re
 import uuid
 from dataclasses import dataclass, field
+from typing import Any, NamedTuple
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -143,6 +155,33 @@ class CatalogRequirements:
                 f"  Required GPU features: {', '.join(sorted(self.required_features))}."
             )
         return "\n".join(lines)
+
+    def to_dict(self) -> dict:
+        """JSONB-safe snapshot, stored on module_decisions.catalog_requirements.
+
+        WHY THIS IS PERSISTED AT ALL. The appropriateness metrics measure
+        sufficiency against these floors, and they are recomputed per build from
+        catalogs and embeddings that keep changing — so a metric run months
+        later against today's catalog would be scoring the decision by a
+        yardstick the model never saw. Snapshotting them alongside the candidate
+        set is what makes the score reproducible, for exactly the reason
+        module_decisions already snapshots candidates verbatim.
+
+        Sets become sorted lists: sets are not JSON-serializable, and sorting
+        makes two equal requirement snapshots compare equal as stored JSON.
+        """
+        return {
+            "matched_names": list(self.matched_names),
+            "unmatched_terms": list(self.unmatched_terms),
+            "min_vram_gb": self.min_vram_gb,
+            "min_ram_gb": self.min_ram_gb,
+            "min_storage_gb": self.min_storage_gb,
+            "min_cores": self.min_cores,
+            "supports_multi_gpu": self.supports_multi_gpu,
+            "gpu_backends": sorted(self.gpu_backends),
+            "required_features": sorted(self.required_features),
+            "notes": list(self.notes),
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -291,6 +330,67 @@ _APPLIERS = {
 }
 
 
+class _Hit(NamedTuple):
+    """A resolved catalog row, from either the alias path or vector search.
+
+    Deliberately carries no distance: once a term has resolved, the two paths
+    are equivalent to everything downstream, and an exact alias hit has no
+    distance to report. Anything that needs to distinguish them should read the
+    log line, not infer it from a sentinel value.
+    """
+
+    entity_type: str
+    entity_id: uuid.UUID
+
+
+# Which table each catalog entity lives in, and the column holding its display
+# name. Ordered games-first because game titles are what users name most.
+_ALIAS_TABLES: tuple[tuple[str, Any, Any], ...] = (
+    (EmbeddedEntity.GAME.value, Game, Game.title),
+    (EmbeddedEntity.SOFTWARE.value, Software, Software.name),
+    (EmbeddedEntity.AI_MODEL.value, AIModel, AIModel.name),
+)
+
+
+def _normalize_term(value: str) -> str:
+    """Fold a user's phrasing to a comparable form.
+
+    Mirrors crud/components._normalize in spirit: aliases are typed by hand in
+    the admin panel and by users in chat, and neither is going to agree on case
+    or spacing. "Rainbow 6", "rainbow6" and "RAINBOW 6" must all be the same
+    key, or curating aliases becomes an exercise in guessing punctuation.
+    """
+    return re.sub(r"[\s\-_:]+", "", value.strip().lower())
+
+
+async def _match_by_alias(db: AsyncSession, term: str) -> _Hit | None:
+    """Resolve a term against catalog titles and curated aliases, exactly.
+
+    Normalization happens in Python rather than SQL: the comparison has to fold
+    punctuation and spacing the same way on both sides, and doing that in the
+    query would need an expression index this does not have (see migration
+    f4a5b6c7d8e9 on why there is no index). These catalogs are small enough that
+    scanning them is cheaper than the embedding API call this replaces.
+    """
+    target = _normalize_term(term)
+    if not target:
+        return None
+
+    for entity_type, model, name_column in _ALIAS_TABLES:
+        rows = await db.execute(select(model.id, name_column, model.aliases))
+        for row in rows:
+            names = [row[1], *(row[2] or [])]
+            if any(name and _normalize_term(name) == target for name in names):
+                logger.info(
+                    "catalog match: %r resolved to %s %r by exact name/alias",
+                    term,
+                    entity_type,
+                    row[1],
+                )
+                return _Hit(entity_type, row[0])
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
@@ -317,24 +417,36 @@ async def resolve_requirements(
 
     seen: set[tuple[str, uuid.UUID]] = set()
     for term in cleaned:
-        try:
-            hits = await store.search_catalog(
-                db, term, limit=1, max_distance=_MATCH_MAX_DISTANCE
-            )
-        except Exception:
-            # A vector-search failure must not take the build down with it.
-            logger.exception("catalog search failed for %r", term)
-            continue
+        # Exact name or alias first. A curated synonym is a fact, not a
+        # similarity: resolving "R6" by approximate nearest neighbour when the
+        # catalog literally records it as an alias of Rainbow Six Siege is both
+        # slower (an embedding API call) and less reliable (a short token has to
+        # out-compete every other row's prose to clear the distance cutoff).
+        # This path costs one indexed-ish scan over a few thousand rows and
+        # cannot return the wrong answer.
+        exact = await _match_by_alias(db, term)
+        if exact is not None:
+            entity_type, entity_id = exact
+        else:
+            try:
+                hits = await store.search_catalog(
+                    db, term, limit=1, max_distance=_MATCH_MAX_DISTANCE
+                )
+            except Exception:
+                # A vector-search failure must not take the build down with it.
+                logger.exception("catalog search failed for %r", term)
+                continue
 
-        if not hits:
-            req.unmatched_terms.append(term)
-            continue
+            if not hits:
+                req.unmatched_terms.append(term)
+                continue
+            entity_type, entity_id = hits[0].entity_type, hits[0].entity_id
 
-        hit = hits[0]
-        key = (hit.entity_type, hit.entity_id)
+        key = (entity_type, entity_id)
         if key in seen:
             continue
         seen.add(key)
+        hit = _Hit(entity_type, entity_id)
 
         kind = _APPLIERS.get(hit.entity_type)
         if kind == "game":

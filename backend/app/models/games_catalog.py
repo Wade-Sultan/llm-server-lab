@@ -36,6 +36,17 @@ class Game(Base):
     title = Column(String(255), nullable=False, unique=True)
     slug = Column(String(255), nullable=False, unique=True)  # e.g. "cyberpunk-2077"
 
+    # Community names users actually type: "R6", "Siege" for Rainbow Six Siege;
+    # "Val", "Valo" for Valorant. Two jobs, both load-bearing:
+    #   1. An exact (normalized) hit here short-circuits the vector search in
+    #      services/recommender/catalog_match.py — a known synonym should not be
+    #      resolved by approximate nearest neighbour when a string match is
+    #      exact and free.
+    #   2. They go into the embedded source text, so near-misses ("r6 siege")
+    #      still land close in vector space.
+    # Curated by hand in the admin panel; nothing infers them.
+    aliases = Column(ARRAY(String), nullable=False, server_default="{}")
+
     genre = Column(
         String(50), nullable=True
     )  # e.g. "aaa_open_world", "competitive_fps"

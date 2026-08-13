@@ -55,10 +55,17 @@ def _list(values: list[str] | None) -> str:
 
 
 def game_text(game) -> str:
-    """e.g. 'Cyberpunk 2077. A competitive_fps game. Requires ray tracing …'"""
+    """e.g. 'Cyberpunk 2077. Also known as CP77. aaa open world video game. …'
+
+    Aliases come second, right after the title: they are the words a user is
+    most likely to type, and putting them adjacent to the canonical name is what
+    pulls a short query like "R6" toward this row rather than leaving it to
+    compete with fifteen words of genre and requirements prose.
+    """
     genre = (game.genre or "").replace("_", " ")
     return _join(
         game.title,
+        f"Also known as {_list(game.aliases)}" if game.aliases else None,
         f"{genre} video game" if genre else "video game",
         f"Requires {_list(game.hard_requirements)}" if game.hard_requirements else None,
         game.requirements_notes,
@@ -70,6 +77,7 @@ def software_text(software) -> str:
     tags = _list(software.use_case_tags)
     return _join(
         software.name,
+        f"Also known as {_list(software.aliases)}" if software.aliases else None,
         f"{category} software" if category else "software",
         f"Used for {tags}" if tags else None,
         f"Developed by {software.developer}" if software.developer else None,
@@ -84,6 +92,7 @@ def ai_model_text(model) -> str:
     )
     return _join(
         model.name,
+        f"Also known as {_list(model.aliases)}" if model.aliases else None,
         f"{family} AI model" if family else "AI model",
         size,
         f"Released by {model.developer}" if model.developer else None,

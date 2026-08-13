@@ -226,6 +226,15 @@ class ModuleDecision(Base):
         nullable=True,
         doc="Non-candidate inputs to this call (profile/prior selections snapshot)",
     )
+    catalog_requirements = Column(
+        JSONB,
+        nullable=True,
+        doc="Snapshot of the hardware floors resolved from the games/software/"
+        "ai_models catalogs for what the user named — see "
+        "services/recommender/catalog_match.py::CatalogRequirements.to_dict. "
+        "NULL when nothing was named, nothing matched, or the build predates "
+        "catalog matching",
+    )
     raw_prompt_hash = Column(
         String(64),
         nullable=True,

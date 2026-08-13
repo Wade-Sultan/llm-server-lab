@@ -678,6 +678,41 @@ _METRIC_DISPATCH: dict[str, tuple[str, Any, str]] = {
 }
 
 
+def context_from_requirements(
+    requirements: dict | None,
+    *,
+    slot_budget_usd: float | None = None,
+    is_server_profile: bool = False,
+) -> dict[str, Any]:
+    """Translate a stored `module_decisions.catalog_requirements` blob into the
+    keyword arguments the scorers take.
+
+    This is the bridge that makes a recorded decision scoreable: the column
+    holds CatalogRequirements.to_dict(), and the scorers take flat keywords with
+    names of their own. Doing the translation in one place means the offline
+    script, the trainset builder and the GEPA adapter cannot drift apart on it.
+
+    A None or empty blob yields only the budget, which is the correct degraded
+    state — the scorers then report sufficiency as an unmeasured signal instead
+    of assuming it passed.
+    """
+    context: dict[str, Any] = {
+        "slot_budget_usd": slot_budget_usd,
+        "is_server_profile": is_server_profile,
+    }
+    if not isinstance(requirements, dict) or not requirements:
+        return context
+
+    context["min_vram_gb"] = requirements.get("min_vram_gb")
+    context["min_cores"] = requirements.get("min_cores")
+    context["matched_titles"] = requirements.get("matched_names") or None
+    context["needs_multi_gpu"] = bool(requirements.get("supports_multi_gpu"))
+    # A workload that shards across cards is the one signal that legitimately
+    # calls for a second x16 slot; nothing else in the requirements blob speaks
+    # to slot count, so target_gpu_count is left for callers who know better.
+    return context
+
+
 def _requirements_from_gold(gold: Any) -> dict[str, Any]:
     """Pull the metric's context off a training Example.
 

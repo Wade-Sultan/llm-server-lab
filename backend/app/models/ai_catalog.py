@@ -86,6 +86,10 @@ class AIModel(Base):
     name = Column(String(255), nullable=False, unique=True)  # e.g. "Llama 3.1 70B"
     slug = Column(String(255), nullable=False, unique=True)  # e.g. "llama-3-1-70b"
 
+    # Community shorthand: "SD" for Stable Diffusion, "Llama 70B" for the
+    # full release name. See the note on Game.aliases — same two jobs.
+    aliases = Column(ARRAY(String), nullable=False, server_default="{}")
+
     family = Column(String(30), nullable=False, index=True)  # AIModelFamily value
 
     # Parameter count in billions (float so vision models fit: ResNet-50 = 0.026).

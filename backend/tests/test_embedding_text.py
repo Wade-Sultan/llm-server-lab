@@ -60,6 +60,7 @@ def _game(**overrides):
         hard_requirements=["ray tracing"],
         requirements_notes="SSD strongly recommended.",
         min_storage_gb=70,
+        aliases=[],
     )
     base.update(overrides)
     return SimpleNamespace(**base)
@@ -142,6 +143,7 @@ def test_ai_model_text_includes_the_hub_id():
         developer="Meta",
         huggingface_id="meta-llama/Llama-3.1-70B-Instruct",
         notes=None,
+        aliases=[],
     )
     out = t.ai_model_text(model)
     assert "meta-llama/Llama-3.1-70B-Instruct" in out
@@ -178,3 +180,31 @@ def test_every_entity_type_has_a_builder():
 def test_build_text_dispatches_by_entity_type():
     assert t.build_text(EmbeddedEntity.CPU, _cpu()).startswith("AMD Ryzen")
     assert t.build_text(EmbeddedEntity.GAME, _game()).startswith("Cyberpunk")
+
+
+# ---------------------------------------------------------------------------
+# Aliases
+# ---------------------------------------------------------------------------
+
+
+def test_game_text_includes_aliases_right_after_the_title():
+    """Position matters: a two-character query has to compete with the rest of
+    the prose, so the alias sits adjacent to the canonical name."""
+    out = t.game_text(_game(title="Rainbow Six Siege", aliases=["R6", "Siege"]))
+    assert "R6" in out
+    assert "Siege" in out
+    # Title first, aliases immediately after, before the genre clause.
+    assert out.index("Rainbow Six Siege") < out.index("R6") < out.index("video game")
+
+
+def test_empty_aliases_leave_the_text_unchanged():
+    """Rows with no aliases must hash identically to before the column existed,
+    so the sweep skips them instead of re-embedding the whole catalog."""
+    assert "Also known as" not in t.game_text(_game(aliases=[]))
+
+
+def test_adding_an_alias_changes_the_hash():
+    """That is what makes the reconcile sweep pick the row up."""
+    before = t.content_hash(t.game_text(_game(aliases=[])))
+    after = t.content_hash(t.game_text(_game(aliases=["CP77"])))
+    assert before != after

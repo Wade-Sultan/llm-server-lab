@@ -203,6 +203,12 @@ class BuildRecorder:
         budget_usd = getattr(request, "budget_usd", None)
         self.budget_cents = int(budget_usd * 100) if budget_usd is not None else None
         self._decisions: list[_DecisionRecord] = []
+        # Hardware floors resolved from the catalogs for what the user named.
+        # Held on the recorder rather than passed per decision because they are
+        # a property of the build, not of any one step — every decision in a run
+        # was made under the same requirements, and copying them onto each row
+        # is what lets a single decision be scored without a join.
+        self.catalog_requirements: dict | None = None
         # Reference build resolved in parallel; recorded on the same session row.
         self.reference_build_key: str | None = None
         self.reference_build: dict | None = None
@@ -313,6 +319,25 @@ class BuildRecorder:
             )
         except Exception:  # pragma: no cover - defensive
             logger.debug("record_deterministic_decision failed", exc_info=True)
+
+    def set_catalog_requirements(self, requirements: Any | None) -> None:
+        """Snapshot the resolved catalog floors onto this run.
+
+        Call once, before the first Decide* step, so every recorded decision
+        carries the requirements it was actually made under. Accepts either a
+        CatalogRequirements or a plain dict; None (nothing named, or nothing
+        matched) leaves the column NULL, which the appropriateness metrics read
+        as "sufficiency was not measurable" rather than as "requirements met".
+        """
+        try:
+            if requirements is None:
+                self.catalog_requirements = None
+            elif isinstance(requirements, dict):
+                self.catalog_requirements = requirements
+            else:
+                self.catalog_requirements = requirements.to_dict()
+        except Exception:  # pragma: no cover - defensive
+            logger.debug("set_catalog_requirements failed", exc_info=True)
 
     def set_reference_build(self, build_key: str | None, build: Any | None) -> None:
         """
@@ -444,6 +469,11 @@ class BuildRecorder:
                             signature_version=d.signature_version,
                             candidate_set=d.candidate_set,
                             input_state=d.input_state,
+                            # Denormalized onto every row on purpose: it makes a
+                            # decision scoreable on its own, without joining
+                            # back to the session, which is what the metric and
+                            # the trainset builder both want.
+                            catalog_requirements=self.catalog_requirements,
                             raw_prompt_hash=d.raw_prompt_hash,
                             output_decision=output or None,
                             tokens_in=d.tokens_in,

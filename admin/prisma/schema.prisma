@@ -550,6 +550,10 @@ model Game {
   id                String   @id @default(uuid()) @db.Uuid
   title             String   @unique
   slug              String   @unique
+  /// Community names users type: "R6", "Siege". Curated here by hand — the
+  /// build pipeline matches chat text against these before falling back to
+  /// vector search, and re-embeds the row when they change.
+  aliases           String[]
   genre             String?
   storeUrl          String?  @map("store_url")
   imageUrl          String?  @map("image_url")
@@ -588,6 +592,8 @@ model Software {
   id                   String   @id @default(uuid()) @db.Uuid
   name                 String   @unique
   slug                 String   @unique
+  /// Community shorthand: "Resolve", "PS". See Game.aliases.
+  aliases              String[]
   category             String // creative | productivity | ai_ml | development | streaming
   useCaseTags          String[] @map("use_case_tags")
   developer            String?
@@ -654,6 +660,8 @@ model AiModel {
   id             String   @id @default(uuid()) @db.Uuid
   name           String   @unique
   slug           String   @unique
+  /// Community shorthand: "SD", "Llama 70B". See Game.aliases.
+  aliases        String[]
   family         String // llm | multimodal | image_gen | video_gen | speech | audio_gen | vision | embedding | classical | rl
   paramsBillions Float?   @map("params_billions")
   contextLength  Int?     @map("context_length")

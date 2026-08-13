@@ -1390,6 +1390,17 @@ async def run_pipeline(
         summary = state.catalog_requirements.summary()
         if summary:
             state.use_case_summary = f"{state.use_case_summary}\n{summary}"
+    if recorder is not None:
+        # Before the first step, so every decision this run records carries the
+        # floors it was made under. Snapshotting them is what makes the
+        # appropriateness metrics' sufficiency term reproducible months later,
+        # after the catalogs and embeddings have moved on.
+        recorder.set_catalog_requirements(
+            state.catalog_requirements
+            if state.catalog_requirements is not None
+            and not state.catalog_requirements.is_empty
+            else None
+        )
     state.session_id = (
         str(recorder.session_id) if recorder is not None else str(uuid.uuid4())
     )

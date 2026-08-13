@@ -295,3 +295,62 @@ def test_gepa_metric_reads_the_right_output_field_per_module():
 def test_gepa_metric_rejects_an_unknown_module():
     with pytest.raises(ValueError, match="no appropriateness metric"):
         ap.make_gepa_metric("DecideToaster")
+
+
+# ---------------------------------------------------------------------------
+# context_from_requirements — the bridge from stored telemetry to the scorers
+# ---------------------------------------------------------------------------
+
+
+def test_context_translates_a_stored_requirements_blob():
+    """module_decisions.catalog_requirements -> scorer keyword arguments."""
+    blob = {
+        "matched_names": ["Cyberpunk 2077"],
+        "min_vram_gb": 16,
+        "min_cores": 8,
+        "supports_multi_gpu": False,
+    }
+    ctx = ap.context_from_requirements(blob, slot_budget_usd=900)
+    assert ctx["min_vram_gb"] == 16
+    assert ctx["min_cores"] == 8
+    assert ctx["matched_titles"] == ["Cyberpunk 2077"]
+    assert ctx["needs_multi_gpu"] is False
+    assert ctx["slot_budget_usd"] == 900
+
+
+def test_context_from_a_null_blob_yields_only_the_budget():
+    """Rows predating the column, and builds where nothing matched."""
+    ctx = ap.context_from_requirements(None, slot_budget_usd=400)
+    assert ctx["slot_budget_usd"] == 400
+    assert "min_vram_gb" not in ctx
+
+
+def test_stored_requirements_make_sufficiency_measurable():
+    """The whole point of the column: without it the score is price-only."""
+    candidates = [_gpu("Small", 300, 8), _gpu("Big", 900, 24)]
+    blob = {"matched_names": ["Llama 3.1 70B"], "min_vram_gb": 24}
+
+    without = ap.gpu_appropriateness(candidates, "Small", slot_budget_usd=900)
+    ctx = ap.context_from_requirements(blob, slot_budget_usd=900)
+    with_floors = ap.gpu_appropriateness(
+        candidates,
+        "Small",
+        min_vram_gb=ctx["min_vram_gb"],
+        matched_titles=ctx["matched_titles"],
+    )
+
+    assert without.is_informative is False
+    assert with_floors.is_informative is True
+    assert with_floors.score == 0.0
+    assert "Llama 3.1 70B" in with_floors.feedback
+
+
+def test_multi_gpu_requirement_flows_through_to_the_board_metric():
+    blob = {"matched_names": ["Llama 3.1 70B"], "supports_multi_gpu": True}
+    ctx = ap.context_from_requirements(blob, slot_budget_usd=300)
+    candidates = [_board("Narrow", 150, slots=1), _board("Wide", 260, slots=2)]
+
+    result = ap.motherboard_appropriateness(
+        candidates, "Narrow", needs_multi_gpu=ctx["needs_multi_gpu"]
+    )
+    assert result.sufficiency == 0.0

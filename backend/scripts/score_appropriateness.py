@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import inspect
 import json
 import statistics
 import sys
@@ -43,6 +44,7 @@ from app.core.db import AsyncSessionLocal
 from app.models.build_session import BuildSession, ModuleDecision
 from app.services.recommender.appropriateness import (
     Appropriateness,
+    context_from_requirements,
     cpu_appropriateness,
     gpu_appropriateness,
     motherboard_appropriateness,
@@ -95,12 +97,24 @@ def _score_row(decision: ModuleDecision) -> Appropriateness | None:
         return None
 
     budget = _slot_budget(decision.input_state, budget_keys)
-    # Requirement floors are not stored on module_decisions today — they live in
-    # the prose of input_state["use_cases"]. Passing None means sufficiency goes
-    # unmeasured and is reported as a missing signal, which is the honest
-    # outcome rather than a fabricated 1.0.
+    # The floors the decision was actually made under, snapshotted at decision
+    # time. NULL on rows written before migration e3f4a5b6c7d8, and on any build
+    # where the user named nothing matchable — both leave sufficiency unmeasured
+    # and reported as a missing signal rather than fabricated as passing.
+    context = context_from_requirements(
+        decision.catalog_requirements, slot_budget_usd=budget
+    )
+    # Each scorer takes only the keywords it understands; the shared context
+    # carries the union of all three.
+    accepted = {
+        name
+        for name, p in inspect.signature(scorer).parameters.items()
+        if p.kind is inspect.Parameter.KEYWORD_ONLY
+    }
+    kwargs = {k: v for k, v in context.items() if k in accepted and v is not None}
+
     try:
-        return scorer(candidates, decision.chosen_name, slot_budget_usd=budget)
+        return scorer(candidates, decision.chosen_name, **kwargs)
     except Exception as exc:  # pragma: no cover - defensive
         print(f"  ! scoring failed for {decision.id}: {exc}", file=sys.stderr)
         return None
