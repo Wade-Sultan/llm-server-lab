@@ -32,6 +32,11 @@ class PricingRun(Base):
     parts_checked = Column(Integer, nullable=False, server_default="0")
     searches_used = Column(Integer, nullable=False, server_default="0")
 
+    # Price-drop emails this run handed to commerce. Counts real sends only —
+    # a dry run (settings.PRICE_ALERTS_ENABLED off) evaluates subscriptions and
+    # logs what it would have sent, and leaves this at 0.
+    alerts_sent = Column(Integer, nullable=False, server_default="0")
+
     error_detail = Column(Text, nullable=True)
 
     started_at = Column(
@@ -68,12 +73,21 @@ class PriceCheck(Base):
 
     # Every result SerpAPI returned, before title filtering:
     # [{"title", "extracted_price", "source", "product_link",
-    #   "similarity_score", "included_in_stats"}, ...]
+    #   "similarity_score", "included_in_stats", "exclusion_reason"}, ...]
+    #
+    # exclusion_reason names why a result was left out — a title disqualifier
+    # (title_match), an implausible price against MSRP, or an outlier against
+    # the rest of the sample (stats). That is the labelled negative set the
+    # legitimacy classifier trains on; "excluded" alone would not be.
     raw_results = Column(JSONB, nullable=False)
 
     n_results_total = Column(Integer, nullable=False, server_default="0")
     n_results_used = Column(Integer, nullable=False, server_default="0")
 
+    # NOTE: these five describe the KEPT sample — what survived title
+    # filtering and outlier trimming — not every result. Rows written before
+    # the trimming landed describe the untrimmed sample instead, so a
+    # comparison across that boundary is not apples to apples.
     price_mean_cents = Column(Integer, nullable=True)
     price_min_cents = Column(Integer, nullable=True)
     price_max_cents = Column(Integer, nullable=True)

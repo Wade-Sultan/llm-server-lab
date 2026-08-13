@@ -161,6 +161,10 @@ services:
       # Resend welcome emails — empty disables sending (service still boots).
       - RESEND_API_KEY=${RESEND_API_KEY}
       - EMAIL_FROM=${EMAIL_FROM:-Palladium <noreply@palladiumtech.ai>}
+      # Shared secret for /internal/* (price alerts from the builder's pricing
+      # ETL). Same value the builder holds as COMMERCE_INTERNAL_KEY; empty
+      # closes the route rather than opening it.
+      - INTERNAL_API_KEY=${COMMERCE_INTERNAL_KEY}
       - AMAZON_ASSOCIATE_TAG=${AMAZON_ASSOCIATE_TAG}
       - EBAY_CAMPAIGN_ID=${EBAY_CAMPAIGN_ID}
       # Firebase Admin SDK needs Google creds to init; reuse the proxy's ADC.

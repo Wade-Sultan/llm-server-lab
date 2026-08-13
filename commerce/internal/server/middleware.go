@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"crypto/subtle"
 	"log/slog"
 	"net/http"
 	"runtime/debug"
@@ -120,6 +121,42 @@ func optionalFirebaseAuth(client *fbauth.Client) middleware {
 				if token, err := client.VerifyIDToken(r.Context(), raw); err == nil {
 					r = r.WithContext(context.WithValue(r.Context(), firebaseTokenContextKey, token))
 				}
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Internal (service-to-service) auth
+// ---------------------------------------------------------------------------
+
+// requireInternalKey gates the /internal/* routes on a shared secret in
+// X-Internal-Key, the same scheme admin uses to reach the builder's discovery
+// endpoints (X-Admin-Key, backend/app/api/deps.py::require_admin_key).
+//
+// These routes are reachable from outside the cluster — the HTTPRoute matches
+// every path — so the key is the whole of their protection, not a second
+// factor behind a network boundary. An unset key disables them outright rather
+// than leaving them open.
+//
+// The comparison is constant-time: the caller controls the header, so a
+// byte-by-byte early return would leak the secret a character at a time.
+func requireInternalKey(key string) middleware {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if key == "" {
+				writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+					"error": "internal API is not configured on this server",
+				})
+				return
+			}
+			presented := r.Header.Get("X-Internal-Key")
+			if subtle.ConstantTimeCompare([]byte(presented), []byte(key)) != 1 {
+				writeJSON(w, http.StatusForbidden, map[string]string{
+					"error": "invalid or missing X-Internal-Key",
+				})
+				return
 			}
 			next.ServeHTTP(w, r)
 		})

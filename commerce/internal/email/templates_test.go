@@ -196,6 +196,42 @@ func TestPriceAlertWithoutURL(t *testing.T) {
 	}
 }
 
+// The pricing ETL's alerts have no marketplace — its price is a median across
+// retailers — so the "at <retailer>" clause must disappear rather than render
+// as a dangling "at ." in either body.
+func TestPriceAlertWithoutMarketplace(t *testing.T) {
+	a := sampleAlert()
+	a.Marketplace = ""
+	msg, err := PriceAlertMessage(a)
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	for _, bad := range []string{" at .", "at  .", "dropped at"} {
+		if strings.Contains(msg.HTML, bad) {
+			t.Errorf("HTML contains a dangling clause %q", bad)
+		}
+		if strings.Contains(msg.Text, bad) {
+			t.Errorf("plain-text body contains a dangling clause %q", bad)
+		}
+	}
+	// First line only: the CTA line after it depends on URL, not marketplace.
+	headline, _, _ := strings.Cut(msg.Text, "\n")
+	if want := "AMD Ryzen 7 9800X3D dropped to $429.50 (was $549.99, down $120.49)."; headline != want {
+		t.Errorf("Text headline = %q, want %q", headline, want)
+	}
+	// With one, it still reads the old way.
+	withMarket, err := PriceAlertMessage(sampleAlert())
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	if !strings.Contains(withMarket.Text, "at Amazon") {
+		t.Errorf("named marketplace dropped out of the text body: %q", withMarket.Text)
+	}
+	if !strings.Contains(withMarket.HTML, "Amazon") {
+		t.Error("named marketplace dropped out of the HTML body")
+	}
+}
+
 func TestFormatMoney(t *testing.T) {
 	tests := []struct {
 		cents    int64

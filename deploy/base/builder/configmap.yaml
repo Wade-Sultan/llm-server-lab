@@ -26,3 +26,15 @@ data:
   # custom resource, and a value set here would override an injection that is
   # meant to win. See app/core/tracing.py.
   LANGSMITH_PROJECT: "palladium"
+  # Commerce's in-cluster address, used by the pricing ETL to have price-drop
+  # emails sent (commerce is the only service holding RESEND_API_KEY). The bare
+  # Service name resolves within the namespace, so this is the same in every
+  # overlay. The shared secret that goes with it is COMMERCE_INTERNAL_KEY in
+  # palladium-secrets — commerce reads the same value as INTERNAL_API_KEY.
+  COMMERCE_INTERNAL_URL: "http://commerce"
+  # Whether a price drop actually mails anyone. Off everywhere for now: the
+  # pricing ETL still evaluates every subscription and logs what it would have
+  # sent, but nothing is delivered and no subscription is retired, so turning
+  # this on later alerts exactly the people it would have alerted while off.
+  # There is no frontend for subscribing yet either.
+  PRICE_ALERTS_ENABLED: "false"

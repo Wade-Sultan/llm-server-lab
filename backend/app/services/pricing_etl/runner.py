@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 
 from app.core.db import AsyncSessionLocal
 from app.crud import pricing_etl as crud
-from app.services.pricing_etl import quota, stats, title_match
+from app.services.pricing_etl import alerts, quota, stats, title_match
 from app.services.pricing_etl.serpapi_client import SerpApiConfigError, search_shopping
 
 logger = logging.getLogger(__name__)
@@ -37,6 +37,10 @@ class _Target:
     kind: str  # "pc_part" | "gpu_chipset" | "psu_group" | "ram_group" | "storage_group"
     id: uuid.UUID
     queries: list[str]
+    # MSRP, when the target has one, as an absolute plausibility anchor for the
+    # price stats. Only pc_parts carry msrp_cents — the group tables don't — so
+    # this is None for every grouped kind (see stats.compute_stats).
+    anchor_cents: int | None = None
 
 
 async def _build_batch(db, limit: int, low_priority_allowed: bool) -> list[_Target]:
@@ -50,7 +54,14 @@ async def _build_batch(db, limit: int, low_priority_allowed: bool) -> list[_Targ
         _LOW_NON_GROUPED if low_priority_allowed else []
     )
     for part in await crud.get_part_candidates(db, non_grouped_types, limit):
-        targets.append(_Target(kind="pc_part", id=part.id, queries=[part.name]))
+        targets.append(
+            _Target(
+                kind="pc_part",
+                id=part.id,
+                queries=[part.name],
+                anchor_cents=part.msrp_cents,
+            )
+        )
 
     grouped_kinds = _HIGH_GROUPED + (_LOW_GROUPED if low_priority_allowed else [])
     for kind in grouped_kinds:
@@ -66,36 +77,54 @@ async def _build_batch(db, limit: int, low_priority_allowed: bool) -> list[_Targ
 
 async def _check_target(
     db, run_id: uuid.UUID, target: _Target, max_queries: int
-) -> tuple[int, bool]:
+) -> tuple[int, bool, int]:
     """Runs (up to max_queries of) target's searches, scores/filters titles,
-    computes stats, and records both the raw check and the applied price.
-    Returns (searches_made, matched)."""
+    computes stats, records both the raw check and the applied price, and fires
+    any price alerts the new price triggers.
+    Returns (searches_made, matched, alerts_sent)."""
     queries = target.queries[:max_queries]
     if not queries:
-        return 0, False
+        return 0, False, 0
 
+    # Every result is recorded, with the reason it was or wasn't used.
+    # candidate_prices is the subset that survived title filtering, and
+    # candidate_rows is that same subset by reference into scored_results — so
+    # the stats layer's own rejections (outliers, the MSRP band) can be written
+    # back onto the stored row by index.
     scored_results: list[dict] = []
-    included_prices: list[float] = []
+    candidate_prices: list[float] = []
+    candidate_rows: list[dict] = []
     for q in queries:
         results = await search_shopping(q)
         await quota.record_search(db)
         for r in results:
             score = title_match.similarity(q, r.title)
-            included = score >= title_match.SIMILARITY_THRESHOLD
-            scored_results.append(
-                {
-                    "title": r.title,
-                    "extracted_price": r.extracted_price,
-                    "source": r.source,
-                    "product_link": r.product_link,
-                    "similarity_score": score,
-                    "included_in_stats": included,
-                }
-            )
-            if included:
-                included_prices.append(r.extracted_price)
+            reason = title_match.exclusion_reason(score, r.title)
+            row = {
+                "title": r.title,
+                "extracted_price": r.extracted_price,
+                "source": r.source,
+                "product_link": r.product_link,
+                "similarity_score": score,
+                "included_in_stats": reason is None,
+                "exclusion_reason": reason,
+            }
+            scored_results.append(row)
+            if reason is None:
+                candidate_prices.append(r.extracted_price)
+                candidate_rows.append(row)
 
-    price_stats = stats.compute_stats(included_prices)
+    price_stats = stats.compute_stats(
+        candidate_prices, anchor_cents=target.anchor_cents
+    )
+    if price_stats is not None:
+        for idx, reason in price_stats.rejected.items():
+            candidate_rows[idx]["included_in_stats"] = False
+            candidate_rows[idx]["exclusion_reason"] = reason
+
+    # The median of the trimmed sample, not the mean of everything that matched
+    # — see stats.py for why. None when too few results survived to trust one.
+    applied_cents = price_stats.applied_cents if price_stats else None
 
     await crud.record_price_check(
         db,
@@ -105,23 +134,32 @@ async def _check_target(
         queries_used=queries,
         raw_results=scored_results,
         n_results_total=len(scored_results),
-        n_results_used=len(included_prices),
+        n_results_used=price_stats.n_kept if price_stats else 0,
         price_mean_cents=price_stats.mean_cents if price_stats else None,
         price_min_cents=price_stats.min_cents if price_stats else None,
         price_max_cents=price_stats.max_cents if price_stats else None,
         price_median_cents=price_stats.median_cents if price_stats else None,
         price_stddev_cents=price_stats.stddev_cents if price_stats else None,
-        applied=price_stats is not None,
+        applied=applied_cents is not None,
     )
-    await crud.record_check_outcome(
+    name, previous_cents = await crud.record_check_outcome(
         db,
         target_kind=target.kind,
         target_id=target.id,
         checked_at=datetime.now(UTC),
-        price_cents=price_stats.mean_cents if price_stats else None,
+        price_cents=applied_cents,
     )
 
-    return len(queries), price_stats is not None
+    outcome = await alerts.process_target(
+        db,
+        target_kind=target.kind,
+        target_id=target.id,
+        target_name=name,
+        previous_cents=previous_cents,
+        new_cents=applied_cents,
+    )
+
+    return len(queries), applied_cents is not None, outcome.sent
 
 
 async def run() -> None:
@@ -135,6 +173,7 @@ async def run() -> None:
     error_detail: str | None = None
     parts_checked = 0
     searches_used = 0
+    alerts_sent = 0
 
     try:
         async with AsyncSessionLocal() as db:
@@ -154,7 +193,7 @@ async def run() -> None:
                     break
                 try:
                     async with AsyncSessionLocal() as db:
-                        made, matched = await _check_target(
+                        made, matched, alerted = await _check_target(
                             db, run_id, target, remaining_budget
                         )
                 except SerpApiConfigError:
@@ -169,6 +208,7 @@ async def run() -> None:
                     )
                     continue
                 searches_used += made
+                alerts_sent += alerted
                 if matched:
                     parts_checked += 1
 
@@ -187,6 +227,7 @@ async def run() -> None:
                     error_detail=error_detail,
                     parts_checked=parts_checked,
                     searches_used=searches_used,
+                    alerts_sent=alerts_sent,
                 )
         except Exception:
             logger.exception("pricing run %s: failed to finalize run row", run_id)

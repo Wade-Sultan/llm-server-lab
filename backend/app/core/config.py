@@ -113,6 +113,22 @@ class Settings(BaseSettings):
 
     SERPAPI_KEY: str
 
+    # --- Price alerts ---------------------------------------------------------
+    # The master switch on whether a price drop actually mails anyone. Off means
+    # the pricing ETL still evaluates every subscription and logs what it would
+    # have sent, but nothing leaves the cluster and no subscription is retired —
+    # so turning it on later alerts exactly the people it would have alerted
+    # while it was off. Subscribing is unaffected either way.
+    PRICE_ALERTS_ENABLED: bool = False
+
+    # Where the commerce (Go) service lives from inside the cluster, and the
+    # shared secret its /internal/* routes require. Commerce holds
+    # RESEND_API_KEY and the email templates, so it is what actually sends;
+    # see app/services/commerce_client.py. Either being empty makes dispatch
+    # fail as "not configured" rather than silently succeeding.
+    COMMERCE_INTERNAL_URL: str = ""
+    COMMERCE_INTERNAL_KEY: str = ""
+
     # --- Valkey (Memorystore) -------------------------------------------------
     # Empty host disables both the turn stream and the chat buffer, and the API
     # falls back to running the pipeline inline in the request (see

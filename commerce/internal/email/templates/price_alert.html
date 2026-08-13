@@ -1,12 +1,17 @@
-{{define "preheader"}}{{.PartName}} dropped to {{.NewPrice}} at {{.Marketplace}}.{{end}}
+{{define "preheader"}}{{.PartName}} dropped to {{.NewPrice}}{{if .Marketplace}} at {{.Marketplace}}{{end}}.{{end}}
 
 {{define "content"}}
 {{template "heading" "A part in your build got cheaper"}}
 
 <tr>
   <td style="font-family:'DM Sans', 'Helvetica Neue', Helvetica, Arial, sans-serif; font-size:15px; line-height:1.6; color:#3f3f46; padding-bottom:24px;">
-    We track prices on the parts you picked. This one just dropped at
-    {{.Marketplace}}.
+    {{/*
+      Marketplace is optional: an alert from the pricing ETL is a median
+      street price across retailers, so naming one would be a lie. Only a
+      listing-sourced alert has a retailer to name.
+    */}}
+    We track prices on the parts you picked. This one just dropped{{if .Marketplace}} at
+    {{.Marketplace}}{{end}}.
   </td>
 </tr>
 

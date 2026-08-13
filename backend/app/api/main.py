@@ -7,6 +7,7 @@ from app.api.routes import (
     discovery,
     guides,
     health,
+    price_subscriptions,
     utils,
 )
 
@@ -18,3 +19,4 @@ api_router.include_router(conversations.router)
 api_router.include_router(discovery.router)
 api_router.include_router(blog.router)
 api_router.include_router(guides.router)
+api_router.include_router(price_subscriptions.router)

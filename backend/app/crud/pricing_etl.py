@@ -62,6 +62,7 @@ async def finalize_run(
     error_detail: str | None = None,
     parts_checked: int = 0,
     searches_used: int = 0,
+    alerts_sent: int = 0,
 ) -> None:
     run = await db.get(PricingRun, run_id)
     if run is None:
@@ -70,6 +71,7 @@ async def finalize_run(
     run.error_detail = error_detail
     run.parts_checked = parts_checked
     run.searches_used = searches_used
+    run.alerts_sent = alerts_sent
     run.finished_at = func.now()
     await db.commit()
 
@@ -150,7 +152,10 @@ async def record_price_check(
     await db.commit()
 
 
-_TARGET_MODELS: dict[str, type] = {
+# target_kind -> the model whose row actually carries street_price_cents.
+# Public because price subscriptions point at the same (kind, id) pair and must
+# resolve it the same way (app/crud/price_subscriptions.py).
+TARGET_MODELS: dict[str, type] = {
     "pc_part": PCPart,
     **{kind: model for kind, (model, _) in GROUP_SPECS.items()},
 }
@@ -163,19 +168,27 @@ async def record_check_outcome(
     target_id: uuid.UUID,
     checked_at: datetime,
     price_cents: int | None,
-) -> None:
+) -> tuple[str | None, int | None]:
     """Always stamps last_price_checked_at (so an unmatched part isn't picked
     again next run), and additionally writes street_price_cents/price_source
-    when the check produced a usable price."""
-    model = _TARGET_MODELS[target_kind]
+    when the check produced a usable price.
+
+    Returns (name, previous street_price_cents) read before the write — the
+    price-alert evaluation needs both, and after this commit the old price is
+    gone. (None, None) if the row has vanished since the batch was built.
+    """
+    model = TARGET_MODELS[target_kind]
     target = await db.get(model, target_id)
     if target is None:
-        return
+        return None, None
+    name = target.name
+    previous_price_cents = target.street_price_cents
     target.last_price_checked_at = checked_at
     if price_cents is not None:
         target.street_price_cents = price_cents
         target.price_source = "serpapi"
     await db.commit()
+    return name, previous_price_cents
 
 
 async def get_quota_used(db: AsyncSession, month: Any) -> int:

@@ -71,6 +71,14 @@ type Config struct {
 	// email sending entirely (it's not required for anything today).
 	ResendAPIKey string
 	EmailFrom    string
+
+	// InternalAPIKey is the shared secret guarding /internal/* — the
+	// service-to-service surface the builder calls to have transactional mail
+	// sent (commerce is the only service holding RESEND_API_KEY). Mirrors the
+	// builder's own DISCOVERY_API_KEY: empty is not a validation failure, it
+	// makes those routes answer 503, so a deployment that doesn't use them
+	// still boots.
+	InternalAPIKey string
 }
 
 // Load reads configuration from the environment and validates it. Required
@@ -91,6 +99,7 @@ func Load() (*Config, error) {
 		FrontendHost:           getenv("FRONTEND_HOST", "http://localhost:3000"),
 		ResendAPIKey:           os.Getenv("RESEND_API_KEY"),
 		EmailFrom:              os.Getenv("EMAIL_FROM"),
+		InternalAPIKey:         os.Getenv("INTERNAL_API_KEY"),
 	}
 	cfg.CORSOrigins = append(parseCORSOrigins(os.Getenv("BACKEND_CORS_ORIGINS")), strings.TrimRight(cfg.FrontendHost, "/"))
 

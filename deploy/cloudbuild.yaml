@@ -228,6 +228,23 @@ steps:
           -o jsonpath='{.data.OPENAI_API_KEY}' 2>/dev/null | grep -q . \
           || echo "WARNING: OPENAI_API_KEY missing from palladium-secrets-builder — the embeddings CronJob will fail and catalog matching stays disabled" >&2
 
+        # The price-alert shared secret is ONE value under two names: the
+        # builder sends COMMERCE_INTERNAL_KEY, commerce checks INTERNAL_API_KEY.
+        # Compared rather than merely present-checked, because drift between
+        # them is silent — the pricing ETL just collects 403s and the
+        # subscriptions sit active forever. A WARNING, not an error: alerts are
+        # off by default (PRICE_ALERTS_ENABLED), so nothing is broken today.
+        AK=$$(kubectl -n "$_NAMESPACE" get secret palladium-secrets-builder \
+                -o jsonpath='{.data.COMMERCE_INTERNAL_KEY}' 2>/dev/null || true)
+        CK=$$(kubectl -n "$_NAMESPACE" get secret palladium-secrets-commerce \
+                -o jsonpath='{.data.INTERNAL_API_KEY}' 2>/dev/null || true)
+        if [ -z "$$AK" ] || [ -z "$$CK" ]; then
+          echo "WARNING: the price-alert shared secret is not set on both sides (COMMERCE_INTERNAL_KEY in palladium-secrets-builder, INTERNAL_API_KEY in palladium-secrets-commerce) — price-drop emails cannot be sent" >&2
+        elif [ "$$AK" != "$$CK" ]; then
+          echo "ERROR: COMMERCE_INTERNAL_KEY (builder) and INTERNAL_API_KEY (commerce) differ — they are the same shared secret and every price alert would be rejected with a 403" >&2
+          exit 1
+        fi
+
         # POSTGRES_SERVER lives only in the Secret. Validate the actual value:
         # a pasted-in placeholder or an empty host fails at runtime as DNS or
         # connection errors, which is far more expensive to diagnose than here.

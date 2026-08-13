@@ -93,12 +93,16 @@ func AccountDeletedMessage(to string) (Message, error) {
 // callers pass what the database holds and never do the conversion, and
 // Currency is the ISO code from the same row (empty means USD).
 //
-// Nothing sends these yet: the template and builder exist so the alerting job,
-// when it lands, has a message to hand to Client.Send.
+// Sent by the /internal/v1/price-alerts handler on behalf of the builder's
+// pricing ETL (see internal/server/internal_handlers.go).
 type PriceAlert struct {
-	Email       string
-	PartName    string
-	Marketplace string // "Amazon", "eBay"
+	Email    string
+	PartName string
+	// "Amazon", "eBay", or empty. Empty is the pricing ETL's case: its price
+	// is a median across retailers, not a listing at one of them, so both the
+	// HTML and the plain-text body drop the "at <retailer>" clause rather than
+	// name a seller the customer cannot go to.
+	Marketplace string
 	OldCents    int64
 	NewCents    int64
 	Currency    string
@@ -141,8 +145,12 @@ func PriceAlertMessage(a PriceAlert) (Message, error) {
 		return Message{}, err
 	}
 
-	text := fmt.Sprintf("%s dropped to %s at %s (was %s, down %s).",
-		a.PartName, newPrice, a.Marketplace, oldPrice, savings)
+	at := ""
+	if a.Marketplace != "" {
+		at = " at " + a.Marketplace
+	}
+	text := fmt.Sprintf("%s dropped to %s%s (was %s, down %s).",
+		a.PartName, newPrice, at, oldPrice, savings)
 	if a.URL != "" {
 		text += "\n\nView the listing: " + a.URL
 	}

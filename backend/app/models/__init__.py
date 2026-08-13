@@ -19,6 +19,7 @@ from .listing import AmazonListing, EbayListing, Listing
 from .message import Message
 from .pcbuild import BuildPart, PCBuild
 from .pcparts import PCPart
+from .price_subscription import PriceSubscription, PriceSubscriptionTarget
 from .pricing_etl import PriceCheck, PricingRun, SerpApiQuota
 from .software_catalog import Software, SoftwareCategory, SoftwareMinimumPart
 from .user import User

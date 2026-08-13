@@ -26,6 +26,7 @@ type dataStore interface {
 
 	GetUserByFirebaseUID(ctx context.Context, firebaseUID string) (*store.User, error)
 	GetUserByEmail(ctx context.Context, email string) (*store.User, error)
+	GetUserByID(ctx context.Context, id string) (*store.User, error)
 	CreateUser(ctx context.Context, firebaseUID, email string) (*store.User, error)
 	LinkFirebaseUID(ctx context.Context, userID, firebaseUID string) (*store.User, error)
 	DeleteUserByFirebaseUID(ctx context.Context, firebaseUID string) error
@@ -108,6 +109,13 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger) (http.Han
 	// Firebase-account-sync model, not generic user CRUD.
 	mux.Handle("POST /api/v1/account/sync", requireFirebaseAuth(fbAuth)(http.HandlerFunc(h.syncAccount)))
 	mux.Handle("DELETE /api/v1/account", requireFirebaseAuth(fbAuth)(http.HandlerFunc(h.deleteAccount)))
+
+	// Internal — called by the builder's pricing ETL, not by a browser, and
+	// authenticated with a shared secret rather than a Firebase token. Under
+	// /internal/ rather than /api/ so the boundary is visible in the path (and
+	// in access logs) instead of only in this file.
+	internal := requireInternalKey(cfg.InternalAPIKey)
+	mux.Handle("POST /internal/v1/price-alerts", internal(http.HandlerFunc(h.sendPriceAlert)))
 
 	// Middleware wraps outermost-first: recoverPanic is the outer shell so it
 	// can catch panics from everything inside, including the logger.

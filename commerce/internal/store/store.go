@@ -168,6 +168,29 @@ func (s *Store) GetUserByFirebaseUID(ctx context.Context, firebaseUID string) (*
 	return u, nil
 }
 
+// GetUserByID looks a user up by primary key. This is the internal path: the
+// builder's pricing ETL knows which customer a price subscription belongs to
+// but deliberately never carries their address, so resolving id -> email
+// happens here, against the row that is the source of truth for it.
+func (s *Store) GetUserByID(ctx context.Context, id string) (*User, error) {
+	// Parsed rather than passed straight through: users.id is uuid, and a
+	// malformed value would otherwise reach Postgres as a type error (a 500)
+	// instead of the not-found this is.
+	if _, err := uuid.Parse(id); err != nil {
+		return nil, ErrNotFound
+	}
+	row := s.db.QueryRowContext(ctx,
+		`SELECT `+userColumns+` FROM users WHERE id = $1`, id)
+	u, err := scanUser(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return u, nil
+}
+
 func (s *Store) GetUserByEmail(ctx context.Context, email string) (*User, error) {
 	row := s.db.QueryRowContext(ctx,
 		`SELECT `+userColumns+` FROM users WHERE email = $1`, email)
