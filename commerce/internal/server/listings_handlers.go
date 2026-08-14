@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -71,6 +72,40 @@ func (h *handlers) toDTO(l *store.Listing) listingDTO {
 	return dto
 }
 
+// noteListingFailure records that the listings API could not produce a listing
+// for a part.
+//
+// Detached from the request, like sendEmailAsync and for the same reason: this
+// is bookkeeping about a read, and a read must not start failing because the
+// bookkeeping did. It also keeps a write off the latency path of the single
+// hottest endpoint in the service.
+//
+// The write is a one-row upsert keyed by primary key, and the foreign key to
+// pc_parts means the number of rows it can ever create is bounded by the size
+// of the catalog — so this staying on a public unauthenticated route is not an
+// amplification vector, however hard someone hits it.
+func (h *handlers) noteListingFailure(partID, reason, detail string) {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := h.store.RecordListingFailure(ctx, partID, reason, detail); err != nil {
+			h.logger.Error("record listing failure", "part_id", partID, "err", err)
+		}
+	}()
+}
+
+// clearListingFailure closes the open failure for a part, if there is one.
+// Same detached, best-effort contract as noteListingFailure.
+func (h *handlers) clearListingFailure(partID string) {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := h.store.ResolveListingFailure(ctx, partID); err != nil {
+			h.logger.Error("resolve listing failure", "part_id", partID, "err", err)
+		}
+	}()
+}
+
 func parseListingFilter(r *http.Request) store.ListingFilter {
 	q := r.URL.Query()
 	f := store.ListingFilter{Skip: 0, Limit: 100}
@@ -99,8 +134,18 @@ func (h *handlers) listListings(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.store.ListListings(r.Context(), filter)
 	if err != nil {
 		h.logger.Error("list listings", "err", err)
+		if filter.PartID != nil {
+			h.noteListingFailure(*filter.PartID, store.ReasonLookupError, err.Error())
+		}
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
 		return
+	}
+	// The frontend's build card calls this once per part (frontend/src/lib/
+	// listings.ts), so an empty result here is the exact moment a recommended
+	// part turns out to be unbuyable — and the only moment anything notices,
+	// since the client treats it as a normal empty response.
+	if filter.PartID != nil && len(rows) == 0 {
+		h.noteListingFailure(*filter.PartID, store.ReasonNoActiveListing, "")
 	}
 	count, err := h.store.CountListings(r.Context(), filter)
 	if err != nil {
@@ -148,8 +193,14 @@ func (h *handlers) getListingsByPart(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.store.GetListingsByPartID(r.Context(), partID)
 	if err != nil {
 		h.logger.Error("get listings by part", "err", err)
+		h.noteListingFailure(partID, store.ReasonLookupError, err.Error())
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
 		return
+	}
+	if len(rows) == 0 {
+		// The part exists — that was checked above — so this is a coverage
+		// gap, not a bad request.
+		h.noteListingFailure(partID, store.ReasonNoActiveListing, "")
 	}
 	dtos := make([]listingDTO, 0, len(rows))
 	for _, l := range rows {
@@ -200,6 +251,8 @@ func (h *handlers) createListing(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
 		return
 	}
+	// The event that actually closes a coverage gap.
+	h.clearListingFailure(l.PartID)
 	writeJSON(w, http.StatusCreated, h.toDTO(l))
 }
 
@@ -236,6 +289,11 @@ func (h *handlers) updateListing(w http.ResponseWriter, r *http.Request) {
 		h.logger.Error("update listing", "err", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
 		return
+	}
+	// Reactivating a listing closes the gap just as creating one does; any
+	// other edit leaves it exactly as it was.
+	if req.IsActive != nil && *req.IsActive {
+		h.clearListingFailure(l.PartID)
 	}
 	writeJSON(w, http.StatusOK, h.toDTO(l))
 }

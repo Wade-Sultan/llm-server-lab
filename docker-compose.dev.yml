@@ -165,6 +165,11 @@ services:
       # ETL). Same value the builder holds as COMMERCE_INTERNAL_KEY; empty
       # closes the route rather than opening it.
       - INTERNAL_API_KEY=${COMMERCE_INTERNAL_KEY}
+      # Where the listing-failure digest goes. Empty makes the digest endpoint
+      # answer 503 rather than silently dropping the mail.
+      - OPS_EMAIL=${OPS_EMAIL}
+      # Linked from the digest; empty just omits the button.
+      - ADMIN_URL=${ADMIN_URL:-http://localhost:3001}
       - AMAZON_ASSOCIATE_TAG=${AMAZON_ASSOCIATE_TAG}
       - EBAY_CAMPAIGN_ID=${EBAY_CAMPAIGN_ID}
       # Firebase Admin SDK needs Google creds to init; reuse the proxy's ADC.

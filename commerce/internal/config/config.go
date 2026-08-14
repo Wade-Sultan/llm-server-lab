@@ -79,6 +79,18 @@ type Config struct {
 	// makes those routes answer 503, so a deployment that doesn't use them
 	// still boots.
 	InternalAPIKey string
+
+	// OpsEmail receives operational mail — today, the digest of parts the
+	// listings API could not produce a listing for. Empty disables the digest
+	// (the endpoint answers 503), which is the right default for a checkout
+	// that has no operator to mail.
+	OpsEmail string
+
+	// AdminURL is the admin panel's base URL, used to link the digest at the
+	// listing-failures page. Empty just omits the link — admin is
+	// port-forward-only today, so there is often no URL worth putting in an
+	// email.
+	AdminURL string
 }
 
 // Load reads configuration from the environment and validates it. Required
@@ -100,6 +112,8 @@ func Load() (*Config, error) {
 		ResendAPIKey:           os.Getenv("RESEND_API_KEY"),
 		EmailFrom:              os.Getenv("EMAIL_FROM"),
 		InternalAPIKey:         os.Getenv("INTERNAL_API_KEY"),
+		OpsEmail:               os.Getenv("OPS_EMAIL"),
+		AdminURL:               os.Getenv("ADMIN_URL"),
 	}
 	cfg.CORSOrigins = append(parseCORSOrigins(os.Getenv("BACKEND_CORS_ORIGINS")), strings.TrimRight(cfg.FrontendHost, "/"))
 

@@ -8,3 +8,8 @@ metadata:
 data:
   PORT: "8080"
   EMAIL_FROM: "Palladium <noreply@palladiumtech.ai>"
+  # Where operational mail goes: today, the daily digest of parts the listings
+  # API could not produce a listing for. Not a credential, and not per-
+  # environment — the same person operates both. Empty would disable the digest
+  # endpoint (503) rather than silently dropping the mail.
+  OPS_EMAIL: "wadesultan@gmail.com"

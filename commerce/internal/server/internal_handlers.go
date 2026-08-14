@@ -117,3 +117,99 @@ func (h *handlers) sendPriceAlert(w http.ResponseWriter, r *http.Request) {
 	h.logger.Info("price alert sent", "user_id", user.ID, "part", req.PartName)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "sent"})
 }
+
+// maxDigestRows caps one digest email. A bad deploy can open thousands of
+// failures at once, and a message listing all of them would be unsendable as
+// well as unreadable. The overflow is not lost — it stays open on the admin
+// page — but it is marked notified along with the rest, because the useful
+// signal ("something broke at scale") is fully delivered by the first page of
+// it and repeating the same wall of text daily is not.
+const maxDigestRows = 50
+
+// sendListingFailureDigest mails the operator about parts the listings API
+// could not produce a listing for, then marks them reported.
+//
+// Triggered by a CronJob rather than a timer inside the process: commerce runs
+// more than one replica, and an in-process ticker would send one digest per
+// pod.
+func (h *handlers) sendListingFailureDigest(w http.ResponseWriter, r *http.Request) {
+	if h.opsEmail == "" {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "OPS_EMAIL is not configured"})
+		return
+	}
+	if !h.email.Enabled() {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "email delivery is not configured"})
+		return
+	}
+
+	// One extra row is fetched purely to detect truncation without a second
+	// count query.
+	failures, err := h.store.ListUnnotifiedListingFailures(r.Context(), maxDigestRows+1)
+	if err != nil {
+		h.logger.Error("digest: list listing failures", "err", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
+		return
+	}
+	// Nothing new is the normal, healthy case — a success with nothing sent,
+	// not an error the CronJob should go red over.
+	if len(failures) == 0 {
+		writeJSON(w, http.StatusOK, map[string]string{"status": "nothing_to_report"})
+		return
+	}
+
+	truncated := len(failures) > maxDigestRows
+	if truncated {
+		failures = failures[:maxDigestRows]
+	}
+
+	openCount, err := h.store.CountOpenListingFailures(r.Context())
+	if err != nil {
+		// Cosmetic — it only sets the "N open in total" line. Losing it is not
+		// a reason to withhold the report itself.
+		h.logger.Warn("digest: count open listing failures", "err", err)
+		openCount = len(failures)
+	}
+
+	rows := make([]email.ListingFailureRow, 0, len(failures))
+	partIDs := make([]string, 0, len(failures))
+	for _, f := range failures {
+		rows = append(rows, email.NewListingFailureRow(f.PartName, f.PartType, f.Reason, f.Occurrences))
+		partIDs = append(partIDs, f.PartID)
+	}
+
+	msg, err := email.ListingFailureDigestMessage(email.ListingFailureDigest{
+		Email:     h.opsEmail,
+		Rows:      rows,
+		NewCount:  len(rows),
+		OpenCount: openCount,
+		Truncated: truncated,
+		AdminURL:  h.adminURL,
+	})
+	if err != nil {
+		h.logger.Error("digest: build message", "err", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	if err := h.email.Send(ctx, msg); err != nil {
+		h.logger.Error("digest: send", "to", h.opsEmail, "err", err)
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "failed to send email"})
+		return
+	}
+
+	// Only after the send succeeds. Stamping first and then failing to send
+	// would bury these parts permanently — they would never appear in another
+	// digest — whereas stamping late costs at most a repeated line tomorrow.
+	if err := h.store.MarkListingFailuresNotified(ctx, partIDs); err != nil {
+		h.logger.Error("digest: mark notified", "err", err)
+	}
+
+	h.logger.Info("listing failure digest sent", "rows", len(rows), "open", openCount)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":   "sent",
+		"reported": len(rows),
+		"open":     openCount,
+	})
+}

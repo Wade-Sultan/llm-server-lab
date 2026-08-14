@@ -16,6 +16,11 @@ from .embeddings import (
 from .games_catalog import Game, GameMinimumPart
 from .guide_video import GuideVideo
 from .listing import AmazonListing, EbayListing, Listing
+from .listing_failure import (
+    REASON_LOOKUP_ERROR,
+    REASON_NO_ACTIVE_LISTING,
+    ListingLookupFailure,
+)
 from .message import Message
 from .pcbuild import BuildPart, PCBuild
 from .pcparts import PCPart

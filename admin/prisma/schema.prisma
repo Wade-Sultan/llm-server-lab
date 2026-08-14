@@ -31,6 +31,7 @@ model PcPart {
   cpuCooler        CpuCooler?
   fan              Fan?
   listings         Listing[]
+  listingFailure   ListingLookupFailure?
   referenceBuilds  ReferenceBuildPart[]
   buildParts       BuildPart[]
   gameMinimums     GameMinimumPart[]
@@ -58,6 +59,26 @@ model Listing {
   amazonListing AmazonListing?
 
   @@map("listings")
+}
+
+// Parts the listings API could not produce a listing for. Written by commerce
+// (internal/store/listing_failures.go) on the read path; this app only reads
+// and resolves them.
+//
+// Keyed by part_id, so one row is one broken part however many times it was
+// hit. resolvedAt is set when a listing is created or reactivated for it.
+model ListingLookupFailure {
+  partId      String    @id @map("part_id") @db.Uuid
+  part        PcPart    @relation(fields: [partId], references: [id], onDelete: Cascade)
+  reason      String // no_active_listing | lookup_error
+  detail      String?
+  occurrences Int       @default(1)
+  firstSeenAt DateTime  @default(now()) @map("first_seen_at")
+  lastSeenAt  DateTime  @default(now()) @map("last_seen_at")
+  notifiedAt  DateTime? @map("notified_at")
+  resolvedAt  DateTime? @map("resolved_at")
+
+  @@map("listing_lookup_failures")
 }
 
 model AmazonListing {

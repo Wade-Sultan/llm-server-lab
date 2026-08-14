@@ -28,7 +28,12 @@ logger = logging.getLogger(__name__)
 # never has to carry one around to send mail.
 
 _ALERT_PATH = "/internal/v1/price-alerts"
+_DIGEST_PATH = "/internal/v1/listing-failure-digest"
 _TIMEOUT_S = 15.0
+# The digest queries and renders before it sends, and a large backlog makes
+# both slower — it gets its own, longer budget rather than widening the one
+# every call uses.
+_DIGEST_TIMEOUT_S = 60.0
 
 
 class CommerceError(RuntimeError):
@@ -67,11 +72,6 @@ async def send_price_alert(
     without the "at <retailer>" clause and without the CTA button when they are
     absent. They exist for a future alert sourced from a specific listing.
     """
-    if not is_configured():
-        raise CommerceNotConfigured(
-            "COMMERCE_INTERNAL_URL and COMMERCE_INTERNAL_KEY must both be set"
-        )
-
     payload: dict[str, object] = {
         "user_id": str(user_id),
         "part_name": part_name,
@@ -84,18 +84,58 @@ async def send_price_alert(
     if url:
         payload["url"] = url
 
+    await _post(_ALERT_PATH, payload, what="price alert")
+
+
+async def trigger_listing_failure_digest() -> dict:
+    """Ask commerce to mail the operator about parts the listings API could not
+    produce a listing for, and to mark those parts reported.
+
+    Commerce owns the whole operation — it holds the email credential, the
+    templates, and the same database the failures are recorded in — so this is
+    a trigger, not a data transfer: nothing about the failures crosses the wire
+    in either direction. The trigger lives out here because commerce runs more
+    than one replica, and an in-process timer would send one digest per pod.
+
+    Returns commerce's response body, which distinguishes a real send from the
+    (normal, healthy) case of having nothing to report.
+    """
+    return await _post(
+        _DIGEST_PATH, None, what="listing failure digest", timeout=_DIGEST_TIMEOUT_S
+    )
+
+
+async def _post(
+    path: str,
+    payload: dict | None,
+    *,
+    what: str,
+    timeout: float = _TIMEOUT_S,
+) -> dict:
+    """POST to one of commerce's internal routes, raising CommerceError on
+    anything that isn't a 2xx."""
+    if not is_configured():
+        raise CommerceNotConfigured(
+            "COMMERCE_INTERNAL_URL and COMMERCE_INTERNAL_KEY must both be set"
+        )
+
     base = settings.COMMERCE_INTERNAL_URL.rstrip("/")
     try:
-        async with httpx.AsyncClient(timeout=_TIMEOUT_S) as client:
+        async with httpx.AsyncClient(timeout=timeout) as client:
             resp = await client.post(
-                base + _ALERT_PATH,
-                json=payload,
+                base + path,
+                json=payload if payload is not None else {},
                 headers={"X-Internal-Key": settings.COMMERCE_INTERNAL_KEY},
             )
     except httpx.HTTPError as exc:
-        raise CommerceError(f"price alert request failed: {exc}") from exc
+        raise CommerceError(f"{what} request failed: {exc}") from exc
 
     if resp.status_code >= 300:
         # The body is commerce's own {"error": ...}; carrying it through is what
         # makes price_subscriptions.last_error worth reading.
         raise CommerceError(f"commerce returned {resp.status_code}: {resp.text[:200]}")
+
+    try:
+        return resp.json()
+    except ValueError:
+        return {}

@@ -3,6 +3,29 @@
 import { revalidatePath } from 'next/cache';
 import { db } from '@/lib/prisma';
 
+/**
+ * Close any open listing-failure row for a part.
+ *
+ * Commerce does this itself when a listing is created through its API
+ * (internal/server/listings_handlers.go), but admin writes listings straight
+ * through Prisma — which is how they actually get created in practice — so the
+ * same close has to happen here or a gap someone just fixed would stay open on
+ * the failures page and in tomorrow's digest.
+ *
+ * Best-effort and deliberately not awaited into the caller's error path: an
+ * added listing must not fail because bookkeeping about it did.
+ */
+async function resolveListingFailure(partId: string) {
+  try {
+    await db.listingLookupFailure.updateMany({
+      where: { partId, resolvedAt: null },
+      data: { resolvedAt: new Date() },
+    });
+  } catch (err) {
+    console.error('failed to resolve listing failure', { partId, err });
+  }
+}
+
 export interface AmazonListingFormData {
   asin: string;
   brand: string;
@@ -22,6 +45,7 @@ export async function createAmazonListing(partId: string, data: AmazonListingFor
       },
     },
   });
+  await resolveListingFailure(partId);
   revalidatePath('/', 'layout');
 }
 
@@ -52,6 +76,7 @@ export async function createEbayListing(partId: string, data: EbayListingFormDat
       url: data.url.trim(),
     },
   });
+  await resolveListingFailure(partId);
   revalidatePath('/', 'layout');
 }
 

@@ -1,0 +1,51 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: listing-digest
+spec:
+  # After the pricing ETL (04:00), so a morning's digest reflects the state the
+  # overnight jobs left the catalog in rather than yesterday's.
+  schedule: "30 7 * * *"
+  # Requires k8s 1.27+; without it the schedule silently runs in UTC.
+  timeZone: "America/Los_Angeles"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 300
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      # No retries. A failed digest is not lost work: nothing is marked
+      # reported unless the email actually went out, so tomorrow's run picks up
+      # exactly the same rows. Retrying a Resend outage three times in a row
+      # only turns one red job into three.
+      backoffLimit: 0
+      activeDeadlineSeconds: 300
+      ttlSecondsAfterFinished: 86400
+      template:
+        spec:
+          restartPolicy: Never
+          serviceAccountName: builder
+          containers:
+            - name: digest
+              image: palladium/builder
+              # A trigger, not the digest itself: commerce holds the email
+              # credential, the templates and the same database, so it does the
+              # whole job. What it cannot do is decide when — it runs more than
+              # one replica, and an in-process timer would send one digest per
+              # pod. See backend/app/jobs/listing_failure_digest.py.
+              command: ["python", "-m", "app.jobs.listing_failure_digest"]
+              envFrom:
+                - configMapRef:
+                    name: builder-config
+                - secretRef:
+                    name: palladium-secrets
+              # Deliberately small next to the other jobs: this one issues a
+              # single HTTP POST and exits. It does not touch the database, run
+              # a model, or render anything.
+              resources:
+                requests:
+                  cpu: "100m"
+                  memory: 128Mi
+                limits:
+                  cpu: "200m"
+                  memory: 256Mi

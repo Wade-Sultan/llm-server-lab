@@ -43,9 +43,10 @@ func (p pageTemplate) render(data any) (string, error) {
 }
 
 var (
-	welcomePage        = newPage("welcome.html")
-	accountDeletedPage = newPage("account_deleted.html")
-	priceAlertPage     = newPage("price_alert.html")
+	welcomePage         = newPage("welcome.html")
+	accountDeletedPage  = newPage("account_deleted.html")
+	priceAlertPage      = newPage("price_alert.html")
+	listingFailuresPage = newPage("listing_failures.html")
 )
 
 // WelcomeMessage greets a newly created account.
@@ -156,6 +157,106 @@ func PriceAlertMessage(a PriceAlert) (Message, error) {
 	}
 
 	return Message{To: a.Email, Subject: subject, HTML: html, Text: text}, nil
+}
+
+// ListingFailureRow is one part in the digest below.
+type ListingFailureRow struct {
+	PartName    string
+	PartType    string
+	Reason      string // human-readable, not the stored enum — see reasonLabel
+	Occurrences int
+}
+
+// ListingFailureDigest is the operational report of parts the listings API
+// could not produce a listing for. Unlike every other message here it goes to
+// an operator, not a customer, so it says what is broken rather than what is
+// on offer.
+type ListingFailureDigest struct {
+	Email     string
+	Rows      []ListingFailureRow
+	NewCount  int // rows in this digest
+	OpenCount int // still-open failures in total, reported or not
+	Truncated bool
+	AdminURL  string
+}
+
+// reasonLabel turns a stored reason into something readable in an inbox. An
+// unknown value passes through rather than being dropped: a reason added later
+// should look odd in the email, not silently vanish from it.
+func reasonLabel(reason string) string {
+	switch reason {
+	case "no_active_listing":
+		return "no active listing"
+	case "lookup_error":
+		return "lookup failed"
+	default:
+		return reason
+	}
+}
+
+// NewListingFailureRow builds a row from stored values, applying reasonLabel so
+// callers never have to know the enum's display form.
+func NewListingFailureRow(partName, partType, reason string, occurrences int) ListingFailureRow {
+	return ListingFailureRow{
+		PartName:    partName,
+		PartType:    partType,
+		Reason:      reasonLabel(reason),
+		Occurrences: occurrences,
+	}
+}
+
+// ListingFailureDigestMessage renders the digest. It refuses an empty report
+// rather than rendering "0 parts": a digest with nothing in it should not be
+// sent at all, and a caller that got here with no rows has a bug worth
+// surfacing.
+func ListingFailureDigestMessage(d ListingFailureDigest) (Message, error) {
+	if len(d.Rows) == 0 {
+		return Message{}, fmt.Errorf("listing failure digest has no rows")
+	}
+	if d.NewCount == 0 {
+		d.NewCount = len(d.Rows)
+	}
+	if d.OpenCount < d.NewCount {
+		d.OpenCount = d.NewCount
+	}
+
+	noun := "parts"
+	if d.NewCount == 1 {
+		noun = "part"
+	}
+	subject := fmt.Sprintf("Palladium: %d %s with no listing", d.NewCount, noun)
+
+	html, err := listingFailuresPage.render(struct {
+		Subject   string
+		Email     string
+		Rows      []ListingFailureRow
+		NewCount  int
+		OpenCount int
+		Truncated bool
+		AdminURL  string
+	}{subject, d.Email, d.Rows, d.NewCount, d.OpenCount, d.Truncated, d.AdminURL})
+	if err != nil {
+		return Message{}, err
+	}
+
+	var text strings.Builder
+	fmt.Fprintf(&text, "%d %s could not be given a listing since the last digest", d.NewCount, noun)
+	if d.OpenCount > d.NewCount {
+		fmt.Fprintf(&text, " (%d open in total)", d.OpenCount)
+	}
+	text.WriteString(".\n\n")
+	for _, r := range d.Rows {
+		fmt.Fprintf(&text, "- %s (%s): %s, %d hit", r.PartName, r.PartType, r.Reason, r.Occurrences)
+		if r.Occurrences != 1 {
+			text.WriteString("s")
+		}
+		text.WriteString("\n")
+	}
+	if d.AdminURL != "" {
+		text.WriteString("\nAdmin list: " + d.AdminURL + "\n")
+	}
+
+	return Message{To: d.Email, Subject: subject, HTML: html, Text: text.String()}, nil
 }
 
 // formatMoney renders minor units as a display price. Currencies with a

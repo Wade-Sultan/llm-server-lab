@@ -72,7 +72,27 @@ func allMessages(t *testing.T) map[string]Message {
 		t.Fatalf("build price alert: %v", err)
 	}
 	out["price alert"] = msg
+
+	digest, err := ListingFailureDigestMessage(sampleDigest())
+	if err != nil {
+		t.Fatalf("build listing failure digest: %v", err)
+	}
+	out["listing failure digest"] = digest
 	return out
+}
+
+// sampleDigest is a two-part report against a larger standing backlog.
+func sampleDigest() ListingFailureDigest {
+	return ListingFailureDigest{
+		Email: "wade@example.com",
+		Rows: []ListingFailureRow{
+			NewListingFailureRow("AMD Ryzen 7 9800X3D", "cpu", "no_active_listing", 412),
+			NewListingFailureRow("NZXT H9 Flow", "case", "lookup_error", 3),
+		},
+		NewCount:  2,
+		OpenCount: 9,
+		AdminURL:  "https://admin.example.com/listing-failures",
+	}
 }
 
 // Every message carries the site's branding: the logo, Raleway for headings,
@@ -121,9 +141,10 @@ func TestNoEmDashes(t *testing.T) {
 func TestPagesRenderDistinctBodies(t *testing.T) {
 	msgs := allMessages(t)
 	markers := map[string]string{
-		"welcome":         "Welcome to Palladium!",
-		"account deleted": "Your account has been deleted",
-		"price alert":     "A part in your build got cheaper",
+		"welcome":                "Welcome to Palladium!",
+		"account deleted":        "Your account has been deleted",
+		"listing failure digest": "Parts with no listing",
+		"price alert":            "A part in your build got cheaper",
 	}
 	for name, marker := range markers {
 		if !strings.Contains(msgs[name].HTML, marker) {
@@ -229,6 +250,55 @@ func TestPriceAlertWithoutMarketplace(t *testing.T) {
 	}
 	if !strings.Contains(withMarket.HTML, "Amazon") {
 		t.Error("named marketplace dropped out of the HTML body")
+	}
+}
+
+func TestListingFailureDigestMessage(t *testing.T) {
+	msg, err := ListingFailureDigestMessage(sampleDigest())
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	// Stored reason enums must not reach an inbox.
+	for _, raw := range []string{"no_active_listing", "lookup_error"} {
+		if strings.Contains(msg.HTML, raw) || strings.Contains(msg.Text, raw) {
+			t.Errorf("the raw reason %q leaked into the message", raw)
+		}
+	}
+	for _, want := range []string{"no active listing", "lookup failed", "412"} {
+		if !strings.Contains(msg.HTML, want) {
+			t.Errorf("HTML is missing %q", want)
+		}
+	}
+	if !strings.Contains(msg.HTML, "https://admin.example.com/listing-failures") {
+		t.Error("HTML is missing the admin link")
+	}
+}
+
+// One part is "1 part", not "1 parts" — this lands in an inbox daily, so the
+// grammar is worth the branch.
+func TestListingFailureDigestSingular(t *testing.T) {
+	d := sampleDigest()
+	d.Rows, d.NewCount, d.OpenCount = d.Rows[:1], 1, 1
+	msg, err := ListingFailureDigestMessage(d)
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	if want := "Palladium: 1 part with no listing"; msg.Subject != want {
+		t.Errorf("Subject = %q, want %q", msg.Subject, want)
+	}
+	// With nothing beyond what is reported, the backlog line is redundant.
+	if strings.Contains(msg.Text, "open in total") {
+		t.Errorf("quoted a backlog identical to the report: %q", msg.Text)
+	}
+}
+
+// An empty digest must not render as "0 parts" — it should not be sent at all,
+// and a caller that got here without rows has a bug.
+func TestListingFailureDigestRejectsAnEmptyReport(t *testing.T) {
+	d := sampleDigest()
+	d.Rows = nil
+	if _, err := ListingFailureDigestMessage(d); err == nil {
+		t.Fatal("expected an error, got none")
 	}
 }
 

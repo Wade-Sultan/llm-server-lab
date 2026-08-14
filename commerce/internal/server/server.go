@@ -39,6 +39,12 @@ type dataStore interface {
 	CreateListing(ctx context.Context, in store.CreateListingInput) (*store.Listing, error)
 	UpdateListing(ctx context.Context, id string, in store.UpdateListingInput) (*store.Listing, error)
 	DeleteListing(ctx context.Context, id string) error
+
+	RecordListingFailure(ctx context.Context, partID, reason, detail string) error
+	ResolveListingFailure(ctx context.Context, partID string) error
+	ListUnnotifiedListingFailures(ctx context.Context, limit int) ([]*store.ListingFailure, error)
+	MarkListingFailuresNotified(ctx context.Context, partIDs []string) error
+	CountOpenListingFailures(ctx context.Context) (int, error)
 }
 
 // mailer is the transactional-email seam, satisfied by *email.Client. Tests
@@ -55,6 +61,8 @@ type handlers struct {
 	email          mailer
 	associateTag   string
 	ebayCampaignID string
+	opsEmail       string
+	adminURL       string
 	logger         *slog.Logger
 }
 
@@ -86,6 +94,8 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger) (http.Han
 		email:          email.New(cfg.ResendAPIKey, cfg.EmailFrom),
 		associateTag:   cfg.AssociateTag,
 		ebayCampaignID: cfg.EbayCampaignID,
+		opsEmail:       cfg.OpsEmail,
+		adminURL:       cfg.AdminURL,
 		logger:         logger,
 	}
 
@@ -116,6 +126,7 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger) (http.Han
 	// in access logs) instead of only in this file.
 	internal := requireInternalKey(cfg.InternalAPIKey)
 	mux.Handle("POST /internal/v1/price-alerts", internal(http.HandlerFunc(h.sendPriceAlert)))
+	mux.Handle("POST /internal/v1/listing-failure-digest", internal(http.HandlerFunc(h.sendListingFailureDigest)))
 
 	// Middleware wraps outermost-first: recoverPanic is the outer shell so it
 	// can catch panics from everything inside, including the logger.

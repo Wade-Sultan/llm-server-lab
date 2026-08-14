@@ -23,6 +23,7 @@ import {
   Newspaper,
   Radar,
   Video,
+  Unlink,
 } from 'lucide-react';
 
 type NavItem =
@@ -56,6 +57,7 @@ const navItems: NavItem[] = [
   { label: 'Guide Videos', href: '/guide-videos', icon: Video },
   { type: 'separator', label: 'Discovery' },
   { label: 'Discovery', href: '/discovery', icon: Radar },
+  { label: 'Listing Failures', href: '/listing-failures', icon: Unlink },
   { type: 'separator', label: 'Users' },
   { label: 'Users', href: '/users', icon: Users },
 ];
