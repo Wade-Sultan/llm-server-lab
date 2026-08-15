@@ -21,6 +21,78 @@ data:
   # Must be the FRONTEND Firebase project (the ID token's audience), not the
   # GCP project — a mismatch shows up as invalid-credential on every request.
   FIREBASE_PROJECT_ID: "project-b8abf13d-d1ce-43f1-837"
+
+  # --- LLM: LM Studio on the host GPU, not OpenRouter ------------------------
+  # Local development spends no OpenRouter credit. Production sets none of these
+  # and keeps talking to OpenRouter — the switch lives entirely in this overlay.
+  #
+  # NOT host.minikube.internal. That name resolves to the docker bridge gateway,
+  # which is an address inside the WSL2 VM — it reaches Linux, and LM Studio
+  # runs on Windows. Under WSL2's default NAT networking the Windows side of the
+  # WSL adapter is the VM's default gateway, so that is what the cluster has to
+  # dial. Packets go pod → bridge → WSL eth0 → Windows.
+  #
+  # MACHINE-SPECIFIC, AND NOT STABLE. WSL's NAT subnet is reassigned, so this
+  # address can change after a Windows reboot or a `wsl --shutdown` and the only
+  # symptom is every turn timing out. Re-derive it in WSL with:
+  #
+  #   ip route | awk '/^default/{print $3}'
+  #
+  # Two Windows-side settings have to be right before any of this resolves, and
+  # neither lives in this repo:
+  #
+  #   1. LM Studio binds 127.0.0.1 by default, which is reachable from nothing
+  #      but Windows itself. Developer tab → "Serve on Local Network".
+  #   2. The WSL Hyper-V firewall defaults to DefaultInboundAction=Block, so
+  #      Windows drops the connection even once LM Studio is listening on all
+  #      interfaces. Needs an inbound allow for 1234 scoped to the WSL VM.
+  #
+  # The two failures look different from WSL and are worth telling apart:
+  # connection refused means LM Studio is not listening on that address (1),
+  # a hang to timeout means the firewall is dropping it (2).
+  #
+  #   curl -m 5 http://172.30.32.1:1234/v1/models          # from WSL
+  #   kubectl run -it --rm netcheck --image=curlimages/curl --restart=Never -- \
+  #     curl -s -m 5 http://172.30.32.1:1234/v1/models      # from the cluster
+  #
+  LLM_BASE_URL: "http://172.30.32.1:1234/v1"
+
+  # The slugs below are LM Studio's ids for the models loaded there, NOT
+  # OpenRouter's — LLM_BASE_URL changes the endpoint and nothing else, so
+  # leaving the OpenRouter defaults in place produces 404 model_not_found on
+  # every turn. `curl http://172.30.32.1:1234/v1/models` lists what is actually
+  # loaded; keep these in sync with it.
+  #
+  # ONE MODEL FOR ALL FOUR ROLES, which is not how production runs.
+  # app/services/chat_models.py deliberately splits them — a 4B for extraction
+  # and question-ordering (they return a JSON object or a single integer index,
+  # and both run on every turn), a 31B for the prose a person actually reads.
+  # That split saves money on OpenRouter; locally it would cost VRAM instead,
+  # because two resident models is two models' weights on one GPU. A single 27B
+  # doing all four is the cheaper trade here, at the price of slower extraction.
+  # If turns feel slow, load a small model in LM Studio and point the two
+  # cheap roles at it — that is the change to make, not a bigger recommend model.
+  CHAT_EXTRACT_MODEL: "qwen3.8-27b"
+  CHAT_ROUTE_MODEL: "qwen3.8-27b"
+  CHAT_RECOMMEND_MODEL: "qwen3.8-27b"
+  CHAT_ELICIT_MODEL: "qwen3.8-27b"
+
+  # The DSPy Decide* steps. Same model; the `openrouter/` prefix the default
+  # carries is litellm routing rather than part of the name, and
+  # dspy_pipeline.litellm_model rewrites it to `openai/` when the endpoint is
+  # not OpenRouter — so name the bare model here.
+  RECOMMEND_MODEL: "qwen3.8-27b"
+
+  # Parts discovery stays on OpenRouter even though chat does not. It sends
+  # rasterized PDF spec sheets with a per-category JSON schema, so it needs a
+  # multimodal model that honours response_format; nothing loaded in LM Studio
+  # qualifies. Leaving it pointed at the local server would not fail loudly —
+  # it is a CronJob, so it would just 404 into the log on a schedule.
+  #
+  # This costs OpenRouter credit when discovery runs. It is triggered from the
+  # admin panel or by the CronJob, never by a chat turn, so ordinary local
+  # development still spends nothing.
+  DISCOVERY_LLM_BASE_URL: "https://openrouter.ai/api/v1"
 ---
 apiVersion: v1
 kind: ConfigMap

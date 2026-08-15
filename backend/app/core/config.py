@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from typing import Annotated, Any, Literal
 
 from pydantic import (
@@ -8,6 +9,44 @@ from pydantic import (
     computed_field,
 )
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+OPENROUTER_URL = "https://openrouter.ai/api/v1"
+
+
+@dataclass(frozen=True)
+class LLMEndpoint:
+    """One OpenAI-compatible endpoint, and what may be sent to it.
+
+    Exists so that "am I talking to OpenRouter?" is asked one way rather than
+    once per client-construction site, and so that the answer carries the right
+    key with it. Several things hang off that question beyond the URL: the
+    credential, litellm's model prefix, whether OpenRouter's `usage`/`session_id`
+    extensions are safe to put in the request body, and whether a completion id
+    means anything to the /generation cost endpoint.
+    """
+
+    # Empty means "unset", which resolves to OpenRouter — see `url`.
+    base_url: str
+    local_key: str
+    openrouter_key: str
+
+    @property
+    def is_openrouter(self) -> bool:
+        # An explicitly configured openrouter.ai URL counts, not just the empty
+        # default: DISCOVERY_LLM_BASE_URL names it outright to hold discovery
+        # there while chat moves to a local server, and that must not read as
+        # "somewhere else" or the call goes out with the wrong key and loses its
+        # cost accounting.
+        return not self.base_url or "openrouter.ai" in self.base_url
+
+    @property
+    def url(self) -> str:
+        """The base URL to hand an OpenAI-compatible client."""
+        return self.base_url or OPENROUTER_URL
+
+    @property
+    def api_key(self) -> str:
+        return self.openrouter_key if self.is_openrouter else self.local_key
 
 
 def parse_cors(v: Any) -> list[str] | str:
@@ -82,6 +121,55 @@ class Settings(BaseSettings):
         )
 
     OPENROUTER_API_KEY: str
+
+    # --- Chat-completion endpoint ---------------------------------------------
+    # Empty (the default, and what production runs) means every chat completion
+    # goes to OpenRouter. Setting it points them at any other OpenAI-compatible
+    # server instead — the local overlay uses it to reach LM Studio on the host
+    # GPU. Include the `/v1` suffix: the OpenAI SDK appends paths to this, it
+    # does not append a version.
+    #
+    # This switches the ENDPOINT, not the model. LM Studio serves whatever is
+    # loaded under its own ids, so an environment that sets this must also set
+    # the CHAT_*_MODEL / RECOMMEND_MODEL / DISCOVERY_EXTRACT_MODEL slugs to
+    # match — the OpenRouter defaults (`google/gemma-4-31b-it` and friends) mean
+    # nothing to it and come back as 404 model_not_found.
+    #
+    # Cost accounting goes quiet when this is set, by design: dollar figures
+    # come from OpenRouter's own `cost` field and its /generation endpoint,
+    # neither of which a local server has. Token counts still arrive, and a turn
+    # against local hardware costs nothing to under-report.
+    LLM_BASE_URL: str = ""
+
+    # Credential for LLM_BASE_URL. LM Studio accepts anything but the OpenAI
+    # client refuses to construct without a key, hence the placeholder. Ignored
+    # entirely when LLM_BASE_URL is empty — OpenRouter uses OPENROUTER_API_KEY.
+    LLM_API_KEY: str = "not-needed"
+
+    # Lets parts discovery go somewhere other than LLM_BASE_URL. Empty (prod)
+    # means it follows LLM_BASE_URL like everything else; setting it to
+    # OpenRouter's URL keeps discovery there while chat runs locally.
+    #
+    # This exists because discovery is not substitutable the way chat is. It
+    # sends rasterized PDF pages and a per-category JSON schema, so it needs a
+    # multimodal model that honours `response_format` — and unlike chat it is a
+    # CronJob, so when it cannot do that the failure is a recurring background
+    # 404 nobody is watching rather than a broken reply somebody reports.
+    DISCOVERY_LLM_BASE_URL: str = ""
+
+    @property
+    def chat_endpoint(self) -> LLMEndpoint:
+        """Where chat completions and the DSPy Decide* steps go."""
+        return LLMEndpoint(self.LLM_BASE_URL, self.LLM_API_KEY, self.OPENROUTER_API_KEY)
+
+    @property
+    def discovery_endpoint(self) -> LLMEndpoint:
+        """Where parts discovery goes — its own override, else the chat endpoint."""
+        return LLMEndpoint(
+            self.DISCOVERY_LLM_BASE_URL or self.LLM_BASE_URL,
+            self.LLM_API_KEY,
+            self.OPENROUTER_API_KEY,
+        )
 
     # --- Embeddings (pgvector) -----------------------------------------------
     # Separate from OPENROUTER_API_KEY because OpenRouter has no embeddings

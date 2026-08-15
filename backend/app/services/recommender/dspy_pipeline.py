@@ -101,7 +101,9 @@ _status_provider = BuildStatusProvider()
 
 # Model the Decide* modules run on. Routed through OpenRouter so every call
 # returns cost/tokens uniformly (and model_name is meaningful for Haiku-vs-Gemma
-# comparisons). Override RECOMMEND_MODEL to swap the model without a code change.
+# comparisons). Override RECOMMEND_MODEL to swap the model without a code
+# change; an environment that also sets LLM_BASE_URL must, since these slugs are
+# OpenRouter's names and no other server answers to them.
 RECOMMEND_MODEL = os.getenv("RECOMMEND_MODEL", "openrouter/google/gemma-4-31b-it")
 
 # Dependency order of the Decide* steps — recorded as sequence_order so later
@@ -190,16 +192,45 @@ PIPELINE_VERSION = _resolve_pipeline_version()
 _OPENROUTER_EXTRA_BODY: dict[str, Any] = {"usage": {"include": True}}
 
 
+def litellm_model(name: str) -> str:
+    """Normalise a model slug to the provider prefix litellm needs right now.
+
+    litellm routes on the prefix, not on api_base: `openrouter/…` sends the
+    request to OpenRouter no matter what api_base says, so pointing DSPy at a
+    local server means re-prefixing as `openai/…` (litellm's name for "an
+    OpenAI-compatible endpoint", which is what LM Studio serves).
+
+    Rewriting rather than demanding the caller get it right keeps the existing
+    RECOMMEND_MODEL / GEPA_REFLECTION_MODEL values and their defaults working
+    unchanged — an environment on LM Studio only has to name a model it has
+    loaded, not also learn litellm's prefix convention.
+    """
+    if settings.chat_endpoint.is_openrouter:
+        return name
+    bare = name.split("/", 1)[1] if name.startswith("openrouter/") else name
+    return bare if bare.startswith("openai/") else f"openai/{bare}"
+
+
 def configure_dspy() -> None:
-    """Configure DSPy to run the Decide* modules via OpenRouter. Call once at startup."""
+    """Configure DSPy to run the Decide* modules. Call once at startup.
+
+    Via OpenRouter, or — when LLM_BASE_URL is set — via whatever
+    OpenAI-compatible server it names. The Decide* modules themselves do not
+    change; only where their completions are served from.
+    """
+    endpoint = settings.chat_endpoint
     lm = dspy.LM(
-        model=RECOMMEND_MODEL,
-        api_key=settings.OPENROUTER_API_KEY,
+        model=litellm_model(RECOMMEND_MODEL),
+        api_key=endpoint.api_key,
         max_tokens=1024,
         temperature=0.3,
+        # api_base is ignored by litellm for an `openrouter/` model, so passing
+        # None here on the OpenRouter path is the same as not passing it.
+        api_base=None if endpoint.is_openrouter else endpoint.url,
         # Ask OpenRouter to include usage/cost accounting in the response so
-        # litellm surfaces the real cost per call in the LM history.
-        extra_body=dict(_OPENROUTER_EXTRA_BODY),
+        # litellm surfaces the real cost per call in the LM history. OpenRouter
+        # extension, so omitted when talking to anything else.
+        extra_body=dict(_OPENROUTER_EXTRA_BODY) if endpoint.is_openrouter else None,
     )
     # track_usage lets prediction.get_lm_usage() return per-prediction tokens.
     dspy.configure(lm=lm, track_usage=True)
@@ -252,7 +283,10 @@ def session_lm(session_id: str | None) -> dspy.LM:
 
         return make_stub_lm()
 
-    if not session_id:
+    # `session_id` is an OpenRouter dashboard concept and travels in extra_body,
+    # which litellm sends verbatim — so off OpenRouter there is nothing to group
+    # calls into and nowhere safe to put the field.
+    if not session_id or not settings.chat_endpoint.is_openrouter:
         return dspy.settings.lm
     return dspy.settings.lm.copy(
         extra_body={**_OPENROUTER_EXTRA_BODY, "session_id": session_id}

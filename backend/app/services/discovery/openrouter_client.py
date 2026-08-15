@@ -43,12 +43,17 @@ def get_client() -> openai.AsyncOpenAI:
         return StubOpenAIClient()  # type: ignore[return-value]
 
     if _client is None:
-        api_key = settings.OPENROUTER_API_KEY
+        # discovery_endpoint, not chat_endpoint: this pipeline needs a
+        # multimodal model that honours a JSON schema, so an environment that
+        # moves chat to a local server can leave discovery on OpenRouter via
+        # DISCOVERY_LLM_BASE_URL. See app/core/config.py.
+        endpoint = settings.discovery_endpoint
+        api_key = endpoint.api_key
         if not api_key:
             raise OSError("OPENROUTER_API_KEY is not set.")
         _client = openai.AsyncOpenAI(
             api_key=api_key,
-            base_url="https://openrouter.ai/api/v1",
+            base_url=endpoint.url,
         )
     return _client
 
@@ -59,7 +64,15 @@ def extra_body(session_id: str | None) -> dict[str, Any]:
     Always requests usage/cost accounting; adds OpenRouter's `session_id` when
     one is given so every call in a discovery run groups into one session in
     OpenRouter's dashboard.
+
+    Both fields are OpenRouter extensions, so they are omitted entirely when
+    LLM_BASE_URL points somewhere else — extra_body is sent verbatim in the
+    request, and a stricter OpenAI-compatible server rejects the whole call over
+    a field it does not recognise.
     """
+    if not settings.discovery_endpoint.is_openrouter:
+        return {}
+
     body: dict[str, Any] = {"usage": {"include": True}}
     if session_id:
         body["session_id"] = session_id

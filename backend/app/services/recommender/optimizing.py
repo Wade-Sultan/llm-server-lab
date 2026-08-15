@@ -43,7 +43,11 @@ logger = logging.getLogger(__name__)
 
 # Model that reads the metric's feedback and proposes new instructions. Kept
 # separate from RECOMMEND_MODEL on purpose — see the module docstring. Routed
-# through OpenRouter like everything else so the spend lands in one dashboard.
+# through OpenRouter like everything else so the spend lands in one dashboard,
+# or through LLM_BASE_URL when one is set. Worth noting that reflection is the
+# step least suited to a small local model: it rewrites instruction blocks, and
+# a weak rewrite is scored badly and discarded, which looks like GEPA doing
+# nothing. Point this one at OpenRouter even when the pipeline runs locally.
 REFLECTION_MODEL = os.getenv(
     "GEPA_REFLECTION_MODEL", "openrouter/anthropic/claude-sonnet-4.5"
 )
@@ -62,11 +66,13 @@ def build_reflection_lm(model: str | None = None) -> dspy.LM:
     scores badly and discards, which looks like "optimization did nothing".
     """
     from app.core.config import settings
+    from app.services.recommender.dspy_pipeline import litellm_model
 
+    endpoint = settings.chat_endpoint
     return dspy.LM(
-        model=model or REFLECTION_MODEL,
-        api_key=settings.OPENROUTER_API_KEY,
-        api_base="https://openrouter.ai/api/v1",
+        model=litellm_model(model or REFLECTION_MODEL),
+        api_key=endpoint.api_key,
+        api_base=endpoint.url,
         max_tokens=8192,
         temperature=1.0,
     )

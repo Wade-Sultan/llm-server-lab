@@ -86,9 +86,27 @@ def get_chat_model(
 
         return StubChatModel(model_name=model)
 
-    api_key = settings.OPENROUTER_API_KEY
+    endpoint = settings.chat_endpoint
+    api_key = endpoint.api_key
     if not api_key:
         raise OSError("OPENROUTER_API_KEY is not set.")
+
+    if not endpoint.is_openrouter:
+        # Any other OpenAI-compatible server (LM Studio locally). ChatOpenAI
+        # rather than ChatOpenRouter because the latter's client is built
+        # against OpenRouter's own SDK — its base URL is not a parameter, and
+        # `session_id` is an OpenRouter dashboard concept with nowhere to land
+        # here, so it is dropped rather than forwarded.
+        from langchain_openai import ChatOpenAI
+
+        return ChatOpenAI(
+            model=model,
+            api_key=api_key,
+            base_url=endpoint.url,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            streaming=streaming,
+        )
 
     from langchain_openrouter import ChatOpenRouter
 
@@ -149,6 +167,13 @@ async def fetch_generation_cost(generation_id: str | None) -> float | None:
     it is not worth failing a turn the user has already been served.
     """
     if not generation_id:
+        return None
+
+    # An LLM_BASE_URL server issues its own completion ids, which OpenRouter's
+    # generation endpoint knows nothing about. Looking them up there would spend
+    # three requests and a warning per turn to learn what is already known: a
+    # local completion has no dollar cost to report.
+    if not settings.chat_endpoint.is_openrouter:
         return None
 
     api_key = settings.OPENROUTER_API_KEY
