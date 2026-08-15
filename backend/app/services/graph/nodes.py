@@ -121,7 +121,7 @@ async def _pick_question(
             ChatModelConfig.get_route_model(),
             session_id=session_id,
             temperature=0.0,
-            max_tokens=8,
+            max_tokens=ChatModelConfig.ROUTE_MAX_TOKENS,
         )
         # Not streamed — a single integer has nothing to stream — so cost comes
         # back on the response itself and needs no second lookup.

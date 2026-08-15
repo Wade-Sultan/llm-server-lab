@@ -106,6 +106,19 @@ _status_provider = BuildStatusProvider()
 # OpenRouter's names and no other server answers to them.
 RECOMMEND_MODEL = os.getenv("RECOMMEND_MODEL", "openrouter/google/gemma-4-31b-it")
 
+# Output token budget for every DSPy call — extraction and all ten Decide*
+# steps. 1024 is ample for a model that answers directly: the largest output is
+# ProfileExtraction's seventeen short fields.
+#
+# It is NOT ample for a reasoning model, whose thinking is charged to this same
+# budget. Measured against qwen3.8-27b in LM Studio, extraction alone spent ~990
+# tokens thinking and was cut off at the cap with EMPTY content — DSPy then
+# parses no fields, every one defaults to 'unknown', and the turn never reaches
+# the builder because is_profile_complete() keeps rejecting the profile. 4096
+# was enough for the same call to finish. Raise this alongside the CHAT_*
+# budgets in app/services/chat_models.py, never on its own.
+RECOMMEND_MAX_TOKENS = int(os.getenv("RECOMMEND_MAX_TOKENS", "1024"))
+
 # Dependency order of the Decide* steps — recorded as sequence_order so later
 # decisions (which depend on earlier ones) can be reconstructed.
 _SEQUENCE_ORDER: dict[str, int] = {
@@ -222,7 +235,7 @@ def configure_dspy() -> None:
     lm = dspy.LM(
         model=litellm_model(RECOMMEND_MODEL),
         api_key=endpoint.api_key,
-        max_tokens=1024,
+        max_tokens=RECOMMEND_MAX_TOKENS,
         temperature=0.3,
         # api_base is ignored by litellm for an `openrouter/` model, so passing
         # None here on the OpenRouter path is the same as not passing it.

@@ -20,6 +20,24 @@ class ChatModelConfig:
         "DISCOVERY_EXTRACT_MODEL", "minimax/minimax-m3"
     )
 
+    # --- Output token budgets -------------------------------------------------
+    # Tight on purpose: the router returns one integer, the recommendation is a
+    # sub-50-word lead-in, the question is one sentence. Every default here is
+    # calibrated for a model that answers directly.
+    #
+    # A REASONING MODEL NEEDS ALL OF THESE RAISED, and the failure is silent
+    # rather than loud. Thinking tokens are billed against the same budget as
+    # the answer, so a model that spends ~1000 of them hits the cap mid-thought
+    # and returns finish_reason=length with EMPTY content — not an error. The
+    # router then falls back to missing[0], the question and the lead-in stream
+    # as nothing, and extraction yields a profile of 'unknown' that
+    # is_profile_complete() rejects forever, so the turn never reaches the
+    # builder. Raise them via the env vars below when pointing LLM_BASE_URL at
+    # a local reasoning model; see deploy/overlays/local/patches/config-local.yaml.
+    ROUTE_MAX_TOKENS: int = int(os.getenv("CHAT_ROUTE_MAX_TOKENS", "8"))
+    RECOMMEND_MAX_TOKENS: int = int(os.getenv("CHAT_RECOMMEND_MAX_TOKENS", "128"))
+    ELICIT_MAX_TOKENS: int = int(os.getenv("CHAT_ELICIT_MAX_TOKENS", "256"))
+
     @classmethod
     def get_extract_model(cls) -> str:
         return cls.EXTRACT_MODEL

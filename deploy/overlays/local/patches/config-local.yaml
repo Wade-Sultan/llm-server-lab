@@ -77,6 +77,23 @@ data:
   CHAT_RECOMMEND_MODEL: "qwen3.8-27b"
   CHAT_ELICIT_MODEL: "qwen3.8-27b"
 
+  # --- Token budgets, raised for a reasoning model ---------------------------
+  # qwen3.8-27b thinks before it answers, and thinking is charged to the same
+  # output budget as the answer. Production's defaults (8 / 128 / 256 / 1024)
+  # are all smaller than one of its thought processes, so every call would hit
+  # the cap mid-thought and return EMPTY content with finish_reason=length —
+  # no error, just nothing. Measured: extraction spent ~990 tokens reasoning
+  # and produced zero output at 1024; at 4096 it completed normally.
+  #
+  # If you load a NON-reasoning model instead, delete this whole block. These
+  # numbers are pure waste against a model that answers directly, and the eight
+  # tokens the router gets in production are eight for a reason — it returns a
+  # single integer.
+  CHAT_ROUTE_MAX_TOKENS: "1536"
+  CHAT_RECOMMEND_MAX_TOKENS: "1536"
+  CHAT_ELICIT_MAX_TOKENS: "1792"
+  RECOMMEND_MAX_TOKENS: "4096"
+
   # The DSPy Decide* steps. Same model; the `openrouter/` prefix the default
   # carries is litellm routing rather than part of the name, and
   # dspy_pipeline.litellm_model rewrites it to `openai/` when the endpoint is

@@ -417,7 +417,7 @@ async def stream_recommendation(
         ChatModelConfig.get_recommend_model(),
         session_id=session_id,
         temperature=0.5,
-        max_tokens=128,
+        max_tokens=ChatModelConfig.RECOMMEND_MAX_TOKENS,
         streaming=True,
     )
 
@@ -589,7 +589,7 @@ async def stream_elicitation(
         ChatModelConfig.get_elicit_model(),
         session_id=session_id,
         temperature=0.6,
-        max_tokens=256,
+        max_tokens=ChatModelConfig.ELICIT_MAX_TOKENS,
         streaming=True,
     )
 
