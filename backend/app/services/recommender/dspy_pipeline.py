@@ -48,6 +48,7 @@ from app.core.config import settings
 from app.crud import components as crud_components
 from app.models.build_session import BuildSessionStatus
 from app.schemas.chat import NO_BUDGET_CEILING, BuildRequest
+from app.services.discovery import queue
 from app.services.recommender.catalog_match import (
     CatalogRequirements,
     resolve_requirements,
@@ -663,14 +664,66 @@ def _catalog_terms(request: BuildRequest) -> list[str]:
     `answers` is an enum the extraction step chose, not something the user
     typed, so there is nothing to match it against.
     """
-    terms: list[str] = []
+    return [term for term, _kind in _catalog_terms_by_kind(request)]
+
+
+# Which catalog an answer key's free text is describing. `general.workloads` is
+# the ambiguous one — it holds model names for an AI build and application names
+# for everything else — so it is resolved against the use case rather than
+# guessed. This only decides which discovery queue an UNMATCHED term lands in;
+# matching itself still searches all three catalogs together, because the user's
+# phrasing rarely says which it is.
+_TERM_KEY_KINDS: dict[str, str] = {
+    "gaming.games": queue.KIND_GAME,
+    "rendering.software": queue.KIND_SOFTWARE,
+}
+
+_AI_USE_CASES = frozenset({"aiml", "server"})
+
+
+def _catalog_terms_by_kind(request: BuildRequest) -> list[tuple[str, str]]:
+    """The catalog terms, each paired with the catalog it most likely belongs to."""
+    workload_kind = (
+        queue.KIND_AI_MODEL
+        if any(uc in _AI_USE_CASES for uc in request.use_cases)
+        else queue.KIND_SOFTWARE
+    )
+    pairs: list[tuple[str, str]] = []
     for key in ("gaming.games", "general.workloads", "rendering.software"):
+        kind = _TERM_KEY_KINDS.get(key, workload_kind)
         value = request.answers.get(key)
         if isinstance(value, list):
-            terms.extend(str(v) for v in value)
+            pairs.extend((str(v), kind) for v in value)
         elif value:
-            terms.append(str(value))
-    return terms
+            pairs.append((str(value), kind))
+    return pairs
+
+
+async def _queue_unmatched_terms(
+    request: BuildRequest, requirements: CatalogRequirements
+) -> None:
+    """Record what the catalog could not resolve, so a sweep can go find it.
+
+    A Valkey write, deliberately: this runs inside the build pipeline and so
+    inside a LangGraph node, which may not write to Postgres. The rows this
+    eventually produces are written by the discovery sweep, off that path.
+
+    Best-effort to the point of invisibility — a build must never be affected by
+    whether we managed to note what we were missing.
+    """
+    if not requirements.unmatched_terms:
+        return
+    try:
+        kinds = dict(_catalog_terms_by_kind(request))
+        by_kind: dict[str, list[str]] = {}
+        for term in requirements.unmatched_terms:
+            kind = kinds.get(term)
+            if kind:
+                by_kind.setdefault(kind, []).append(term)
+        for kind, terms in by_kind.items():
+            await queue.enqueue(terms, kind)
+    except Exception:  # pragma: no cover - defensive
+        logger.debug("queueing unmatched catalog terms failed", exc_info=True)
 
 
 async def _resolve_catalog_requirements(
@@ -687,7 +740,7 @@ async def _resolve_catalog_requirements(
         return None
     try:
         answers = request.answers
-        return await resolve_requirements(
+        requirements = await resolve_requirements(
             session,
             terms,
             ai_workload=(
@@ -704,6 +757,11 @@ async def _resolve_catalog_requirements(
     except Exception:  # pragma: no cover - defensive
         logger.warning("catalog requirement lookup failed", exc_info=True)
         return None
+
+    # What we could not resolve is the best signal we have about what the
+    # catalog is missing — see app/services/discovery/queue.py.
+    await _queue_unmatched_terms(request, requirements)
+    return requirements
 
 
 # ---------------------------------------------------------------------------

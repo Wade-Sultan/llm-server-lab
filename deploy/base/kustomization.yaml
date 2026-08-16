@@ -46,3 +46,4 @@ resources:
   - jobs/embeddings-cronjob.yaml
   - jobs/benchmarks-cronjob.yaml
   - jobs/listing-digest-cronjob.yaml
+  - jobs/telemetry-drain-cronjob.yaml

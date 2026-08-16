@@ -4,9 +4,19 @@ recording.py
 Best-effort telemetry for the DSPy recommender pipeline.
 
 A `BuildRecorder` accumulates one `build_sessions` row plus one
-`module_decisions` row per `Decide*` call, then flushes them all in a single
-detached task on a fresh DB session. Writes are fire-and-forget: any failure is
-logged and swallowed so recording can never block or fail a user's build.
+`module_decisions` row per `Decide*` call, then hands the lot to a write-behind
+buffer on Valkey. `drain_pending()` — called from turn_runner after save_turn,
+and by the telemetry-drain job — is what actually writes them to Postgres.
+
+WHY THE BUFFER IS IN THE MIDDLE. The recorder is driven from inside a LangGraph
+node, and that path may read from Postgres but never write to it; persistence is
+save_turn's job, outside the graph. Recording used to commit directly from the
+`build` node, which both broke that rule and made a re-executed node emit a
+second build_sessions row rather than overwriting the first. See
+app/services/telemetry_buffer.py.
+
+Writes are still fire-and-forget: any failure is logged and swallowed so
+recording can never block or fail a user's build.
 
 The per-decision snapshot is captured *verbatim* (candidate set, input state,
 prompt hash) so a GEPA replay months later isn't corrupted by drift in
@@ -22,23 +32,32 @@ import hashlib
 import json
 import logging
 import uuid
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, field
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
 import dspy
 from sqlalchemy import func, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.core.logging import set_build_session_id
 from app.core.tracing import attach_run_metadata
 from app.models.build_session import BuildSession, BuildSessionStatus, ModuleDecision
 from app.models.pcparts import PCPart
+from app.services import telemetry_buffer
 
 logger = logging.getLogger(__name__)
 
 # Stands in for model_name on decisions no model made. Filter it out of any GEPA
 # extraction query — see BuildRecorder.record_deterministic_decision.
 DETERMINISTIC_MODEL_NAME = "deterministic/dominance-gate"
+
+
+def _utc_now_iso() -> str:
+    """Timezone-aware UTC, as ISO-8601. A string because it has to survive a
+    JSON round-trip through Valkey; parsed back by _as_datetime at drain time."""
+    return datetime.now(UTC).isoformat()
 
 
 # ---------------------------------------------------------------------------
@@ -64,6 +83,16 @@ class _DecisionRecord:
     model_name: str | None
     chosen_name: str | None
     chosen_price_usd: float | None
+    # WHEN THE DECISION ACTUALLY HAPPENED, not when it reached Postgres. The two
+    # used to be the same thing; now telemetry is buffered on Valkey and drained
+    # afterwards, so the column's server_default would stamp drain time — which
+    # for anything a dead worker left behind is whenever the backstop job next
+    # ran. That would be wrong twice over: it reorders a build's decisions
+    # against other builds, and module_decisions.created_at is part of
+    # ix_module_decisions_category_pipeline_created, the index every GEPA
+    # extraction windows on. A sample landing in the wrong cohort is a silent
+    # data-quality bug, so the timestamp is captured here and written explicitly.
+    recorded_at: str = field(default_factory=lambda: _utc_now_iso())
 
 
 # ---------------------------------------------------------------------------
@@ -170,6 +199,12 @@ class BuildRecorder:
         conversation_id: uuid.UUID | str | None = None,
     ) -> None:
         self.session_id = uuid.uuid4()
+        # When the build STARTED, captured now rather than left to the column's
+        # server_default — which, with telemetry buffered on Valkey and drained
+        # afterwards, would record when the row was written instead of when the
+        # build ran. See _DecisionRecord.recorded_at for why that distinction
+        # has teeth.
+        self.started_at = _utc_now_iso()
         # Tag every log line emitted for the rest of this run, so a build can be
         # followed across replicas without threading the id through call sites.
         set_build_session_id(str(self.session_id))
@@ -389,14 +424,69 @@ class BuildRecorder:
             logger.debug("record_case_choice failed", exc_info=True)
 
     def finish(self, status: BuildSessionStatus = BuildSessionStatus.COMPLETED) -> None:
-        """Schedule the best-effort flush. Returns immediately; never awaited."""
+        """Schedule the best-effort buffer write. Returns immediately.
+
+        Buffers to Valkey rather than writing to Postgres, because this is
+        called from inside a LangGraph node and that path is not allowed to
+        write to the database — see app/services/telemetry_buffer.py. The
+        Postgres insert happens in drain_pending(), off the graph path.
+        """
         try:
-            asyncio.create_task(self._flush(status))
+            asyncio.create_task(self._buffer(status))
         except RuntimeError:
-            # No running loop (e.g. sync test context) — flush synchronously.
-            asyncio.run(self._flush(status))
+            # No running loop (e.g. sync test context) — buffer synchronously.
+            asyncio.run(self._buffer(status))
 
     # -- internal ----------------------------------------------------------
+
+    async def _buffer(self, status: BuildSessionStatus) -> None:
+        """Serialize this run and hand it to the write-behind buffer.
+
+        Note what is NOT done here: chosen_name is not resolved to a part id.
+        That resolution is a SELECT against pc_parts, and doing it at drain time
+        keeps this path free of database access altogether rather than merely
+        free of writes — which is a much easier property to keep true.
+        """
+        try:
+            await telemetry_buffer.push(self._payload(status))
+        except Exception:  # pragma: no cover - defensive
+            logger.exception(
+                "build telemetry buffering failed (session_id=%s)", self.session_id
+            )
+
+    def _payload(self, status: BuildSessionStatus) -> dict:
+        """JSON-safe snapshot of the whole run, shaped for drain_pending."""
+        agg = self._aggregate()
+        return {
+            "session_id": str(self.session_id),
+            "user_id": str(self.user_id) if self.user_id else None,
+            "conversation_id": (
+                str(self.conversation_id) if self.conversation_id else None
+            ),
+            "pipeline_version": self.pipeline_version,
+            "budget_cents": self.budget_cents,
+            "input_profile": self.input_profile,
+            "reference_build_key": self.reference_build_key,
+            "reference_build": self.reference_build,
+            "catalog_requirements": self.catalog_requirements,
+            "status": status.value,
+            # The build's own chronology, carried through the buffer so the
+            # drain can write it instead of letting now() stamp drain time.
+            "started_at": self.started_at,
+            "finished_at": _utc_now_iso(),
+            # Decimal is not JSON-serializable; the buffer's default=str would
+            # stringify it, and the drain would then hand Postgres a string for
+            # a numeric column. Converted here where the type is still known.
+            "total_cost_usd": (
+                str(agg["total_cost_usd"])
+                if agg["total_cost_usd"] is not None
+                else None
+            ),
+            "total_latency_ms": agg["total_latency_ms"],
+            "compatibility_override_count": agg["compatibility_override_count"],
+            "budget_delta_cents": agg["budget_delta_cents"],
+            "decisions": [asdict(d) for d in self._decisions],
+        }
 
     def _aggregate(self) -> dict:
         total_cost = sum(
@@ -424,71 +514,215 @@ class BuildRecorder:
             "budget_delta_cents": budget_delta,
         }
 
-    async def _flush(self, status: BuildSessionStatus) -> None:
-        # Imported lazily to avoid a circular import at module load.
-        from app.core.db import AsyncSessionLocal
 
-        try:
-            agg = self._aggregate()
-            async with AsyncSessionLocal() as db:
-                # Resolve chosen part ids up front (also builds final_build map).
-                final_build: dict[str, str] = {}
-                resolved: dict[int, str | None] = {}
-                for idx, d in enumerate(self._decisions):
-                    part_id = await _resolve_part_id(db, d.chosen_name)
-                    resolved[idx] = str(part_id) if part_id else None
-                    if part_id:
-                        final_build[d.category] = str(part_id)
+# ---------------------------------------------------------------------------
+# Drain — the only place build telemetry reaches Postgres
+# ---------------------------------------------------------------------------
+# Called from turn_runner after save_turn, and by the telemetry-drain job as a
+# backstop for anything a dead worker left buffered. Never called from a graph
+# node: that is the whole point of the buffer sitting in front of it.
 
-                db.add(
-                    BuildSession(
-                        id=self.session_id,
-                        user_id=self.user_id,
-                        conversation_id=self.conversation_id,
-                        pipeline_version=self.pipeline_version,
-                        budget_cents=self.budget_cents,
-                        input_profile=self.input_profile,
-                        final_build=final_build or None,
-                        reference_build_key=self.reference_build_key,
-                        reference_build=self.reference_build,
-                        status=status,
-                        **agg,
-                    )
-                )
-                for idx, d in enumerate(self._decisions):
-                    output = dict(d.output_decision or {})
-                    if resolved[idx]:
-                        output["part_id"] = resolved[idx]
-                    db.add(
-                        ModuleDecision(
-                            session_id=self.session_id,
-                            pipeline_version=self.pipeline_version,
-                            category=d.category,
-                            sequence_order=d.sequence_order,
-                            signature_name=d.signature_name,
-                            signature_version=d.signature_version,
-                            candidate_set=d.candidate_set,
-                            input_state=d.input_state,
-                            # Denormalized onto every row on purpose: it makes a
-                            # decision scoreable on its own, without joining
-                            # back to the session, which is what the metric and
-                            # the trainset builder both want.
-                            catalog_requirements=self.catalog_requirements,
-                            raw_prompt_hash=d.raw_prompt_hash,
-                            output_decision=output or None,
-                            tokens_in=d.tokens_in,
-                            tokens_out=d.tokens_out,
-                            cost_usd=d.cost_usd,
-                            latency_ms=d.latency_ms,
-                            was_override=d.was_override,
-                            model_name=d.model_name,
-                        )
-                    )
-                await db.commit()
-        except Exception:  # pragma: no cover - best-effort
-            logger.exception(
-                "build telemetry flush failed (session_id=%s)", self.session_id
+# How many buffered runs one drain pass persists. Bounded so a large backlog is
+# worked off across several turns rather than stalling one of them.
+DRAIN_BATCH = 20
+
+
+async def drain_pending(limit: int = DRAIN_BATCH) -> int:
+    """Persist buffered build telemetry. Returns how many sessions were written.
+
+    IDEMPOTENT BY SESSION ID. Every insert is ON CONFLICT DO NOTHING against
+    build_sessions.id, and a session already present skips its decisions
+    entirely. That is what makes the peek/commit/trim cycle safe without
+    consumer groups: a payload delivered twice — because a trim failed, or two
+    workers drained concurrently — becomes a no-op rather than a duplicate row
+    or an integrity error.
+
+    Never raises. A drain failure must not affect the turn that triggered it;
+    the entries stay buffered and the next pass retries them.
+    """
+    from app.core.db import AsyncSessionLocal
+
+    try:
+        payloads = await telemetry_buffer.peek(limit)
+    except Exception:  # pragma: no cover - defensive
+        logger.warning("telemetry drain could not read the buffer", exc_info=True)
+        return 0
+    if not payloads:
+        return 0
+
+    written = 0
+    try:
+        async with AsyncSessionLocal() as db:
+            for payload in payloads:
+                if await _persist_session(db, payload):
+                    written += 1
+            await db.commit()
+    except Exception:
+        # Left in the buffer deliberately: unlike a chat turn there is no user
+        # waiting, so retrying next pass costs nothing and losing a GEPA sample
+        # is not recoverable.
+        logger.warning("telemetry drain failed; entries stay buffered", exc_info=True)
+        return 0
+
+    # Trim by how many were READ, not how many were written — a payload that
+    # failed to parse or was already present must still leave the queue, or it
+    # blocks everything behind it forever.
+    await telemetry_buffer.ack(len(payloads))
+    if written:
+        logger.info("persisted telemetry for %d build session(s)", written)
+    return written
+
+
+def _as_uuid(value: Any) -> uuid.UUID | None:
+    """JSON round-trips UUIDs as strings; UUID columns want the object back."""
+    if not value:
+        return None
+    try:
+        return uuid.UUID(str(value))
+    except (ValueError, AttributeError, TypeError):
+        return None
+
+
+def _as_decimal(value: Any) -> Decimal | None:
+    """Same story for Numeric columns — _payload stringifies Decimal to survive
+    JSON, and handing that string to the driver is not the same as handing it a
+    number."""
+    if value is None:
+        return None
+    try:
+        return Decimal(str(value))
+    except (ArithmeticError, ValueError, TypeError):
+        return None
+
+
+def _as_datetime(value: Any) -> datetime | None:
+    """Parse a buffered ISO timestamp back into an aware datetime.
+
+    Returns None on anything unparseable, which lets the column's server_default
+    take over — a slightly wrong timestamp beats a failed insert, and the loss is
+    visible because it will be the only row stamped at drain time.
+    """
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value))
+    except (ValueError, TypeError):
+        logger.warning("telemetry payload has unparseable timestamp %r", value)
+        return None
+    # A naive datetime against a timestamptz column is read as server-local
+    # time, which on a UTC pod is right by accident and wrong anywhere else.
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
+def _as_status(value: Any) -> BuildSessionStatus:
+    """The status column is a native pg enum; reconstruct it from its value.
+
+    Falls back to ERROR rather than raising: a run whose status did not survive
+    the buffer is a run that went wrong somewhere, and recording it as completed
+    would put a lie in the training data.
+    """
+    try:
+        return BuildSessionStatus(value)
+    except ValueError:
+        logger.warning(
+            "telemetry payload has unknown status %r; recording error", value
+        )
+        return BuildSessionStatus.ERROR
+
+
+async def _persist_session(db, payload: dict) -> bool:
+    """Insert one buffered run. False if it was already there or unusable."""
+    session_id = _as_uuid(payload.get("session_id"))
+    if session_id is None:
+        logger.warning("telemetry payload has no usable session_id; dropping it")
+        return False
+
+    decisions = payload.get("decisions") or []
+
+    # Resolve chosen part ids here rather than at record time, so the graph path
+    # touches the database not at all — see BuildRecorder._buffer.
+    final_build: dict[str, str] = {}
+    resolved: list[str | None] = []
+    for d in decisions:
+        part_id = await _resolve_part_id(db, d.get("chosen_name"))
+        resolved.append(str(part_id) if part_id else None)
+        if part_id:
+            final_build[d.get("category") or ""] = str(part_id)
+
+    # Only set when they parsed: passing created_at=None to a NOT NULL column
+    # overrides the server_default with an explicit NULL and fails the insert,
+    # where omitting the key lets now() fill it as it always did.
+    session_times = {
+        key: value
+        for key, value in (
+            ("created_at", _as_datetime(payload.get("started_at"))),
+            ("updated_at", _as_datetime(payload.get("finished_at"))),
+        )
+        if value is not None
+    }
+
+    inserted = await db.execute(
+        pg_insert(BuildSession)
+        .values(
+            **session_times,
+            id=session_id,
+            user_id=_as_uuid(payload.get("user_id")),
+            conversation_id=_as_uuid(payload.get("conversation_id")),
+            pipeline_version=payload.get("pipeline_version"),
+            budget_cents=payload.get("budget_cents"),
+            input_profile=payload.get("input_profile"),
+            final_build=final_build or None,
+            reference_build_key=payload.get("reference_build_key"),
+            reference_build=payload.get("reference_build"),
+            status=_as_status(payload.get("status")),
+            total_cost_usd=_as_decimal(payload.get("total_cost_usd")),
+            total_latency_ms=payload.get("total_latency_ms"),
+            compatibility_override_count=payload.get("compatibility_override_count"),
+            budget_delta_cents=payload.get("budget_delta_cents"),
+        )
+        .on_conflict_do_nothing(index_elements=["id"])
+        .returning(BuildSession.id)
+    )
+    if inserted.scalar_one_or_none() is None:
+        # Already persisted by an earlier pass. Its decisions are already there
+        # too, so writing them again would duplicate every row.
+        return False
+
+    catalog_requirements = payload.get("catalog_requirements")
+    for d, part_id in zip(decisions, resolved, strict=True):
+        output = dict(d.get("output_decision") or {})
+        if part_id:
+            output["part_id"] = part_id
+        recorded_at = _as_datetime(d.get("recorded_at"))
+        db.add(
+            ModuleDecision(
+                # When the step ran, not when it was drained. This column is in
+                # ix_module_decisions_category_pipeline_created, so GEPA cohort
+                # windows are computed against it.
+                **({"created_at": recorded_at} if recorded_at else {}),
+                session_id=session_id,
+                pipeline_version=payload.get("pipeline_version"),
+                category=d.get("category"),
+                sequence_order=d.get("sequence_order"),
+                signature_name=d.get("signature_name"),
+                signature_version=d.get("signature_version"),
+                candidate_set=d.get("candidate_set"),
+                input_state=d.get("input_state"),
+                # Denormalized onto every row on purpose: it makes a decision
+                # scoreable on its own, without joining back to the session,
+                # which is what the metric and the trainset builder both want.
+                catalog_requirements=catalog_requirements,
+                raw_prompt_hash=d.get("raw_prompt_hash"),
+                output_decision=output or None,
+                tokens_in=d.get("tokens_in"),
+                tokens_out=d.get("tokens_out"),
+                cost_usd=d.get("cost_usd"),
+                latency_ms=d.get("latency_ms"),
+                was_override=d.get("was_override"),
+                model_name=d.get("model_name"),
             )
+        )
+    return True
 
 
 async def _resolve_part_id(db, name: str | None) -> uuid.UUID | None:

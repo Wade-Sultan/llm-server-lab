@@ -1,0 +1,61 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: telemetry-drain
+spec:
+  # Hourly. This is a BACKSTOP, not the primary path — turn_runner drains the
+  # buffer at the end of every turn, so in the normal case this finds nothing
+  # and exits in under a second. It exists for the cases that path cannot
+  # cover: a worker SIGTERM'd between the recorder's buffer write and its
+  # drain, or a window where Postgres was unreachable and every in-turn drain
+  # left its entries behind.
+  #
+  # Hourly rather than daily because the buffer is capped (telemetry_buffer.
+  # _MAX_PENDING) and overflow discards the OLDEST entries — a long gap after a
+  # Postgres outage is exactly when a backlog could exceed the cap and start
+  # losing GEPA training data.
+  #
+  # :20 keeps it off the top of the hour, where pricing-etl (04:00) and
+  # benchmarks (05:00 Sundays) start.
+  schedule: "20 * * * *"
+  # Requires k8s 1.27+; without it the schedule silently runs in UTC.
+  timeZone: "America/Los_Angeles"
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 300
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      # 0 retries. drain_pending is idempotent (ON CONFLICT DO NOTHING on
+      # build_sessions.id) so a retry would be safe, but it would also be
+      # pointless: entries stay buffered on failure and the next hourly run
+      # picks them up anyway.
+      backoffLimit: 0
+      # Bounded by _MAX_BATCHES x DRAIN_BATCH rows. Generous for that, and a
+      # hard stop if a transaction wedges against Cloud SQL.
+      activeDeadlineSeconds: 900
+      ttlSecondsAfterFinished: 86400
+      template:
+        spec:
+          restartPolicy: Never
+          serviceAccountName: builder
+          containers:
+            - name: telemetry-drain
+              image: palladium/builder
+              command: ["python", "-m", "app.jobs.telemetry_drain"]
+              envFrom:
+                - configMapRef:
+                    name: builder-config
+                - secretRef:
+                    name: palladium-secrets
+              # Moves rows between Valkey and Postgres and does nothing else —
+              # no LLM calls, no HTTP fetches. It holds one batch of payloads in
+              # memory at a time, and those carry verbatim candidate sets, which
+              # is what the memory is for.
+              resources:
+                requests:
+                  cpu: "200m"
+                  memory: 512Mi
+                limits:
+                  cpu: "500m"
+                  memory: 1Gi

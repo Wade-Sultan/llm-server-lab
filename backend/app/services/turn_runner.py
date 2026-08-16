@@ -524,4 +524,28 @@ async def _run_turn(
                 conversation_id,
             )
 
+    # Build telemetry, persisted here rather than by the recorder that produced
+    # it. The recorder runs inside the `build` graph node, and that path is not
+    # allowed to write to Postgres — it buffers to Valkey and this drains it.
+    # Outside the `persistable` branch on purpose: a guest turn's telemetry is
+    # still worth having (it is GEPA training data, not user data), and it would
+    # otherwise sit buffered until a job picked it up.
+    await _drain_build_telemetry()
+
     await turn_stream.emit_end(turn_id)
+
+
+async def _drain_build_telemetry() -> None:
+    """Move buffered build telemetry into Postgres. Never raises.
+
+    Deliberately not awaited for its result and never allowed to propagate: the
+    turn is finished by this point, the user is not waiting on it, and a
+    telemetry failure must not surface as a turn failure. Anything left behind
+    stays buffered for the next turn or the drain job.
+    """
+    try:
+        from app.services.recommender.recording import drain_pending
+
+        await drain_pending()
+    except Exception:
+        logger.warning("build telemetry drain failed", exc_info=True)

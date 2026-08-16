@@ -3,8 +3,22 @@ kind: CronJob
 metadata:
   name: discovery
 spec:
-  # Monthly, 03:00 on the 1st.
-  schedule: "0 3 1 * *"
+  # Every third day at 06:00, i.e. 10-11 runs a month rather than one big one.
+  #
+  # WHY DISTRIBUTED. A single monthly sweep means a term someone asked for on
+  # the 2nd waits four weeks, and it lands the whole month's search and
+  # extraction spend in one window. Spreading it keeps the demand queue
+  # (app/services/discovery/queue.py) draining continuously, so the catalog
+  # tracks what users are actually asking for within days.
+  #
+  # WHY 06:00. It has to clear the daily jobs it would otherwise contend with
+  # for Cloud SQL: pricing-etl at 04:00 and embeddings at 04:30. 05:00 is taken
+  # by benchmarks on Sundays, so an hour after that is the first clean slot.
+  #
+  # KNOWN QUIRK: */3 restarts each month, so the 31st-to-1st gap is one day
+  # rather than three. Harmless for a sweep; noted because it otherwise reads
+  # as a scheduling bug in the run history.
+  schedule: "0 6 */3 * *"
   timeZone: "America/Los_Angeles"
   concurrencyPolicy: Forbid
   startingDeadlineSeconds: 300
