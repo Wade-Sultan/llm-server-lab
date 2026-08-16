@@ -173,15 +173,40 @@ steps:
         # the Deployments roll, so it cannot ride along in the same apply.
         # Splitting on document separators needs no YAML parser — kustomize
         # output is canonical, exactly one "---" line between documents.
+        #
+        # THREE files, not two. The migration Job is not self-contained: it runs
+        # under `serviceAccountName: builder` and reads `builder-config` via
+        # envFrom. Both used to live only in rest.yaml, which is applied by the
+        # `deploy` step — and `deploy` waits on `migrate`. So the Job depended on
+        # objects that this build had not created yet:
+        #
+        #   fresh namespace   the KSA does not exist, so the Job controller
+        #                     cannot create a pod at all. No pod means no
+        #                     container, no logs, and no `failed` condition —
+        #                     the Job just sits there and the step reports
+        #                     "timed out waiting for the condition" 15 minutes
+        #                     later with nothing to look at.
+        #   existing cluster  the pod runs, but against the PREVIOUS commit's
+        #                     ConfigMap and Workload Identity annotation. A
+        #                     migration needing a config change added in the same
+        #                     commit silently does not get it.
+        #
+        # pre.yaml carries those prerequisites so migrate can apply them first.
+        # They stay in rest.yaml as well — `kubectl apply` is idempotent, and
+        # keeping rest.yaml complete means it is still the whole desired state
+        # rather than a fragment that only works after migrate has run.
         python3 - <<'PY'
         import re
         docs = open('/workspace/manifests.yaml').read().split('\n---\n')
         is_job = lambda d: re.search(r'^kind: Job$', d, re.M)
+        is_pre = lambda d: re.search(r'^kind: (ServiceAccount|ConfigMap)$', d, re.M)
         open('/workspace/migrate.yaml', 'w').write('\n---\n'.join(d for d in docs if is_job(d)))
+        open('/workspace/pre.yaml', 'w').write('\n---\n'.join(d for d in docs if is_pre(d)))
         open('/workspace/rest.yaml', 'w').write('\n---\n'.join(d for d in docs if not is_job(d)))
         PY
 
         test -s /workspace/migrate.yaml || { echo "ERROR: no migration Job rendered" >&2; exit 1; }
+        test -s /workspace/pre.yaml     || { echo "ERROR: no ServiceAccount/ConfigMap rendered — the migration Job cannot start without them" >&2; exit 1; }
         test -s /workspace/rest.yaml    || { echo "ERROR: nothing else rendered" >&2; exit 1; }
 
         # Job specs are immutable, so re-applying `migrate` with a new image
@@ -317,8 +342,21 @@ steps:
         set -euo pipefail
         JOB="migrate-$SHORT_SHA"
 
+        # The Job's prerequisites (KSA + ConfigMaps), applied before the Job that
+        # references them — see the render step for why they are a separate file.
+        kubectl -n "$_NAMESPACE" apply -f /workspace/pre.yaml
+
         dump_logs() {
           echo "--- migration diagnostics ---" >&2
+          # Pod state FIRST, and unconditionally. The failure that brings anyone
+          # here most often is a pod that never ran — unschedulable, waiting on an
+          # Autopilot resource rewrite, ImagePullBackOff — and in that case
+          # `logs` is empty and `describe job` says only "0 succeeded / 0 failed".
+          # Both look like the migration produced no output, which sends people
+          # reading alembic instead of the scheduler. The pod's own events say
+          # what actually happened.
+          kubectl -n "$_NAMESPACE" get pods -l "job-name=$$JOB" -o wide >&2 || true
+          kubectl -n "$_NAMESPACE" describe pods -l "job-name=$$JOB" >&2 || true
           kubectl -n "$_NAMESPACE" logs "job/$$JOB" --tail=200 --all-containers >&2 || true
           kubectl -n "$_NAMESPACE" describe "job/$$JOB" >&2 || true
         }
@@ -389,8 +427,26 @@ steps:
         ( kubectl -n "$_NAMESPACE" wait --for=condition=failed --timeout=900s "job/$$JOB" && exit 1 ) &
         bad=$$!
 
+        # Handled explicitly rather than left to the ERR trap, so the build log
+        # distinguishes the two ways this returns nonzero. Both used to print
+        # kubectl's bare "timed out waiting for the condition", which names
+        # neither the condition that was being waited on nor the Job.
+        set +e
         wait -n "$$ok" "$$bad"
+        rc=$$?
+        set -e
         kill "$$ok" "$$bad" 2>/dev/null || true
+
+        if [ "$$rc" -ne 0 ]; then
+          echo "ERROR: migration $$JOB neither completed nor failed within 900s." >&2
+          echo "       Nothing timed out inside alembic — a Job that RAN reports a" >&2
+          echo "       condition either way. This is the Job sitting with no running" >&2
+          echo "       pod: unschedulable, an Autopilot resource rewrite, an image" >&2
+          echo "       that never pulled, or a missing KSA/Secret. The pod events" >&2
+          echo "       below say which." >&2
+          dump_logs
+          exit 1
+        fi
 
         echo "migration $$JOB complete"
         kubectl -n "$_NAMESPACE" logs "job/$$JOB" --tail=50 --all-containers || true

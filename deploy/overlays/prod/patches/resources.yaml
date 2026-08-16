@@ -7,6 +7,35 @@
 # Memory limit always equals memory request, on purpose. CPU over-limit is
 # throttled — a slowdown — but memory over-limit is an OOM kill, so "bursting"
 # memory buys a crash instead of headroom.
+#
+# THE CPU CEILING IS BOUNDED BY THE MEMORY REQUEST, not chosen freely. Autopilot's
+# general-purpose compute class requires a memory:CPU ratio between 1:1 and 6.5:1
+# (GiB per vCPU), and for a burstable pod that constraint applies to the *limits*
+# as well as the requests — the limits are what the pod may actually consume. A
+# limit pair outside the range is not rejected; Autopilot silently rewrites the
+# pod's resources to bring it back in range, which is the "resource adjustment"
+# note that shows up on the workload in the console, and it can push the pod into
+# a scale-up it did not ask for.
+#
+# Since memory limit == memory request here (above), the rule reduces to:
+#
+#     cpu limit <= memory request in GiB
+#
+# 512Mi of memory therefore caps the CPU limit at 500m, NOT 1. Three workloads
+# (migrate, commerce, admin) were pinned at cpu limit "1" against 512Mi — a 0.5:1
+# ratio, under the 1:1 floor — and were being adjusted on every deploy. Raising
+# memory instead of lowering CPU also works, but it raises the billed request:
+# requests are what Autopilot charges for, and none of the three needs the RAM.
+#
+# YOUR EDITOR WILL FLAG "spec.selector is required" ON THE FOUR DEPLOYMENTS
+# BELOW. False positive, and the field must NOT be added — same as in
+# patches/secrets-scoped.yaml, whose header has the long version. These are
+# strategic merge patches, not manifests: they carry only the fields being
+# overridden, and the selector comes from base. spec.selector is IMMUTABLE on a
+# live Deployment, so duplicating it here turns any later divergence from base
+# into a hard apply failure. Only the Deployments are flagged (4, not 10)
+# because spec.selector is required on Deployment in the Kubernetes schema and
+# optional on Job and CronJob.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -62,7 +91,8 @@ spec:
               cpu: "250m"
               memory: 512Mi
             limits:
-              cpu: "1"
+              # 500m, not 1: 512Mi caps the ratio-legal CPU limit at half a vCPU.
+              cpu: "500m"
               memory: 512Mi
 ---
 apiVersion: apps/v1
@@ -79,13 +109,20 @@ spec:
               cpu: "250m"
               memory: 512Mi
             limits:
-              cpu: "1"
+              # 500m, not 1: 512Mi caps the ratio-legal CPU limit at half a vCPU.
+              cpu: "500m"
               memory: 512Mi
 ---
 # Jobs are billed the same way as Deployments on Autopilot, so they get the same
 # treatment. Migrations are short and bursty — a low request keeps the billed
 # baseline small while the CPU ceiling keeps `alembic upgrade head` from
 # crawling.
+#
+# This one matters more than the others: migrate gates the rollout, so an
+# Autopilot resource rewrite here does not just cost a little scheduling latency,
+# it stalls `kubectl wait` in the migrate step of deploy/cloudbuild.yaml — which
+# reports as "timed out waiting for the condition" with no migration logs,
+# because the container never started.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -100,7 +137,8 @@ spec:
               cpu: "250m"
               memory: 512Mi
             limits:
-              cpu: "1"
+              # 500m, not 1: 512Mi caps the ratio-legal CPU limit at half a vCPU.
+              cpu: "500m"
               memory: 512Mi
 ---
 # The ETL and discovery jobs are network-latency bound (SerpApi, HTTP fetch, LLM
