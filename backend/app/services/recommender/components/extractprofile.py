@@ -64,8 +64,25 @@ class ProfileExtraction(dspy.Signature):
     )
     ai_model_scale: str = dspy.OutputField(
         desc="Exactly one of: small, medium, large, none — LLM size the user wants to run: "
-        "small ≈8B params or less, medium ≈934B, large ≈70B+; "
+        "small ≈8B params or less, medium ≈9-34B, large ≈70B+; "
         "'none' unless primary_use is ai and the workload involves LLMs"
+    )
+    llm_quantization: str = dspy.OutputField(
+        desc="Exactly one of: yes, no, unsure, none — whether the user is willing to "
+        "run the model quantized (compressed weights: q4/q8/GGUF/AWQ/GPTQ/4-bit). "
+        "'yes' when they accept it or already run quantized models; 'no' when they "
+        "want full precision (fp16/bf16) or say quality must not drop; 'unsure' when "
+        "they were asked and did not know or had no preference — 'unsure' is a real "
+        "answer and must be reported rather than downgraded to 'none'. "
+        "'none' ONLY when the subject has not come up at all. "
+        "'none' unless the build is for running or training LLMs"
+    )
+    llm_context_tokens: str = dspy.OutputField(
+        desc="Exactly one of: 4k, 8k, 32k, 128k, unsure, none — the context window the "
+        "user wants to serve, rounded UP to the nearest listed size. Infer from what "
+        "they describe feeding the model (whole codebases or long documents imply 32k+; "
+        "chat implies 8k). 'unsure' when they were asked and had no view. "
+        "'none' unless the build is for running or training LLMs"
     )
     server_workload: str = dspy.OutputField(
         desc="Exactly one of: ai_training, ai_serving, hpc, virtualization, storage, "
@@ -103,6 +120,16 @@ class ProfileExtraction(dspy.Signature):
         "figure falls in, however large. When in doubt between 'custom' and "
         "'elite', choose 'elite'. "
         "'unknown' if no budget signal at all has been given"
+    )
+    stated_budget_usd: str = dspy.OutputField(
+        desc="The dollar figure the user named for the WHOLE build, digits only and "
+        "no currency symbol or separators ('$5k' -> '5000', 'about twenty-five "
+        "hundred' -> '2500'); 'none' if they never named one. Report the number "
+        "they said, not a rounding of it and not your own estimate of what their "
+        "described machine costs. A range is its upper end ('$2000-2500' -> "
+        "'2500'). A figure attached to a single part ('$800 on the GPU') is not a "
+        "build budget — leave it 'none'. budget_tier still reports the band this "
+        "figure falls in; this field is what preserves the figure itself."
     )
     price_sensitivity: str = dspy.OutputField(
         desc="Exactly one of: firm, flexible, stretch, none — how hard the stated budget is. "

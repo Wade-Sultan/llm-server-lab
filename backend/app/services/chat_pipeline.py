@@ -5,6 +5,7 @@ import logging
 import os
 import re
 import threading
+import time
 import uuid
 from collections.abc import AsyncIterator
 from typing import Any
@@ -299,6 +300,42 @@ _UNLIMITED_BUDGET_PATTERNS = (
 _UNLIMITED_BUDGET_RE = re.compile("|".join(_UNLIMITED_BUDGET_PATTERNS), re.IGNORECASE)
 
 
+# Range a stated build budget has to fall in to be believed. Below the floor no
+# complete machine exists in the catalog, and above the ceiling the figure is
+# far more likely to be a parse artifact (a model number, a token count, cents
+# read as dollars) than a budget anyone is spending. Out-of-range values fall
+# back to the tier ladder rather than failing the turn — a wrong-by-1000x
+# ceiling would sail past every candidate filter.
+_STATED_BUDGET_MIN_USD = 300
+_STATED_BUDGET_MAX_USD = 200_000
+
+
+def _parse_stated_budget(raw: str | None) -> int | None:
+    """The user's own dollar figure as an int, or None if absent/implausible.
+
+    The extraction field asks for bare digits, but models reliably re-add the
+    formatting they were told to drop ("$5,000"), so the symbols and separators
+    are stripped here rather than trusted away.
+    """
+    if not raw:
+        return None
+    digits = re.sub(r"[^\d]", "", raw)
+    if not digits:
+        return None
+    try:
+        value = int(digits)
+    except ValueError:
+        return None
+    if not (_STATED_BUDGET_MIN_USD <= value <= _STATED_BUDGET_MAX_USD):
+        logger.info(
+            "ignoring implausible stated_budget_usd %r from profile extraction; "
+            "falling back to the budget tier ladder",
+            raw,
+        )
+        return None
+    return value
+
+
 def _resolve_budget(
     budget_tier: str,
     price_sensitivity: str | None,
@@ -412,6 +449,9 @@ async def extract_profile(
 
     return BuildProfile(
         budget_tier=budget_tier,
+        stated_budget_usd=_parse_stated_budget(
+            _opt(getattr(result, "stated_budget_usd", ""))
+        ),
         price_sensitivity=price_sensitivity,
         form_factor=_pref(getattr(result, "form_factor", "")),
         color_theme=_opt(getattr(result, "color_theme", "")),
@@ -423,6 +463,8 @@ async def extract_profile(
         streaming_style=_opt(result.streaming_style),
         ai_workload=_opt(result.ai_workload),
         ai_model_scale=_opt(result.ai_model_scale),
+        llm_quantization=_opt(getattr(result, "llm_quantization", "")),
+        llm_context_tokens=_opt(getattr(result, "llm_context_tokens", "")),
         server_workload=_opt(result.server_workload),
         server_gpu_count=_opt(result.server_gpu_count),
         editing_resolution=_opt(result.editing_resolution),
@@ -574,6 +616,9 @@ Determine:
    virtualization or a homelab, storage, a render farm node) AND how many GPUs
    it has to host — the GPU count is what decides whether this needs a
    workstation platform like Threadripper rather than a desktop one
+5b. For any build that runs or trains LLMs: whether they're willing to run
+   models QUANTIZED, and what CONTEXT WINDOW they need. Ask these only after
+   you know what they're running.
 6. For video editing: the resolution of the footage they edit
 7. For 3D rendering: which software/renderer they work in
 8. For software development or music production: how heavy the workload is
@@ -590,6 +635,28 @@ mouth either: if they haven't said it, don't offer it as an option.
 Item 10 is about how firm the number is, not how big — ask it only after they
 have given one, and never of someone who has said cost is no object.
 
+ON QUANTIZATION (item 5b), you are expected to teach, not just collect. Most
+people running a model locally have no idea what it means, and the question
+decides whether they need an $800 card or a $15,000 one — so it is worth a
+sentence of explanation rather than a bare ask. Quantization compresses a
+model's weights so it needs far less VRAM: a 31B model is roughly 74GB at full
+precision and roughly 19GB at 4-bit, which is the difference between a
+workstation card and a mainstream one. The quality cost is small and most
+people self-hosting run 4-bit or 8-bit as a matter of course.
+
+If they ask what the levels mean, explain plainly: higher-bit formats (q8, fp8)
+are closer to the original model and need about twice the memory of 4-bit;
+4-bit (q4) is the usual sweet spot; 3-bit and below start to degrade
+noticeably. Give them the tradeoff and let them choose.
+
+"I don't know" is a perfectly good answer to item 5b — accept it, say you'll
+assume a sensible default, and move on. Never make someone feel they should
+have known.
+
+On context window: ask it in plain terms — how much text the model needs to
+consider at once (a short chat, a long document, a whole codebase). Long context
+costs real VRAM on top of the model itself, which is why it is worth asking.
+
 Ask ONE focused follow-up question at a time. Be conversational. Keep responses under 80 words.
 
 Do not describe or recommend a build yourself. Do not say the build is ready, that you have
@@ -597,6 +664,44 @@ enough information, or that a recommendation is coming — the handoff to the bu
 happens automatically and silently once every required item is filled in; you will be told
 exactly what's still missing below, so just ask about that.
 """
+
+
+def _is_llm_build(profile: BuildProfile) -> bool:
+    """Whether this build exists to run or train language models.
+
+    The quantization and context-window questions are only coherent for these —
+    asking someone building a Stable Diffusion box what context length they
+    want is noise. image_gen is deliberately excluded: diffusion models do
+    quantize, but their VRAM is dominated by resolution and batch rather than
+    by weights plus KV cache, so the same two questions would not size it.
+    """
+    if profile.primary_use == "ai":
+        return profile.ai_workload in ("inference", "training")
+    if profile.primary_use == "server":
+        return profile.server_workload in ("ai_serving", "ai_training")
+    return False
+
+
+def _missing_llm_serving_fields(profile: BuildProfile) -> list[str]:
+    """The LLM-shape gaps, in the order they make sense to ask about.
+
+    Deliberately empty until the workload itself is known — these are follow-ups
+    to "you're running LLMs", not opening questions, and the router picking
+    "what context window?" before the user has said what they want to run would
+    be incoherent.
+    """
+    if not _is_llm_build(profile):
+        return []
+    missing: list[str] = []
+    if profile.llm_quantization is None:
+        missing.append(
+            "whether they're willing to run models quantized (compressed weights) "
+            "or need full precision — this is the single biggest factor in how "
+            "much GPU the build needs"
+        )
+    if profile.llm_context_tokens is None:
+        missing.append("how much context they need the model to handle at once")
+    return missing
 
 
 # Mirrors is_profile_complete()'s branches so the elicitation model is told
@@ -638,6 +743,8 @@ def _missing_fields(profile: BuildProfile) -> list[str]:
             and profile.ai_model_scale is None
         ):
             missing.append("roughly how large the models are")
+        else:
+            missing.extend(_missing_llm_serving_fields(profile))
     elif use == "server":
         if profile.server_workload is None:
             missing.append(
@@ -649,6 +756,7 @@ def _missing_fields(profile: BuildProfile) -> list[str]:
         # instead of PCIe lanes, so it is as load-bearing as "eight".
         if profile.server_gpu_count is None:
             missing.append("how many GPUs the server needs to host")
+        missing.extend(_missing_llm_serving_fields(profile))
     elif use == "video_editing":
         if profile.editing_resolution is None:
             missing.append("the resolution of the footage they edit")
@@ -777,11 +885,11 @@ def is_profile_complete(profile: BuildProfile) -> bool:
             and profile.ai_model_scale is None
         ):
             return False
-        return True
+        return not _missing_llm_serving_fields(profile)
     if use == "server":
-        return (
-            profile.server_workload is not None and profile.server_gpu_count is not None
-        )
+        if profile.server_workload is None or profile.server_gpu_count is None:
+            return False
+        return not _missing_llm_serving_fields(profile)
     if use == "video_editing":
         return profile.editing_resolution is not None
     if use == "3d_rendering":
@@ -848,22 +956,104 @@ _SERVER_BUDGET_TIER_USD = {"entry": 4000, "mid": 7000, "high": 12000, "elite": 2
 _PRICE_SENSITIVITY_SCALE = {"firm": 0.90, "flexible": 1.00, "stretch": 1.15}
 
 
-def _budget_for(profile: BuildProfile) -> int:
-    """Total build budget in USD for a profile, or NO_BUDGET_CEILING.
+# Bounds on how far the measured market drift may move the ladder. Part prices
+# swing hard, but a ladder half or triple its tuned level is far more likely to
+# mean a broken catalog (a pricing ETL that wrote cents as dollars, a batch of
+# parts deactivated) than a real market. Clamped rather than rejected: a genuine
+# 2.5x market still gets the full 2.5x, it just cannot go further unattended.
+_DRIFT_MIN, _DRIFT_MAX = 0.5, 2.5
 
-    'custom' short-circuits both ladders: it is not a bigger tier, it is the
-    absence of one. By the time a profile reaches here that tier has already
-    been confirmed against the user's own words (_confirm_custom_budget), so
-    this can take it at face value — and price_sensitivity cannot apply to it,
-    because there is no figure to scale.
+# Drift moves on the timescale of a pricing ETL run, not a chat turn, so it is
+# measured once and reused. Process-local and time-based: a stale factor for a
+# few minutes is harmless, and the alternative is this query on every build.
+_DRIFT_TTL_S = 900.0
+_drift_cache: tuple[float, float] | None = None  # (factor, measured_at)
+
+
+async def _market_drift(db) -> float:
+    """The cached market drift factor, or 1.0 when it cannot be measured.
+
+    1.0 is the honest fallback: it means "spend the ladder as written", which is
+    the behaviour that existed before drift was measured at all. This must never
+    fail a build — a budget is not worth an exception.
     """
-    if profile.budget_tier == "custom":
-        return NO_BUDGET_CEILING
+    global _drift_cache
+
+    now = time.monotonic()
+    if _drift_cache is not None and now - _drift_cache[1] < _DRIFT_TTL_S:
+        return _drift_cache[0]
+
+    try:
+        from app.crud.reference_builds import market_drift_factor
+
+        measured = await market_drift_factor(db)
+    except Exception:
+        logger.warning(
+            "market drift measurement failed; using ladder as written", exc_info=True
+        )
+        measured = None
+
+    factor = 1.0 if measured is None else max(_DRIFT_MIN, min(measured, _DRIFT_MAX))
+    if measured is not None and factor != measured:
+        logger.warning(
+            "market drift %.3f outside [%.1f, %.1f]; clamped to %.3f — check the "
+            "parts catalog and pricing ETL",
+            measured,
+            _DRIFT_MIN,
+            _DRIFT_MAX,
+            factor,
+        )
+    _drift_cache = (factor, now)
+    return factor
+
+
+async def _budget_for_async(profile: BuildProfile, db) -> int:
+    """_budget_for, with the tier ladder scaled to current catalog prices.
+
+    Only the ladder is scaled. A stated figure is the user's own money and means
+    the same thing whatever the market did; 'custom' has no figure to scale. So
+    drift applies to exactly the case it was built for — the user who never named
+    a number and is being sized by constants somebody typed months ago.
+    """
+    if profile.budget_tier == "custom" or profile.stated_budget_usd is not None:
+        return _budget_for(profile)
+
     tiers = (
         _SERVER_BUDGET_TIER_USD if profile.primary_use == "server" else _BUDGET_TIER_USD
     )
     base = tiers.get(profile.budget_tier, tiers["mid"])
     scale = _PRICE_SENSITIVITY_SCALE.get(profile.price_sensitivity or "", 1.0)
+    return int(base * scale * await _market_drift(db))
+
+
+def _budget_for(profile: BuildProfile) -> int:
+    """Total build budget in USD for a profile, or NO_BUDGET_CEILING.
+
+    'custom' short-circuits everything below: it is not a bigger tier, it is the
+    absence of one. By the time a profile reaches here that tier has already
+    been confirmed against the user's own words (_confirm_custom_budget), so
+    this can take it at face value — and price_sensitivity cannot apply to it,
+    because there is no figure to scale.
+
+    A STATED FIGURE ALWAYS WINS OVER THE LADDER, and it has to. The tiers are
+    coarse buckets mapped to one constant each, so routing a stated number
+    through them destroys it: $2200 and $1500 are both 'mid' and both came back
+    out as $1500. Worse, the ladder is picked by use case, and the server ladder
+    is a different scale entirely — a user who said $5000 and the word "server"
+    was handed $25000 and shown a $15000 GPU, while the chat text still quoted
+    them their own $5000. The ladder's job is to answer "roughly what should
+    this cost?" for someone who never named a number, not to overrule someone
+    who did.
+    """
+    if profile.budget_tier == "custom":
+        return NO_BUDGET_CEILING
+    scale = _PRICE_SENSITIVITY_SCALE.get(profile.price_sensitivity or "", 1.0)
+    if profile.stated_budget_usd is not None:
+        return int(profile.stated_budget_usd * scale)
+    tiers = (
+        _SERVER_BUDGET_TIER_USD if profile.primary_use == "server" else _BUDGET_TIER_USD
+    )
+    base = tiers.get(profile.budget_tier, tiers["mid"])
     return int(base * scale)
 
 
@@ -921,8 +1111,57 @@ def _profile_to_preferences(profile: BuildProfile) -> UserPreferences:
     return prefs
 
 
-def _profile_to_build_request(profile: BuildProfile) -> BuildRequest:
-    """Map the chat-extracted BuildProfile onto the pipeline's BuildRequest."""
+# The user's answer, translated into what the build steps should actually do.
+#
+# 'unsure' resolving to 4-bit is the load-bearing entry: it is what makes "I
+# don't know" a safe answer instead of a blocking one, and 4-bit is what people
+# self-hosting a model overwhelmingly run. Sizing an unsure user for fp16 would
+# reintroduce the original failure by way of politeness.
+_QUANTIZATION_GUIDANCE = {
+    "yes": (
+        "willing to run quantized — size VRAM for 4-bit (q4) weights, "
+        "roughly 0.5 bytes per parameter"
+    ),
+    "no": (
+        "wants FULL PRECISION — size VRAM for fp16/bf16 weights, 2 bytes per "
+        "parameter, and do not assume quantization to make a smaller card fit"
+    ),
+    "unsure": (
+        "no preference stated on quantization — assume 4-bit (q4), the format "
+        "self-hosters normally run, and size VRAM at roughly 0.5 bytes per "
+        "parameter"
+    ),
+}
+
+# Context length in tokens, and what it costs. KV cache scales with context and
+# is charged on top of the weights, which is why a model that "fits in 24GB" at
+# 8k may not at 128k.
+_CONTEXT_GUIDANCE = {
+    "4k": "short context (~4k tokens) — KV cache overhead is minimal",
+    "8k": "standard context (~8k tokens) — modest KV cache overhead",
+    "32k": (
+        "long context (~32k tokens) — budget meaningful extra VRAM for KV cache "
+        "on top of the weights"
+    ),
+    "128k": (
+        "very long context (~128k tokens) — KV cache can rival the weights "
+        "themselves; prefer a card with clear VRAM headroom over one that only "
+        "just fits the model"
+    ),
+    "unsure": "no context length stated — assume a standard ~8k window",
+}
+
+
+def _profile_to_build_request(
+    profile: BuildProfile, budget_usd: int | None = None
+) -> BuildRequest:
+    """Map the chat-extracted BuildProfile onto the pipeline's BuildRequest.
+
+    budget_usd overrides the synchronous ladder when the caller has already
+    resolved a drift-scaled figure against a DB session (see _run_dspy_build).
+    Left optional so the sync callers and tests that only need the constants
+    keep working unchanged.
+    """
     answers: dict[str, str | list[str]] = {}
     if profile.gaming_resolution:
         answers["gaming.resolution"] = profile.gaming_resolution
@@ -934,6 +1173,21 @@ def _profile_to_build_request(profile: BuildProfile) -> BuildRequest:
         answers["ai.workload"] = profile.ai_workload
     if profile.ai_model_scale:
         answers["ai.model_scale"] = profile.ai_model_scale
+    # Rendered as an instruction rather than as the raw enum. These land in the
+    # `use_cases` string every Decide* step reads, and "llm.quantization: unsure"
+    # tells the GPU step nothing it can act on — "size for 4-bit" does. The
+    # translation is here rather than in the prompt because the default for
+    # 'unsure' is a product decision, not something to re-litigate per call.
+    # .get, not [] — these values come from a language model, and an off-menu
+    # string must degrade to the default rather than take the build down.
+    if profile.llm_quantization:
+        answers["llm.quantization"] = _QUANTIZATION_GUIDANCE.get(
+            profile.llm_quantization, _QUANTIZATION_GUIDANCE["unsure"]
+        )
+    if profile.llm_context_tokens:
+        answers["llm.context"] = _CONTEXT_GUIDANCE.get(
+            profile.llm_context_tokens, _CONTEXT_GUIDANCE["unsure"]
+        )
     if profile.server_workload:
         answers["server.workload"] = profile.server_workload
     if profile.server_gpu_count:
@@ -962,7 +1216,7 @@ def _profile_to_build_request(profile: BuildProfile) -> BuildRequest:
         answers["general.notes"] = profile.notes
     return BuildRequest(
         use_cases=[_PRIMARY_USE_TO_USE_CASE.get(profile.primary_use, "productivity")],
-        budget_usd=_budget_for(profile),
+        budget_usd=_budget_for(profile) if budget_usd is None else budget_usd,
         preferences=_profile_to_preferences(profile),
         answers=answers,
     )
@@ -1049,6 +1303,29 @@ async def _attach_reference_build(recorder: Any, ref_task: asyncio.Task) -> None
         )
 
 
+async def _resolve_drift_scaled_budget(profile: BuildProfile) -> int:
+    """The build budget, with the ladder scaled to current catalog prices.
+
+    Takes its own short session rather than reusing the pipeline's, so the
+    request (and the recorder built from it) can still be constructed before the
+    try block that owns the pipeline session — the cancellation handler there
+    reads `recorder`, so it has to exist first. The drift factor is cached for
+    _DRIFT_TTL_S, so in the steady state this opens a session and runs no query.
+
+    Never raises: a budget is not worth failing a build over, and the
+    synchronous ladder is always a valid answer.
+    """
+    try:
+        async with AsyncSessionLocal() as db:
+            return await _budget_for_async(profile, db)
+    except Exception:
+        logger.warning(
+            "drift-scaled budget lookup failed; using the ladder as written",
+            exc_info=True,
+        )
+        return _budget_for(profile)
+
+
 async def _run_dspy_build(
     profile: BuildProfile,
     progress_queue: asyncio.Queue,
@@ -1078,7 +1355,9 @@ async def _run_dspy_build(
     )
     from app.services.recommender.recording import BuildRecorder
 
-    request = _profile_to_build_request(profile)
+    request = _profile_to_build_request(
+        profile, budget_usd=await _resolve_drift_scaled_budget(profile)
+    )
     recorder = BuildRecorder(request, PIPELINE_VERSION, conversation_id=conversation_id)
 
     def _progress(step: str, message: str) -> None:

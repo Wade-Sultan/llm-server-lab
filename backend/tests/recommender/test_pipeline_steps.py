@@ -691,9 +691,8 @@ def test_step_gpu_sees_the_slot_and_lane_context(monkeypatch):
     assert capture["cpu_pcie_lanes"] == 88
 
 
-def test_psu_sizes_against_every_card_not_one(monkeypatch):
-    """A four-card build draws four times the per-card TDP; sizing against one
-    would put a 750W supply on a 1600W machine."""
+def _capture_psu_wattage(monkeypatch, state) -> int:
+    """Run _step_psu against a stubbed candidate query and return min_wattage."""
     capture: dict = {}
 
     async def _fake_candidates(session, min_wattage, budget_ceiling_usd, form_factor):
@@ -703,12 +702,71 @@ def test_psu_sizes_against_every_card_not_one(monkeypatch):
     monkeypatch.setattr(dp, "get_psu_candidates", _fake_candidates)
     _patch_run_step(monkeypatch, SimpleNamespace(psu_group="P", reason="r"))
     monkeypatch.setattr(dp.crud_components, "get_psus_for_group", _async_return([]))
-
-    state = _state(cpu_tdp_w=350, gpu_tdp_w=575, gpu_count=4)
     asyncio.run(dp._step_psu(state, object(), BUDGET, object(), None))
+    return capture["min_wattage"]
 
-    # (350 + 575*4) * 1.2
-    assert capture["min_wattage"] == int((350 + 575 * 4) * 1.20)
+
+def test_psu_sizes_against_every_card_not_one(monkeypatch):
+    """A four-card build draws four times the per-card TDP; sizing against one
+    would put a 750W supply on a 1600W machine."""
+    state = _state(cpu_tdp_w=350, gpu_tdp_w=575, gpu_count=4)
+
+    # (350 + 575*4 + platform overhead) * 1.2
+    assert _capture_psu_wattage(monkeypatch, state) == int(
+        (350 + 575 * 4 + dp._PLATFORM_OVERHEAD_W) * 1.20
+    )
+
+
+def test_psu_counts_the_parts_neither_tdp_covers(monkeypatch):
+    """Board, RAM, drives and fans draw power that neither TDP figure includes."""
+    state = _state(cpu_tdp_w=105, gpu_tdp_w=200, gpu_count=1)
+
+    assert _capture_psu_wattage(monkeypatch, state) == int(
+        (105 + 200 + dp._PLATFORM_OVERHEAD_W) * 1.20
+    )
+
+
+def test_psu_respects_the_chipsets_own_recommendation(monkeypatch):
+    """TDP plus headroom describes steady-state draw; the vendor figure prices in
+    transients, and a 600W card on an 850W supply is exactly how that bites."""
+    state = _state(cpu_tdp_w=105, gpu_tdp_w=600, gpu_count=1)
+    state.gpu_recommended_psu_w = 1000
+
+    # TDP path yields (105 + 600 + 100) * 1.2 = 966, which is the number that
+    # picked an 850W group for a 600W card. The vendor figure has to win.
+    assert _capture_psu_wattage(monkeypatch, state) == 1000
+
+
+def test_psu_keeps_the_tdp_figure_when_it_is_the_larger_one(monkeypatch):
+    """The vendor recommendation is a floor, not an override — a multi-card build
+    can exceed it on TDP alone."""
+    state = _state(cpu_tdp_w=350, gpu_tdp_w=575, gpu_count=4)
+    state.gpu_recommended_psu_w = 0
+
+    assert _capture_psu_wattage(monkeypatch, state) == int(
+        (350 + 575 * 4 + dp._PLATFORM_OVERHEAD_W) * 1.20
+    )
+
+
+def test_psu_scales_the_vendor_recommendation_by_card_count(monkeypatch):
+    """_resolve_gpu_variant rejects any board recommending more than
+    psu_watts / gpu_count, so the PSU step has to size the same way or the
+    resolver refuses the chipset that was just chosen."""
+    state = _state(cpu_tdp_w=105, gpu_tdp_w=300, gpu_count=2)
+    state.gpu_recommended_psu_w = 750
+
+    assert _capture_psu_wattage(monkeypatch, state) == 1500
+
+
+def test_psu_ignores_the_gpu_recommendation_on_an_igpu_build(monkeypatch):
+    """A build with no discrete card must not inherit a stale chipset figure."""
+    state = _state(cpu_tdp_w=65, gpu_tdp_w=0, gpu_count=1)
+    state.gpu_required = False
+    state.gpu_recommended_psu_w = 1000
+
+    assert _capture_psu_wattage(monkeypatch, state) == int(
+        (65 + dp._PLATFORM_OVERHEAD_W) * 1.20
+    )
 
 
 def test_step_storage_can_pair_a_boot_drive_with_bulk_capacity(monkeypatch):

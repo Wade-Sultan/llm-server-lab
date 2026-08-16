@@ -10,8 +10,13 @@ export interface RecommendedPart {
   component: string
   brand: string
   model: string
-  /** PER UNIT, in cents. The line total is approx_price * quantity. */
-  approx_price: number
+  /**
+   * PER UNIT, in cents. The line total is approx_price * quantity. Null when
+   * the catalog has no price for the part — a custom build resolves this from
+   * the DB (see chat_pipeline._assemble_dspy_build), and a part whose group
+   * carries no street price comes through unpriced rather than as zero.
+   */
+  approx_price: number | null
   /**
    * How many of this part the build uses. Optional because reference builds
    * predate it; treat a missing value as 1. Only ever above 1 for the roles a

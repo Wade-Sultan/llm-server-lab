@@ -3,11 +3,18 @@ import uuid
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import joinedload
+from sqlalchemy.orm import joinedload, with_polymorphic
 
 from app.data.refbuilds import BUILDS, Build, Part
 from app.models.listing import AmazonListing
+from app.models.pcparts import PCPart
 from app.models.reference_build import ReferenceBuild, ReferenceBuildPart
+
+# Reference-build parts loaded with every subclass column, so the group FKs
+# (gpu_chipset_id, psu_group_id, ...) are present for resolve_part_price_cents.
+# A plain joinedload of the polymorphic base leaves them unloaded, and reading
+# one would be an async-unsafe lazy load.
+_PART_POLY = with_polymorphic(PCPart, "*")
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +68,95 @@ async def get_by_key(db: AsyncSession, build_key: str) -> tuple[str, Build] | No
         )
         build = BUILDS.get(build_key)
         return (build_key, build) if build else None
+
+
+# A reference build has to have this fraction of its parts priced on both sides
+# before its ratio is trusted. A build with two of nine parts priced produces a
+# ratio describing those two parts, not the market.
+_MIN_PRICE_COVERAGE = 0.8
+
+
+async def market_drift_factor(db: AsyncSession) -> float | None:
+    """How much the reference builds cost NOW versus their curated snapshots.
+
+    WHY A SINGLE RATIO RATHER THAN A PRICE PER TIER. The obvious move is to
+    anchor each budget tier to the live total of the reference build that tier
+    resolves to. It does not work: resolve_build maps several tiers onto one
+    build (entry and mid 1440p gaming are both '1440_mid'), so anchoring
+    directly would silently collapse tiers that today differ by $500 and would
+    hand a server profile whatever the two server builds happen to cost. The
+    ladder's *shape* — the spacing between tiers, and the server ladder sitting
+    above the desktop one — is hand-tuned and worth keeping.
+
+    So this measures only what the constants cannot know: which direction the
+    market has moved since someone last reviewed them. Callers scale the whole
+    ladder by it, preserving every relative decision while the absolute level
+    tracks the catalog.
+
+    The median across builds, not the mean: one reference build holding a part
+    that has gone end-of-life and spiked should not drag every tier up with it.
+
+    Returns None when nothing can be measured (no active builds, no live prices
+    backfilled, a query failure) — callers then use the constants unscaled,
+    which is exactly today's behaviour.
+    """
+    from app.crud.components import resolve_part_price_cents
+
+    try:
+        stmt = (
+            select(ReferenceBuild)
+            .options(
+                joinedload(ReferenceBuild.parts).joinedload(
+                    ReferenceBuildPart.part.of_type(_PART_POLY)
+                )
+            )
+            .where(ReferenceBuild.is_active == True)  # noqa: E712
+        )
+        result = await db.execute(stmt)
+        builds = result.unique().scalars().all()
+    except Exception:
+        logger.warning(
+            "market drift query failed; ladder stays unscaled", exc_info=True
+        )
+        return None
+
+    ratios: list[float] = []
+    for build in builds:
+        if not build.parts:
+            continue
+        live_total = 0
+        curated_total = 0
+        priced = 0
+        for rbp in build.parts:
+            if rbp.part is None or not rbp.approx_price:
+                continue
+            # The grouped types (GPU/PSU/RAM/Storage) carry price on their group
+            # rather than on the pc_parts row, which is why this goes through
+            # the resolver instead of reading street_price_cents directly.
+            live = await resolve_part_price_cents(db, rbp.part)
+            if not live:
+                continue
+            live_total += live
+            curated_total += rbp.approx_price
+            priced += 1
+        if curated_total <= 0 or priced / len(build.parts) < _MIN_PRICE_COVERAGE:
+            continue
+        ratios.append(live_total / curated_total)
+
+    if not ratios:
+        logger.info(
+            "no reference build had enough live prices to measure market drift; "
+            "budget ladder stays unscaled"
+        )
+        return None
+
+    ratios.sort()
+    mid = len(ratios) // 2
+    median = ratios[mid] if len(ratios) % 2 else (ratios[mid - 1] + ratios[mid]) / 2
+    logger.info(
+        "market drift factor %.3f from %d reference build(s)", median, len(ratios)
+    )
+    return median
 
 
 async def get_amazon_urls_by_part(

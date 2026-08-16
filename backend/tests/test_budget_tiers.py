@@ -9,6 +9,8 @@ expensive rather than merely wrong.
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from app.schemas.chat import NO_BUDGET_CEILING, BuildProfile, ChatMessage
@@ -172,6 +174,77 @@ def test_custom_overrides_the_server_ladder_too():
     )
 
 
+# ---------------------------------------------------------------------------
+# A stated figure beats the ladder
+# ---------------------------------------------------------------------------
+
+
+def test_a_stated_figure_is_spent_as_given():
+    """The tier is a bucket; the number the user said is the number to spend."""
+    assert cp._budget_for(_profile(budget_tier="elite", stated_budget_usd=5000)) == 5000
+
+
+def test_a_stated_figure_survives_the_server_ladder():
+    """THE REGRESSION. 'A $5000 LLM server' extracted as server + elite, and the
+    server ladder turned it into $25000 — which cleared an $18750 GPU ceiling and
+    put a $15000 workstation card in a build the chat text still called $5000."""
+    profile = _profile(
+        primary_use="server", budget_tier="elite", stated_budget_usd=5000
+    )
+    assert cp._budget_for(profile) == 5000
+    assert dp._allocate_budget(cp._budget_for(profile), ["server"])["gpu"] < 5000
+
+
+def test_a_stated_figure_is_not_rounded_to_its_tier():
+    """$2200 and $1500 are both 'mid'; only one of them is $2200."""
+    assert cp._budget_for(_profile(budget_tier="mid", stated_budget_usd=2200)) == 2200
+
+
+def test_price_sensitivity_still_scales_a_stated_figure():
+    """Firmness applies to the user's own number the same way it applied to the
+    tier's — it says where in the band to aim, not which band."""
+    firm = _profile(
+        budget_tier="elite", stated_budget_usd=4000, price_sensitivity="firm"
+    )
+    stretch = _profile(
+        budget_tier="elite", stated_budget_usd=4000, price_sensitivity="stretch"
+    )
+    assert cp._budget_for(firm) == 3600
+    assert cp._budget_for(stretch) == 4600
+
+
+def test_custom_still_wins_over_a_stated_figure():
+    """A user who said cost is no object has no ceiling, whatever number they
+    mentioned along the way."""
+    profile = _profile(budget_tier="custom", stated_budget_usd=5000)
+    assert cp._budget_for(profile) == NO_BUDGET_CEILING
+
+
+def test_the_ladder_still_answers_when_no_figure_was_given():
+    """Most users never name a number; the tiers remain the fallback for them."""
+    assert cp._budget_for(_profile(budget_tier="mid")) == cp._BUDGET_TIER_USD["mid"]
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("5000", 5000),
+        ("$5,000", 5000),
+        ("  2500  ", 2500),
+        ("none", None),
+        ("", None),
+        (None, None),
+        # Out of range: a figure this small buys no complete machine, and one
+        # this large is a parse artifact rather than a budget. Both fall back
+        # to the ladder rather than becoming a ceiling nothing can clear.
+        ("50", None),
+        ("999999999", None),
+    ],
+)
+def test_stated_budget_parsing(raw, expected):
+    assert cp._parse_stated_budget(raw) == expected
+
+
 def test_no_ceiling_propagates_to_every_slot():
     """Not a large share of a large number — every slot gets the sentinel, so
     the CRUD layer drops its price filter rather than raising it."""
@@ -248,3 +321,131 @@ def test_no_ceiling_compiles_away_entirely():
     sql = _compiled(_within_budget(CPU.street_price_cents, NO_BUDGET_CEILING))
     assert "street_price_cents" not in sql
     assert sql.lower().strip() == "true"
+
+
+# ---------------------------------------------------------------------------
+# Market drift: the ladder tracks the catalog
+# ---------------------------------------------------------------------------
+# The tier constants encode what a PC cost when someone last reviewed them. Part
+# prices move hard, and a stale ladder fails as a cliff rather than a slope:
+# ceilings stay fixed while the catalog inflates, candidate sets shrink, and
+# eventually _ensure_candidates raises and every build silently falls back to a
+# reference build. Drift scaling keeps the ladder's hand-tuned SHAPE (tier
+# spacing, desktop vs server) and moves only its absolute level.
+
+
+@pytest.fixture(autouse=True)
+def _clear_drift_cache():
+    """The factor is cached process-wide for 15 minutes; tests must not inherit
+    each other's."""
+    cp._drift_cache = None
+    yield
+    cp._drift_cache = None
+
+
+def _drift(monkeypatch, factor):
+    async def _fake(_db):
+        return factor
+
+    monkeypatch.setattr("app.crud.reference_builds.market_drift_factor", _fake)
+
+
+def test_a_risen_market_raises_the_whole_ladder(monkeypatch):
+    _drift(monkeypatch, 1.25)
+    budget = asyncio.run(cp._budget_for_async(_profile(budget_tier="mid"), object()))
+    assert budget == int(cp._BUDGET_TIER_USD["mid"] * 1.25)
+
+
+def test_a_fallen_market_lowers_it(monkeypatch):
+    _drift(monkeypatch, 0.8)
+    budget = asyncio.run(cp._budget_for_async(_profile(budget_tier="high"), object()))
+    assert budget == int(cp._BUDGET_TIER_USD["high"] * 0.8)
+
+
+def test_drift_preserves_tier_spacing(monkeypatch):
+    """The point of one scalar rather than a price per tier: entry stays below
+    mid stays below high, in the same proportions."""
+    _drift(monkeypatch, 1.4)
+    figures = [
+        asyncio.run(cp._budget_for_async(_profile(budget_tier=t), object()))
+        for t in ("entry", "mid", "high", "elite")
+    ]
+    assert figures == sorted(figures)
+    baseline = [cp._BUDGET_TIER_USD[t] for t in ("entry", "mid", "high", "elite")]
+    for scaled, base in zip(figures, baseline, strict=True):
+        assert scaled == int(base * 1.4)
+
+
+def test_drift_preserves_the_server_ladder_gap(monkeypatch):
+    _drift(monkeypatch, 1.3)
+    desktop = asyncio.run(
+        cp._budget_for_async(_profile(primary_use="ai", budget_tier="high"), object())
+    )
+    server = asyncio.run(
+        cp._budget_for_async(
+            _profile(primary_use="server", budget_tier="high"), object()
+        )
+    )
+    assert server > desktop
+
+
+def test_an_unmeasurable_market_leaves_the_ladder_alone(monkeypatch):
+    """No active builds, no prices backfilled — today's behaviour exactly."""
+
+    async def _none(_db):
+        return None
+
+    monkeypatch.setattr("app.crud.reference_builds.market_drift_factor", _none)
+    budget = asyncio.run(cp._budget_for_async(_profile(budget_tier="mid"), object()))
+    assert budget == cp._BUDGET_TIER_USD["mid"]
+
+
+def test_a_measurement_failure_never_fails_the_build(monkeypatch):
+    async def _boom(_db):
+        raise RuntimeError("catalog is down")
+
+    monkeypatch.setattr("app.crud.reference_builds.market_drift_factor", _boom)
+    budget = asyncio.run(cp._budget_for_async(_profile(budget_tier="mid"), object()))
+    assert budget == cp._BUDGET_TIER_USD["mid"]
+
+
+@pytest.mark.parametrize(
+    "measured,expected_factor",
+    [(0.1, cp._DRIFT_MIN), (9.0, cp._DRIFT_MAX), (1.5, 1.5)],
+)
+def test_absurd_drift_is_clamped(monkeypatch, measured, expected_factor):
+    """A ladder triple its tuned level is far likelier to mean a broken pricing
+    ETL than a real market."""
+    _drift(monkeypatch, measured)
+    budget = asyncio.run(cp._budget_for_async(_profile(budget_tier="mid"), object()))
+    assert budget == int(cp._BUDGET_TIER_USD["mid"] * expected_factor)
+
+
+def test_a_stated_figure_is_never_scaled_by_drift(monkeypatch):
+    """The user's own money means what they said it means, whatever the market
+    did. Drift exists for people who never named a number."""
+    _drift(monkeypatch, 2.0)
+    profile = _profile(budget_tier="elite", stated_budget_usd=5000)
+    assert asyncio.run(cp._budget_for_async(profile, object())) == 5000
+
+
+def test_custom_is_never_scaled_by_drift(monkeypatch):
+    _drift(monkeypatch, 2.0)
+    profile = _profile(budget_tier="custom")
+    assert asyncio.run(cp._budget_for_async(profile, object())) == NO_BUDGET_CEILING
+
+
+def test_drift_is_measured_once_and_reused(monkeypatch):
+    """A per-build catalog scan would be pure waste — drift moves on the
+    timescale of a pricing ETL run, not a chat turn."""
+    calls = 0
+
+    async def _counting(_db):
+        nonlocal calls
+        calls += 1
+        return 1.1
+
+    monkeypatch.setattr("app.crud.reference_builds.market_drift_factor", _counting)
+    for _ in range(5):
+        asyncio.run(cp._budget_for_async(_profile(budget_tier="mid"), object()))
+    assert calls == 1

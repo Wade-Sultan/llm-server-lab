@@ -44,6 +44,30 @@ class GPUSelection(dspy.Signature):
     training, so weigh it against the workload rather than treating it as a
     limit.
 
+    WHEN THE BUILD IS FOR RUNNING AN LLM, VRAM IS A FUNCTION OF QUANTIZATION
+    AND YOU MUST TREAT IT AS ONE. A model's weights shrink roughly in
+    proportion to the bytes per weight it is served at:
+
+        VRAM_GB ~= params_billions * bytes_per_weight * 1.2
+
+    with bytes_per_weight of 2.0 for fp16/bf16, 1.0 for fp8/int8, 0.75 for q6,
+    0.65 for q5, 0.5 for q4, 0.4 for q3 (the 1.2 covers KV cache and runtime
+    overhead). A 31B model is ~74GB at fp16 and ~19GB at q4 — the first needs a
+    workstation card costing five figures, the second runs on a 24GB consumer
+    card. Picking the first when the user asked for the second is the single
+    most expensive mistake available in this step.
+
+    So: assume q4-q8 for anyone serving a model locally on one GPU, which is
+    what self-hosters actually run, and choose the cheapest card that fits at a
+    sane quantization. Size for fp16 only when the user asked for full
+    precision, when the workload is training rather than inference, or when
+    use_cases says so outright. State the quantization you assumed in `reason`
+    — a VRAM claim without a precision attached is not a claim.
+
+    This applies whether or not the model appears in our catalog. If use_cases
+    names a model with no measured requirements, do the arithmetic above on the
+    parameter count in its name rather than treating it as unconstrained.
+
     Output a reconsideration_threshold that is specific about price and tier.
     """
 
@@ -79,7 +103,10 @@ class GPUSelection(dspy.Signature):
     )
     reason: str = dspy.OutputField(
         desc="2-3 sentences. Lead with the value argument relative to the use case. "
-        "Mention used market if relevant."
+        "Mention used market if relevant. For an LLM workload, state the "
+        "quantization the VRAM figure assumes (e.g. 'fits Gemma 4 31B at q4 in "
+        "~19GB') — the card only makes sense alongside the precision it was "
+        "chosen for."
     )
     reconsideration_threshold: str = dspy.OutputField(
         desc="Specific price boundary at which a tier upgrade or downgrade becomes "

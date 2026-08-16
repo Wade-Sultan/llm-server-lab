@@ -87,6 +87,20 @@ class BuildProfile(BaseModel):
     streaming_style: str | None = None  # "while_gaming" | "camera_only"
     ai_workload: str | None = None  # "inference" | "training" | "image_gen"
     ai_model_scale: str | None = None  # "small" | "medium" | "large"
+    # --- LLM serving shape ----------------------------------------------------
+    # Only meaningful for an LLM build (see chat_pipeline._is_llm_build). These
+    # two are the dominant terms in how much VRAM the machine actually needs,
+    # and leaving them unstated is what let a 31B model be sized as though it
+    # were served at fp16 — a $15000 card for a job a $800 one does.
+    #
+    # "yes" (quantization is fine) | "no" (full precision) | "unsure".
+    # 'unsure' is a real answer, not an absence: it resolves to the q4-q8
+    # default that self-hosters actually run, and it exists so a user who has
+    # never heard of quantization is not blocked by the question.
+    llm_quantization: str | None = None
+    # "4k" | "8k" | "32k" | "128k" | "unsure" — target context window. Drives
+    # KV cache, which at long context rivals the weights themselves.
+    llm_context_tokens: str | None = None
     # "ai_training" | "ai_serving" | "hpc" | "virtualization" | "storage"
     # | "render_farm"
     server_workload: str | None = None
@@ -100,8 +114,14 @@ class BuildProfile(BaseModel):
     # applies anywhere; it is never inferred, only accepted when the user says
     # so outright — see chat_pipeline._confirm_custom_budget.
     budget_tier: str
+    # The dollar figure the user actually named for the whole build, when they
+    # named one. A tier is a band and cannot round-trip a number: every tier
+    # resolves to a single constant, so "$2200" and "$1500" both come back out
+    # as $1500. This preserves the figure so _budget_for can spend it directly
+    # and only fall back to the ladder when nothing was stated.
+    stated_budget_usd: int | None = None
     # How firm the budget is, independent of how big it is: "firm" | "flexible"
-    # | "stretch". Scales the tier's dollar figure in chat_pipeline._budget_for.
+    # | "stretch". Scales the budget figure in chat_pipeline._budget_for.
     price_sensitivity: str | None = None
 
     # --- Stated preferences -------------------------------------------------

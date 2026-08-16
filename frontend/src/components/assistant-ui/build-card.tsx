@@ -202,8 +202,20 @@ export const BuildCard: DataMessagePartComponent<BuildData> = (props) => {
             const amazonUrl = amazonListing?.url ?? part.amazon_url
             const ebayUrl = ebayListing?.url
             // Live price comes from the Amazon listing (eBay listings are
-            // filtered search links with no single price).
+            // filtered search links with no single price), falling back to the
+            // catalog price captured when the build was generated. The fallback
+            // matters more than it looks: a part with no Amazon listing used to
+            // render with no price at all beside a disabled buy button, which
+            // reads as "this part is free" rather than "we have no listing" —
+            // and it hid four-figure catalog prices that the header total was
+            // meanwhile including.
             const priceListing = amazonListing
+            const unitPriceCents =
+              priceListing?.price_amount ?? part.approx_price
+            const priceCurrency =
+              priceListing?.price_amount != null
+                ? (priceListing.currency ?? "USD")
+                : "USD"
             const partLabel = `${part.brand} ${part.model}`
             // A build can hold several of a part (four matched GPUs, three
             // fans). Absent on reference builds, which predate the field.
@@ -230,12 +242,12 @@ export const BuildCard: DataMessagePartComponent<BuildData> = (props) => {
                   </p>
                 </div>
                 <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
-                  {priceListing?.price_amount != null && (
+                  {unitPriceCents != null && (
                     <span className="text-sm text-muted-foreground">
-                      {/* Line total: the listing price is per unit. */}
+                      {/* Line total: both price sources are per unit. */}
                       {formatPrice(
-                        (priceListing.price_amount * quantity) / 100,
-                        priceListing.currency ?? "USD",
+                        (unitPriceCents * quantity) / 100,
+                        priceCurrency,
                       )}
                     </span>
                   )}

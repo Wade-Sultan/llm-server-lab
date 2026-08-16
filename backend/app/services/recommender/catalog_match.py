@@ -68,6 +68,35 @@ _MATCH_MAX_DISTANCE = 0.45
 # machine rather than fifteen sets of requirements to satisfy simultaneously.
 _MAX_TERMS = 6
 
+# Handed to the build steps whenever an LLM the catalog has no row for comes up.
+#
+# WHY THIS IS PROSE AND NOT A LOOKUP. ai_workloads already stores exactly these
+# numbers, curated, for every model we know — and the whole problem is the
+# models we don't. A name is all we have there, and the parameter count inside
+# it is enough to do the arithmetic, so the arithmetic is what gets shipped.
+#
+# The failure this exists to stop: a user asked for a single-GPU box serving a
+# 31B model and got a $15,000 96GB workstation card, because nothing in the
+# pipeline said that weights shrink with precision. At q4 that model is ~19GB
+# and runs on a 24GB consumer card — a difference between two builds an order
+# of magnitude apart in price, turning entirely on a fact no step was told.
+_QUANTIZATION_PRIMER = """\
+  Quantization decides how much VRAM an LLM needs, and it is not optional
+  context — the same model spans a ~4x VRAM range across the formats people
+  actually run, so a VRAM figure quoted without a precision is meaningless.
+  Estimate weights as: VRAM_GB ~= params_billions * bytes_per_weight * 1.2
+  (the 1.2 covers KV cache and runtime overhead at typical context lengths).
+  bytes_per_weight: fp16/bf16 = 2.0, fp8/int8 = 1.0, q6 = 0.75, q5 = 0.65,
+  q4 = 0.5, q3 = 0.4.
+  Self-hosters serving a model locally run q4-q8 as a matter of course; 4-bit
+  is the default assumption for a single-GPU box unless the user asked for full
+  precision. Quote the precision alongside the card, and prefer the cheapest
+  card that fits the model at a sane quantization over a larger card that fits
+  it at fp16 — the quality cost of q4 vs fp16 is small and the price
+  difference is not. Only size for fp16 when the user asked for it, when the
+  workload is training rather than serving, or when no quantized format exists
+  for that architecture."""
+
 # Profile ai_workload values -> the AITask rows worth reading, best first.
 # "training" maps to LoRA ahead of a full fine-tune because it is what someone
 # training on a desktop is realistically doing; full-weight training numbers
@@ -100,6 +129,10 @@ class CatalogRequirements:
     # True when any matched AI workload declares it shards across cards. This is
     # the one signal that legitimately pushes a build toward multiple GPUs.
     supports_multi_gpu: bool = False
+    # True when the catalog holds more than one precision for a matched
+    # workload's task, i.e. the VRAM floor below is a function of a choice the
+    # build is free to make rather than a property of the model.
+    quantization_alternatives: bool = False
     # GPU stacks the matched AI workloads can run on ("cuda" -> nvidia).
     gpu_backends: set[str] = field(default_factory=set)
     # Feature floors from ai_workloads.required_gpu_features / game hard_requirements.
@@ -117,7 +150,7 @@ class CatalogRequirements:
 
     @property
     def is_empty(self) -> bool:
-        return not self.matched_names
+        return not self.matched_names and not self.unmatched_terms
 
     def summary(self) -> str:
         """Prose block appended to the pipeline's use-case summary.
@@ -128,11 +161,35 @@ class CatalogRequirements:
         """
         if self.is_empty:
             return ""
-        lines = [
-            "Catalog requirements for what the user named "
-            f"({', '.join(self.matched_names)}):"
-        ]
-        lines.extend(f"  - {note}" for note in self.notes)
+        lines: list[str] = []
+        if self.matched_names:
+            lines.append(
+                "Catalog requirements for what the user named "
+                f"({', '.join(self.matched_names)}):"
+            )
+            lines.extend(f"  - {note}" for note in self.notes)
+
+        # NAMING SOMETHING WE HAVE NO ROW FOR IS INFORMATION, not an absence of
+        # it, and dropping it silently is how a build gets sized for a model
+        # nobody reasoned about. The catalog is always behind — a model released
+        # last week has no row and still has to be built for — so an unmatched
+        # term is the normal case for exactly the workloads that most need the
+        # VRAM arithmetic spelled out. Say what we don't know, and say what to
+        # do about it, rather than letting the step infer from silence that the
+        # user asked for nothing in particular.
+        if self.unmatched_terms:
+            lines.append(
+                "The user also named the following, which are NOT in our catalog "
+                f"— we have no measured requirements for them: "
+                f"{', '.join(self.unmatched_terms)}."
+            )
+            lines.append(
+                "  Size the build from the name itself rather than ignoring it. "
+                "For an LLM, the parameter count in the name is the input to the "
+                "arithmetic below; do not assume it needs no VRAM just because "
+                "no row exists for it."
+            )
+            lines.append(_QUANTIZATION_PRIMER)
 
         floors = []
         if self.min_vram_gb:
@@ -178,6 +235,7 @@ class CatalogRequirements:
             "min_storage_gb": self.min_storage_gb,
             "min_cores": self.min_cores,
             "supports_multi_gpu": self.supports_multi_gpu,
+            "quantization_alternatives": self.quantization_alternatives,
             "gpu_backends": sorted(self.gpu_backends),
             "required_features": sorted(self.required_features),
             "notes": list(self.notes),
@@ -321,6 +379,35 @@ async def _apply_ai_model(
     if workload.cpu_offload_capable:
         detail += ", can offload to system RAM when VRAM is short"
     req.notes.append(detail)
+
+    # THE CHOSEN ROW IS ONE CELL OF A MATRIX, and quoting it alone reads as
+    # "this model needs N GB" when the truth is "this model needs N GB at this
+    # precision". ai_workloads is keyed on (model, task, precision) precisely
+    # because the range is wide — so when the catalog holds other precisions for
+    # the same task, show them. A step that can see 70B costs 140GB at fp16 and
+    # 42GB at q4 can pick a card; a step shown only the first number buys for
+    # the worst case, every time.
+    alternates = [
+        w
+        for w in model.workloads
+        if w.task == workload.task
+        and w.id != workload.id
+        and (w.recommended_vram_gb or w.min_vram_gb)
+    ]
+    if alternates:
+        spread = ", ".join(
+            f"{w.precision}: {w.recommended_vram_gb or w.min_vram_gb}GB"
+            for w in sorted(
+                alternates,
+                key=lambda w: w.recommended_vram_gb or w.min_vram_gb or 0,
+            )
+        )
+        req.notes.append(
+            f"  {model.name} at other quantizations ({workload.task}): {spread}. "
+            "The VRAM floor below assumes the default precision — a lower "
+            "quantization fits a smaller card and is usually the better buy."
+        )
+        req.quantization_alternatives = True
 
 
 _APPLIERS = {

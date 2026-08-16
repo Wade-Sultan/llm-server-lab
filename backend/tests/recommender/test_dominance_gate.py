@@ -187,7 +187,13 @@ def test_gpu_step_skips_the_llm_on_a_single_slot_gaming_board(monkeypatch):
     monkeypatch.setattr(
         dp.crud_components,
         "get_gpus_for_chipset",
-        _async_return([SimpleNamespace(chipset=SimpleNamespace(tdp_watts=300))]),
+        _async_return(
+            [
+                SimpleNamespace(
+                    chipset=SimpleNamespace(tdp_watts=300, recommended_psu_watts=750)
+                )
+            ]
+        ),
     )
 
     state = _state(mobo_pcie_x16_slots=1)
@@ -214,7 +220,13 @@ def test_gpu_step_uses_the_llm_when_the_board_has_multiple_x16_slots(monkeypatch
     monkeypatch.setattr(
         dp.crud_components,
         "get_gpus_for_chipset",
-        _async_return([SimpleNamespace(chipset=SimpleNamespace(tdp_watts=300))]),
+        _async_return(
+            [
+                SimpleNamespace(
+                    chipset=SimpleNamespace(tdp_watts=300, recommended_psu_watts=750)
+                )
+            ]
+        ),
     )
 
     state = _state(mobo_pcie_x16_slots=2)

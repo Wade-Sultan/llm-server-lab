@@ -787,6 +787,11 @@ class DSPyBuildState:
     # Per-card TDP. The PSU step multiplies by gpu_count; keeping it per-card
     # means the value stays comparable with the chipset row it came from.
     gpu_tdp_w: int = 0
+    # The chipset vendor's own single-card PSU recommendation, per card. Unlike
+    # TDP this already accounts for transient spikes — a 600W card that draws
+    # 600W steady-state pulls far more for milliseconds at a time, which is what
+    # actually trips a supply's OCP. 0 when the catalog doesn't record it.
+    gpu_recommended_psu_w: int = 0
     gpu_required: bool = True
 
     psu_group: str = ""
@@ -1048,6 +1053,12 @@ _MAX_STORAGE_DRIVES = 6
 _MAX_GPUS = 8
 _MAX_FANS = 12
 
+# Everything drawing power that neither the CPU's nor the GPU's TDP covers:
+# board, RAM, drives, fans, pump, USB devices. Sizing a supply from those two
+# figures alone silently under-counts a real machine by this much before any
+# headroom multiplier is applied.
+_PLATFORM_OVERHEAD_W = 100
+
 
 def _parse_name_list(raw: str, limit: int) -> list[str]:
     """Comma-separated model output -> a de-duplicated, capped list of names.
@@ -1228,6 +1239,17 @@ async def _step_gpu(
         ]
         if tdps:
             state.gpu_tdp_w = max(tdps)
+        # Carried to _step_psu so the supply is sized against the vendor figure
+        # rather than against TDP alone. This is the same column _resolve_gpu_variant
+        # filters boards on — reading it here is what stops the PSU step from
+        # choosing a unit that the variant resolver then has to reject.
+        recs = [
+            v.chipset.recommended_psu_watts
+            for v in variants
+            if v.chipset and v.chipset.recommended_psu_watts
+        ]
+        if recs:
+            state.gpu_recommended_psu_w = max(recs)
 
 
 async def _resolve_gpu_variant(state: DSPyBuildState, session: AsyncSession) -> None:
@@ -1323,8 +1345,24 @@ async def _step_psu(
     # Add 20% headroom over combined TDP. gpu_tdp_w is per card, so a four-card
     # build draws four times it — sizing against a single card here would put a
     # 750W supply on a 1600W machine.
-    system_tdp = state.cpu_tdp_w + state.gpu_tdp_w * state.gpu_count
+    system_tdp = (
+        state.cpu_tdp_w + state.gpu_tdp_w * state.gpu_count + _PLATFORM_OVERHEAD_W
+    )
     min_wattage = int(system_tdp * 1.20)
+    # TDP-plus-headroom is a floor, not an answer: it describes steady-state
+    # draw, and a supply dies on transients. The vendor's own recommendation
+    # already prices those in, so take whichever figure is larger.
+    #
+    # Multiplied by gpu_count deliberately, even though each card's figure
+    # includes an allowance for the rest of the system and n cards therefore
+    # over-count that allowance n-1 times. _resolve_gpu_variant rejects any
+    # board whose chipset recommends more than `psu_watts / gpu_count`, so a
+    # PSU sized any smaller than this is one the resolver will refuse to pair
+    # with the very chipset that was chosen — and its fallback is to ignore the
+    # mismatch and ship the build anyway. Over-provisioning a multi-GPU supply
+    # is the cheaper error.
+    if state.gpu_required and state.gpu_recommended_psu_w:
+        min_wattage = max(min_wattage, state.gpu_recommended_psu_w * state.gpu_count)
     # Determine PSU form factor from case
     psu_form_factor = state.psu_form_factor  # updated after case step if ITX
     candidates = await get_psu_candidates(
