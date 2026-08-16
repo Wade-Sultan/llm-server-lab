@@ -24,7 +24,7 @@ import {
   RefreshCwIcon,
   SquareIcon,
 } from "lucide-react"
-import { type FC, useState } from "react"
+import { type FC, useEffect, useState } from "react"
 import {
   ComposerAddAttachment,
   ComposerAttachments,
@@ -342,16 +342,50 @@ const AssistantActionBar: FC = () => {
  */
 const RetryButton: FC = () => {
   const aui = useAui()
+  // The user message whose edit has been opened and is waiting to be sent.
+  const [pending, setPending] = useState<number | null>(null)
 
-  // The user message this reply answers. Walking back rather than assuming
-  // index-1 because a turn can leave more than one message behind.
+  // The user message this reply answers.
+  //
+  // Located by matching ids, NOT by reading `s.message.index`. That field is
+  // declared on MessageState and is genuinely populated for statically rendered
+  // messages, but the live runtime path builds message state from
+  // MessageRuntime.getState(), which returns the repository's raw message and
+  // has no index on it. Reading it here yields undefined, so `index - 1` is NaN,
+  // the loop below never runs, and the button silently never renders.
   const userIndex = useAuiState((s) => {
     const messages = s.thread.messages
-    for (let i = s.message.index - 1; i >= 0; i--) {
+    const selfIndex = messages.findIndex((m) => m.id === s.message.id)
+    if (selfIndex < 0) return -1
+    // Walking back rather than assuming selfIndex-1: a turn can leave more
+    // than one message behind.
+    for (let i = selfIndex - 1; i >= 0; i--) {
       if (messages[i]?.role === "user") return i
     }
     return -1
   })
+
+  // Whether the edit composer we asked for has actually opened yet.
+  const isEditing = useAuiState((s) =>
+    pending === null
+      ? false
+      : (s.thread.messages[pending]?.composer?.isEditing ?? false),
+  )
+
+  // SENDING IS A SEPARATE RENDER FROM OPENING, and that is the whole reason
+  // this is an effect rather than two calls in the click handler.
+  // `composer.send()` resolves the edit composer core through a fresh
+  // `getEditComposer(messageId)` lookup, and nothing exists under that id until
+  // `beginEdit()` has run and the thread has notified its subscribers. Calling
+  // both synchronously throws "Composer is not available" before the send ever
+  // reaches the transport. Waiting on isEditing reproduces exactly what a
+  // person does — open the editor, then submit it — which is the path the Edit
+  // button and EditComposer already prove works.
+  useEffect(() => {
+    if (pending === null || !isEditing) return
+    aui.thread().message({ index: pending }).composer().send()
+    setPending(null)
+  }, [pending, isEditing, aui])
 
   if (userIndex < 0) return null
 
@@ -359,14 +393,12 @@ const RetryButton: FC = () => {
     <TooltipIconButton
       tooltip="Retry"
       onClick={() => {
-        const message = aui.thread().message({ index: userIndex })
-        // Re-resolved between the two calls on purpose: beginEdit is what
-        // creates the edit composer, so a handle taken before it would be
-        // bound to one that does not exist yet.
-        if (!message.composer().getState().isEditing) {
-          message.composer().beginEdit()
-        }
-        message.composer().send()
+        // beginEdit seeds the composer with the message's existing text, so
+        // this re-sends it unchanged. Unchanged still counts as an edit: what
+        // makes the server rewind is the parentId the runtime attaches, not
+        // whether the text differs.
+        aui.thread().message({ index: userIndex }).composer().beginEdit()
+        setPending(userIndex)
       }}
     >
       <RefreshCwIcon />
