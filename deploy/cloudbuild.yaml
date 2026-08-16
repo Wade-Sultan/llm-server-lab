@@ -440,23 +440,108 @@ steps:
         ( kubectl -n "$_NAMESPACE" wait --for=condition=failed --timeout=900s "job/$$JOB" && exit 1 ) &
         bad=$$!
 
+        # A THIRD watcher, on the scheduler. Both `wait` calls above describe a
+        # Job whose pod RAN: `complete` and `failed` are conditions the Job
+        # controller sets from a container's exit status. A pod that never gets
+        # scheduled produces neither, so an unschedulable migration used to burn
+        # the entire 900s and then report a generic timeout — while the cluster
+        # autoscaler had known within about a minute that it could not place the
+        # pod at all. Nothing about that outcome improves by waiting.
+        #
+        # FailedScaleUp is the unambiguous signal: the autoscaler asked GCE for a
+        # node and GCE refused, which in practice means a quota. SSD_TOTAL_GB is
+        # the one that bites here — every Autopilot node wants a ~100GB
+        # pd-balanced boot disk, and pd-balanced counts against the SSD quota,
+        # not the standard-disk one, which is where people look first.
+        #
+        # TriggeredScaleUp alone is NOT a failure and must not abort: a healthy
+        # scale-up is a normal couple of minutes of Pending. Only a pod that is
+        # STILL Pending 60s after a FailedScaleUp counts, so a scale-up that
+        # fails once and then succeeds rides through untouched.
+        rm -f /workspace/migrate-unschedulable
+        (
+          # Seconds observed Pending. Reset, not accumulated, so a pod that
+          # schedules clears any history from an earlier attempt.
+          pending=0
+          while :; do
+            sleep 20
+            POD=$$(kubectl -n "$_NAMESPACE" get pods -l "job-name=$$JOB" \
+                     -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+            [ -n "$$POD" ] || continue
+
+            PHASE=$$(kubectl -n "$_NAMESPACE" get pod "$$POD" \
+                       -o jsonpath='{.status.phase}' 2>/dev/null || true)
+            # Deliberately never `exit 0`. This runs under `wait -n`, so exiting
+            # zero would be indistinguishable from the migration succeeding and
+            # would let the build march on to `deploy` mid-migration. A healthy
+            # pod just means this watcher has nothing to say; it keeps polling
+            # and is killed once a real condition arrives.
+            if [ "$$PHASE" != "Pending" ]; then
+              pending=0
+              continue
+            fi
+            pending=$$((pending + 20))
+
+            REASONS=$$(kubectl -n "$_NAMESPACE" get events \
+                         --field-selector "involvedObject.name=$$POD" \
+                         -o jsonpath='{.items[*].reason}' 2>/dev/null || true)
+
+            ABORT=""
+            case "$$REASONS" in
+              *FailedScaleUp*)
+                [ "$$pending" -ge 60 ] && ABORT="the cluster autoscaler tried to add a node and GCE refused (FailedScaleUp) — this is a quota limit, not a slow migration" ;;
+            esac
+            # Backstop for the Pending causes that never emit FailedScaleUp at
+            # all: an unsatisfiable nodeSelector, a taint nothing tolerates, a
+            # namespace ResourceQuota rejecting the pod. 7 minutes is well past
+            # any legitimate Autopilot scale-up, and still leaves headroom inside
+            # the 900s for the diagnostics below to run.
+            if [ -z "$$ABORT" ] && [ "$$pending" -ge 420 ]; then
+              ABORT="the pod has been Pending for $${pending}s without ever being scheduled"
+            fi
+
+            if [ -n "$$ABORT" ]; then
+              echo "ERROR: migration $$JOB cannot be scheduled — $$ABORT." >&2
+              echo "       Aborting now rather than waiting out the 900s timeout." >&2
+              echo "       Scheduler events for $$POD:" >&2
+              kubectl -n "$_NAMESPACE" get events \
+                --field-selector "involvedObject.name=$$POD" \
+                -o custom-columns=REASON:.reason,MESSAGE:.message --no-headers >&2 || true
+              echo "       Regional quota (SSD_TOTAL_GB is the usual culprit):" >&2
+              echo "         gcloud compute regions describe $_REGION --flatten='quotas[]' \\" >&2
+              echo "           --format='table(quotas.metric,quotas.usage,quotas.limit)'" >&2
+              echo "       Unattached disks consuming that quota for nothing:" >&2
+              echo "         gcloud compute disks list --filter='-users:*'" >&2
+              touch /workspace/migrate-unschedulable
+              exit 1
+            fi
+          done
+        ) &
+        sched=$$!
+
         # Handled explicitly rather than left to the ERR trap, so the build log
         # distinguishes the two ways this returns nonzero. Both used to print
         # kubectl's bare "timed out waiting for the condition", which names
         # neither the condition that was being waited on nor the Job.
         set +e
-        wait -n "$$ok" "$$bad"
+        wait -n "$$ok" "$$bad" "$$sched"
         rc=$$?
         set -e
-        kill "$$ok" "$$bad" 2>/dev/null || true
+        kill "$$ok" "$$bad" "$$sched" 2>/dev/null || true
 
         if [ "$$rc" -ne 0 ]; then
+          # The scheduler watcher has already printed the specific reason and the
+          # commands to check it, so do not bury that under a generic message.
+          if [ -f /workspace/migrate-unschedulable ]; then
+            dump_logs
+            exit 1
+          fi
           echo "ERROR: migration $$JOB neither completed nor failed within 900s." >&2
           echo "       Nothing timed out inside alembic — a Job that RAN reports a" >&2
-          echo "       condition either way. This is the Job sitting with no running" >&2
-          echo "       pod: unschedulable, an Autopilot resource rewrite, an image" >&2
-          echo "       that never pulled, or a missing KSA/Secret. The pod events" >&2
-          echo "       below say which." >&2
+          echo "       condition either way, and a pod stuck Pending would have been" >&2
+          echo "       caught by the scheduler watcher. That leaves a container that" >&2
+          echo "       started and then hung: alembic blocked on a lock held by" >&2
+          echo "       another session, or a database connection with no timeout." >&2
           dump_logs
           exit 1
         fi
