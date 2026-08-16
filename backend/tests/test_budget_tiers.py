@@ -28,7 +28,7 @@ def _msgs(*user_turns: str) -> list[ChatMessage]:
 
 
 # ---------------------------------------------------------------------------
-# _confirm_custom_budget
+# _resolve_budget
 # ---------------------------------------------------------------------------
 
 
@@ -46,10 +46,11 @@ def _msgs(*user_turns: str) -> list[ChatMessage]:
         "I don't care about the cost",
         "build the fastest thing possible regardless of price",
         "spare no expense",
+        "the sky's the limit",
     ],
 )
 def test_custom_confirmed_by_explicit_user_statement(statement):
-    assert cp._confirm_custom_budget("custom", _msgs(statement)) == "custom"
+    assert cp._resolve_budget("custom", None, _msgs(statement))[0] == "custom"
 
 
 @pytest.mark.parametrize(
@@ -69,7 +70,7 @@ def test_custom_confirmed_by_explicit_user_statement(statement):
     ],
 )
 def test_custom_rejected_without_explicit_statement(statement):
-    assert cp._confirm_custom_budget("custom", _msgs(statement)) == "elite"
+    assert cp._resolve_budget("custom", None, _msgs(statement))[0] == "elite"
 
 
 def test_custom_not_confirmed_by_the_assistant_alone():
@@ -79,14 +80,67 @@ def test_custom_not_confirmed_by_the_assistant_alone():
         ChatMessage(role="user", content="I need a fast machine for AI work"),
         ChatMessage(role="assistant", content="Sure — is your budget unlimited?"),
     ]
-    assert cp._confirm_custom_budget("custom", messages) == "elite"
+    assert cp._resolve_budget("custom", None, messages)[0] == "elite"
 
 
 @pytest.mark.parametrize("tier", ["entry", "mid", "high", "elite", "unknown"])
 def test_other_tiers_pass_through_untouched(tier):
     """The guard only ever inspects 'custom'; an explicit statement in the
     conversation must not promote a tier the model didn't propose."""
-    assert cp._confirm_custom_budget(tier, _msgs("money is no object")) == tier
+    assert cp._resolve_budget(tier, "firm", _msgs("money is no object")) == (
+        tier,
+        "firm",
+    )
+
+
+def test_downgraded_custom_gets_a_price_sensitivity():
+    """The downgrade must not leave the profile one un-askable question short.
+
+    A downgraded 'custom' is a known tier, so is_profile_complete demands a
+    price_sensitivity — but the only question that fills it is the one
+    _ELICIT_SYSTEM forbids asking someone who just said cost is no object. With
+    no sensitivity supplied here the turn asks forever and never builds.
+    """
+    tier, sensitivity = cp._resolve_budget(
+        "custom", None, _msgs("honestly the budget isn't really a concern")
+    )
+    assert (tier, sensitivity) == ("elite", "stretch")
+
+
+def test_downgraded_custom_keeps_an_extracted_sensitivity():
+    """'stretch' only ever fills an absence — the extractor's answer still wins."""
+    assert cp._resolve_budget(
+        "custom", "firm", _msgs("honestly the budget isn't really a concern")
+    ) == ("elite", "firm")
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        # Downgraded: too vague for the guard, permissive enough for the model.
+        "honestly the budget isn't really a concern",
+        # Confirmed: the guard's own wording.
+        "money is no object",
+        "I want the absolute best parts you can find",
+    ],
+)
+def test_permissive_budget_talk_always_reaches_a_complete_profile(statement):
+    """The regression itself: whichever way the guard rules, a profile that is
+    otherwise fully specified must come out ready to build.
+
+    Confirmed 'custom' skips the sensitivity check; a downgrade now carries one.
+    Before the fix the downgrade path landed between the two and looped.
+    """
+    tier, sensitivity = cp._resolve_budget("custom", None, _msgs(statement))
+    profile = _profile(
+        primary_use="gaming",
+        gaming_resolution="4k",
+        gaming_fps="144",
+        budget_tier=tier,
+        price_sensitivity=sensitivity,
+    )
+    assert cp.is_profile_complete(profile)
+    assert cp._missing_fields(profile) == []
 
 
 # ---------------------------------------------------------------------------

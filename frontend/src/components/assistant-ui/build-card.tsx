@@ -1,9 +1,12 @@
 "use client"
 
 import type { DataMessagePartComponent } from "@assistant-ui/react"
+import { ThumbsDownIcon, ThumbsUpIcon } from "lucide-react"
 import { useEffect, useState } from "react"
 import type { IconType } from "react-icons"
 import { FaAmazon, FaEbay } from "react-icons/fa6"
+import { toast } from "sonner"
+import { useChatConversation } from "@/components/Chat/chatruntimeprovider"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -13,11 +16,85 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import {
+  clearBuildFeedback,
+  type FeedbackRating,
+  setBuildFeedback,
+} from "@/lib/feedback"
 import { fetchListingsByPart, type PartListings } from "@/lib/listings"
+import { cn } from "@/lib/utils"
 import type { BuildData } from "@/types/build"
 
 const formatPrice = (value: number, currency = "USD") =>
   value.toLocaleString("en-US", { style: "currency", currency })
+
+/**
+ * Thumbs up/down on this build.
+ *
+ * Optimistic, and deliberately forgiving about failure: the rating is written
+ * to local state immediately and rolled back if the request fails. Losing a
+ * thumb is not worth a blocking spinner on a card the user is reading, and the
+ * rating carries no consequence they are waiting on.
+ *
+ * Clicking the lit thumb clears the rating rather than re-sending it — "rated
+ * then changed their mind" and "never rated" are the same thing to every
+ * question this data answers, so the row is deleted rather than neutralised.
+ */
+function BuildFeedback({ buildKey }: { buildKey: string }) {
+  const conversation = useChatConversation()
+  const [rating, setRating] = useState<FeedbackRating | null>(
+    conversation?.initialFeedback ?? null,
+  )
+
+  // No conversation context means this card is not inside a chat (build
+  // history renders the same component), and there is nothing to rate against.
+  if (!conversation) return null
+
+  const vote = async (next: FeedbackRating) => {
+    const previous = rating
+    const clearing = previous === next
+    setRating(clearing ? null : next)
+    try {
+      if (clearing) {
+        await clearBuildFeedback(conversation.id)
+      } else {
+        await setBuildFeedback(conversation.id, next, buildKey)
+      }
+    } catch {
+      setRating(previous)
+      toast.error("Could not save your feedback")
+    }
+  }
+
+  return (
+    <div className="flex shrink-0 items-center gap-1">
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-sm"
+        aria-label="Good build"
+        aria-pressed={rating === "up"}
+        onClick={() => vote("up")}
+      >
+        <ThumbsUpIcon
+          className={cn("size-4", rating === "up" && "fill-current")}
+        />
+      </Button>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-sm"
+        aria-label="Bad build"
+        aria-pressed={rating === "down"}
+        onClick={() => vote("down")}
+      >
+        <ThumbsDownIcon
+          className={cn("size-4", rating === "down" && "fill-current")}
+        />
+      </Button>
+    </div>
+  )
+}
 
 /**
  * A single marketplace buy button — the brand's icon as a link to the
@@ -166,9 +243,12 @@ export const BuildCard: DataMessagePartComponent<BuildData> = (props) => {
           })}
         </CardContent>
       </Card>
-      <p className="px-1 text-muted-foreground text-xs">
-        *Based on approximate prices derived from Google Shopping
-      </p>
+      <div className="flex items-center justify-between gap-2 px-1">
+        <p className="text-muted-foreground text-xs">
+          *Based on approximate prices derived from Google Shopping
+        </p>
+        <BuildFeedback buildKey={data.key} />
+      </div>
     </div>
   )
 }

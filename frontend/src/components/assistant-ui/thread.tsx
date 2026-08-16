@@ -8,6 +8,7 @@ import {
   MessagePrimitive,
   SuggestionPrimitive,
   ThreadPrimitive,
+  useAui,
   useAuiState,
 } from "@assistant-ui/react"
 import {
@@ -20,6 +21,7 @@ import {
   DownloadIcon,
   MoreHorizontalIcon,
   PencilIcon,
+  RefreshCwIcon,
   SquareIcon,
 } from "lucide-react"
 import { type FC, useState } from "react"
@@ -286,15 +288,7 @@ const AssistantActionBar: FC = () => {
           </AuiIf>
         </TooltipIconButton>
       </ActionBarPrimitive.Copy>
-      {/*
-        No Refresh button. `useAssistantTransportRuntime` has no `onReload`
-        option to pass — unlike `capabilities.edit`, there is no way to opt in —
-        so the external-store core's `startRun` throws "Runtime does not support
-        reloading messages." And ActionBarPrimitive.Reload is not capability
-        gated: it calls straight through, which is why this rendered as a button
-        that did nothing. Regenerating a reply means editing the message above
-        it until the runtime grows a reload command.
-      */}
+      <RetryButton />
       <ActionBarMorePrimitive.Root>
         <ActionBarMorePrimitive.Trigger asChild>
           <TooltipIconButton
@@ -318,6 +312,65 @@ const AssistantActionBar: FC = () => {
         </ActionBarMorePrimitive.Content>
       </ActionBarMorePrimitive.Root>
     </ActionBarPrimitive.Root>
+  )
+}
+
+/**
+ * Re-run the turn that produced this reply.
+ *
+ * NOT ActionBarPrimitive.Reload, and not a raw transport command. Both look
+ * like they should work and neither does:
+ *
+ *   Reload    `useAssistantTransportRuntime` has no `onReload` option — unlike
+ *             `capabilities.edit` there is nothing to opt into — so the
+ *             external-store core's `startRun` throws "Runtime does not support
+ *             reloading messages." The primitive is not capability gated, so it
+ *             renders a button that silently does nothing.
+ *
+ *   sendCommand  `useAssistantTransportSendCommand` only enqueues the command.
+ *             The request body's top-level `parentId` — the ONLY thing that
+ *             makes the server rewind rather than append — comes from a ref
+ *             that only the onNew/onEdit paths write. A hand-rolled
+ *             `add-message` carrying its own parentId therefore appends, which
+ *             would duplicate the user's message instead of retrying it.
+ *
+ * So retry is an edit that changes nothing: reopen the composer on the user
+ * message above (beginEdit seeds it with the existing text) and send it
+ * unchanged. That goes through onEdit, sets parentIdRef, and the server's
+ * `rewind_prefix` drops that message and everything after it before re-running.
+ * See backend/app/services/transport.py.
+ */
+const RetryButton: FC = () => {
+  const aui = useAui()
+
+  // The user message this reply answers. Walking back rather than assuming
+  // index-1 because a turn can leave more than one message behind.
+  const userIndex = useAuiState((s) => {
+    const messages = s.thread.messages
+    for (let i = s.message.index - 1; i >= 0; i--) {
+      if (messages[i]?.role === "user") return i
+    }
+    return -1
+  })
+
+  if (userIndex < 0) return null
+
+  return (
+    <TooltipIconButton
+      tooltip="Retry"
+      onClick={() => {
+        const message = aui.thread().message({ index: userIndex })
+        // Re-resolved between the two calls on purpose: beginEdit is what
+        // creates the edit composer, so a handle taken before it would be
+        // bound to one that does not exist yet.
+        if (!message.composer().getState().isEditing) {
+          message.composer().beginEdit()
+        }
+        message.composer().send()
+      }}
+    >
+      <RefreshCwIcon />
+    </TooltipIconButton>
   )
 }
 

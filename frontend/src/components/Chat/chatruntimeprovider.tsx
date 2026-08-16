@@ -22,6 +22,7 @@ import { toast } from "sonner"
 import { BuildCard } from "@/components/assistant-ui/build-card"
 import { getAccessToken } from "@/hooks/useAuth"
 import { usePipelineStatusStore } from "@/hooks/usePipelineStatus"
+import type { FeedbackRating } from "@/lib/feedback"
 import type { BuildData } from "@/types/build"
 import {
   type ChatAgentState,
@@ -54,6 +55,24 @@ export function useConversationMeta() {
   return useContext(ConversationMetaContext)
 }
 
+export interface ChatConversation {
+  /**
+   * The id this chat posts under — which exists before the conversation does.
+   * A new chat mints one client-side (see conversationIdRef) and the backend
+   * creates the row under it on the first turn, so the BuildCard can rate a
+   * build without waiting for a round trip to learn the id.
+   */
+  id: string
+  /** The rating already on this conversation, or null. Server state at load. */
+  initialFeedback: FeedbackRating | null
+}
+
+const ChatConversationContext = createContext<ChatConversation | null>(null)
+
+export function useChatConversation() {
+  return useContext(ChatConversationContext)
+}
+
 interface ChatRuntimeProviderProps {
   children: ReactNode
 }
@@ -80,6 +99,7 @@ type LoaderState =
       status: "ready"
       meta: ConversationMeta
       initialState: ChatAgentState
+      feedback: FeedbackRating | null
     }
 
 function ConversationLoader({
@@ -127,6 +147,7 @@ function ConversationLoader({
         setState({
           status: "ready",
           meta: { title: data.title, created_at: data.created_at },
+          feedback: data.feedback?.rating ?? null,
           initialState: {
             // Each build stays on the message it was persisted against, so a
             // conversation containing several of them renders all of them, each
@@ -170,6 +191,7 @@ function ConversationLoader({
       <ChatRuntimeMount
         conversationId={conversationId}
         initialState={state.initialState}
+        initialFeedback={state.feedback}
       >
         {children}
       </ChatRuntimeMount>
@@ -199,10 +221,12 @@ function restoreCommands(
 function ChatRuntimeMount({
   conversationId,
   initialState,
+  initialFeedback = null,
   children,
 }: {
   conversationId?: string
   initialState?: ChatAgentState
+  initialFeedback?: FeedbackRating | null
   children: ReactNode
 }) {
   const conversationIdRef = useRef<string>(
@@ -270,12 +294,19 @@ function ChatRuntimeMount({
     }
   }, [])
 
+  const conversation = useMemo(
+    () => ({ id: conversationIdRef.current, initialFeedback }),
+    [initialFeedback],
+  )
+
   return (
-    <AssistantRuntimeProvider runtime={runtime}>
-      <BuildDataUI />
-      <AgentStateSync />
-      {children}
-    </AssistantRuntimeProvider>
+    <ChatConversationContext.Provider value={conversation}>
+      <AssistantRuntimeProvider runtime={runtime}>
+        <BuildDataUI />
+        <AgentStateSync />
+        {children}
+      </AssistantRuntimeProvider>
+    </ChatConversationContext.Provider>
   )
 }
 

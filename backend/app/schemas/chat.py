@@ -46,6 +46,25 @@ class MessageOut(BaseModel):
     metadata: dict | None = None
 
 
+class FeedbackIn(BaseModel):
+    """A thumbs up/down on the build a conversation recommended.
+
+    build_key rather than a pc_builds id: the client only ever sees the key (it
+    is what rides on the build message part), and resolving it server-side is
+    also what stops a client naming an arbitrary build row.
+    """
+
+    rating: Literal["up", "down"]
+    build_key: str | None = None
+
+
+class FeedbackOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    rating: Literal["up", "down"]
+    build_id: uuid.UUID | None
+
+
 class ConversationDetail(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -53,6 +72,10 @@ class ConversationDetail(BaseModel):
     title: str | None
     created_at: datetime
     messages: list[MessageOut]
+    # None when this user has not rated the conversation. Carried on the detail
+    # payload so a reloaded thread shows the thumb already lit, rather than
+    # needing a second request per conversation.
+    feedback: FeedbackOut | None = None
 
 
 class BuildProfile(BaseModel):

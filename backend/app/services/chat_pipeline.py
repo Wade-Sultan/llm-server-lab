@@ -208,39 +208,60 @@ _UNLIMITED_BUDGET_PATTERNS = (
     r"\b(?:don'?t|do\s+not)\s+care\s+(?:about|what)\s+(?:the\s+)?(?:cost|price|money|it\s+costs)\b",
     r"\bregardless\s+of\s+(?:the\s+)?(?:cost|price)\b",
     r"\b(?:spare\s+no\s+expense|no\s+expense\s+spared)\b",
-    r"\bsky'?s?\s+is\s+the\s+limit\b|\bsky\s+is\s+the\s+limit\b",
+    # "the sky's the limit" and "the sky is the limit" — the possessive form
+    # drops the verb, so the "is" has to be optional rather than required.
+    r"\bsky(?:'?s|\s+is)\s+the\s+limit\b",
 )
 
 _UNLIMITED_BUDGET_RE = re.compile("|".join(_UNLIMITED_BUDGET_PATTERNS), re.IGNORECASE)
 
 
-def _confirm_custom_budget(budget_tier: str, messages: list[ChatMessage]) -> str:
-    """Accept a 'custom' budget tier only if the user actually said so.
+def _resolve_budget(
+    budget_tier: str,
+    price_sensitivity: str | None,
+    messages: list[ChatMessage],
+) -> tuple[str, str | None]:
+    """Settle (budget_tier, price_sensitivity) together, before the gate sees them.
 
-    'custom' removes every price ceiling in the pipeline, which makes it the
-    one tier where a hallucination is expensive rather than merely wrong — so
-    it needs two independent signals to agree, not one. The extraction model
-    proposes it from the conversation as a whole; this checks the user's own
-    turns for an explicit statement, deterministically. An unconfirmed 'custom'
-    falls back to 'elite', the most permissive real tier, so the user still
-    gets a high-end build and can restate their intent.
+    Accept a 'custom' budget tier only if the user actually said so. 'custom'
+    removes every price ceiling in the pipeline, which makes it the one tier
+    where a hallucination is expensive rather than merely wrong — so it needs
+    two independent signals to agree, not one. The extraction model proposes it
+    from the conversation as a whole; this checks the user's own turns for an
+    explicit statement, deterministically. An unconfirmed 'custom' falls back to
+    'elite', the most permissive real tier, so the user still gets a high-end
+    build and can restate their intent.
 
     Only user turns are scanned. The assistant saying "so, unlimited budget?"
     is the model's own words coming back around, and letting that confirm the
     tier would defeat the point of a second signal.
+
+    THE DOWNGRADE ALSO HAS TO SUPPLY A price_sensitivity, and that is why this
+    settles both fields rather than the tier alone. The two are read by
+    different rules that used to deadlock against each other here: a downgraded
+    'elite' is a known tier, so is_profile_complete demands a sensitivity, and
+    the only way to get one is to ask whether the budget is a hard ceiling — the
+    one question _ELICIT_SYSTEM forbids asking someone who has just said cost is
+    no object. The elicitation model obeyed the prompt, declared it had
+    everything it needed, and the turn routed back to `ask` forever without ever
+    reaching the build pipeline. 'stretch' is the honest reading of a user whose
+    budget talk was permissive enough for the extractor to call it unlimited:
+    they will go higher for the right part. It only ever fills an absence — an
+    explicit sensitivity from the extractor still wins.
     """
     if budget_tier != "custom":
-        return budget_tier
+        return budget_tier, price_sensitivity
 
     for msg in messages:
         if msg.role == "user" and _UNLIMITED_BUDGET_RE.search(msg.content or ""):
-            return "custom"
+            return "custom", price_sensitivity
 
     logger.info(
         "profile extraction proposed budget_tier='custom' with no explicit "
-        "user statement to back it; falling back to 'elite'"
+        "user statement to back it; falling back to 'elite' with a 'stretch' "
+        "price sensitivity"
     )
-    return "elite"
+    return "elite", price_sensitivity or "stretch"
 
 
 async def extract_profile(
@@ -285,9 +306,13 @@ async def extract_profile(
         v = _opt(value)
         return None if v is None or v.lower() == "no_preference" else v
 
+    budget_tier, price_sensitivity = _resolve_budget(
+        result.budget_tier, _opt(getattr(result, "price_sensitivity", "")), messages
+    )
+
     return BuildProfile(
-        budget_tier=_confirm_custom_budget(result.budget_tier, messages),
-        price_sensitivity=_opt(getattr(result, "price_sensitivity", "")),
+        budget_tier=budget_tier,
+        price_sensitivity=price_sensitivity,
         form_factor=_pref(getattr(result, "form_factor", "")),
         color_theme=_opt(getattr(result, "color_theme", "")),
         rgb_lighting=_opt(getattr(result, "rgb_lighting", "")),
