@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/card"
 import {
   clearBuildFeedback,
+  FeedbackError,
   type FeedbackRating,
   setBuildFeedback,
 } from "@/lib/feedback"
@@ -60,9 +61,24 @@ function BuildFeedback({ buildKey }: { buildKey: string }) {
       } else {
         await setBuildFeedback(conversation.id, next, buildKey)
       }
-    } catch {
+    } catch (error) {
       setRating(previous)
-      toast.error("Could not save your feedback")
+      // Named causes rather than one shrug. A 404 here is the ordinary race —
+      // the chat is saved when the turn finishes, and the build card appears
+      // before that — and telling someone to wait a moment is actionable where
+      // "could not save" is not. 401 means the token lapsed mid-conversation,
+      // which a reload fixes. Anything else is ours, not theirs.
+      const status = error instanceof FeedbackError ? error.status : 0
+      if (status === 404) {
+        toast.error("This chat is still saving — try again in a moment")
+      } else if (status === 401 || status === 403) {
+        toast.error("Your session expired — reload and try again")
+      } else {
+        toast.error("Could not save your feedback")
+      }
+      // The status alone does not say which of the 404s it was, and a 500 is
+      // almost always a database that has not run the build_feedback migration.
+      console.error("build feedback failed", error)
     }
   }
 

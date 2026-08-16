@@ -19,6 +19,26 @@ async function authHeaders(): Promise<Record<string, string>> {
     : { "Content-Type": "application/json" }
 }
 
+/** A failed feedback write, carrying the status so the UI can explain itself. */
+export class FeedbackError extends Error {
+  readonly status: number
+
+  constructor(status: number, body: string) {
+    super(`feedback failed: ${status} ${body}`.trim())
+    this.name = "FeedbackError"
+    this.status = status
+  }
+}
+
+async function failed(res: Response): Promise<FeedbackError> {
+  // Body included because the two interesting failures are indistinguishable
+  // from the status alone: 404 is both "no such conversation" and "not yours"
+  // (deliberately — see the route), and a 500 here is nearly always the
+  // build_feedback table not existing yet on that database.
+  const body = await res.text().catch(() => "")
+  return new FeedbackError(res.status, body.slice(0, 200))
+}
+
 /**
  * Record or change a rating.
  *
@@ -39,7 +59,7 @@ export async function setBuildFeedback(
       body: JSON.stringify({ rating, build_key: buildKey }),
     },
   )
-  if (!res.ok) throw new Error(`feedback failed: ${res.status}`)
+  if (!res.ok) throw await failed(res)
 }
 
 /** Withdraw a rating — what clicking an already-lit thumb does. */
@@ -50,5 +70,5 @@ export async function clearBuildFeedback(
     `${API_BASE}/api/v1/conversations/${conversationId}/feedback`,
     { method: "DELETE", headers: await authHeaders() },
   )
-  if (!res.ok) throw new Error(`feedback failed: ${res.status}`)
+  if (!res.ok) throw await failed(res)
 }
