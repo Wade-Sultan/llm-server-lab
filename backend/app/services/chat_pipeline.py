@@ -226,6 +226,44 @@ def _capture_dspy_usage(prediction: Any, usage_sink: dict) -> None:
         logger.debug("failed to capture dspy usage for extractprofile", exc_info=True)
 
 
+def _log_extraction_runaway(lm: Any) -> None:
+    """Report a DSPy extraction whose response could not be parsed at all.
+
+    WHY THIS IS NOT `_warn_if_runaway`. That one watches `_stream_text`, which
+    only elicitation and recommendation use. Extraction does not go through it:
+    it runs through DSPy, so a runaway there surfaces as an AdapterParseError
+    rather than as a truncated stream, and no amount of instrumentation on the
+    prose path would ever have seen it. This is the path that actually produced
+    a wall of one repeated token in production.
+
+    `finish_reason == "length"` distinguishes the two ways a parse can fail. The
+    model filled its entire budget and was cut off — degeneration, retry it —
+    versus it stopped on its own and simply did not emit the field markers the
+    signature asked for, which is a prompt or model-capability problem that
+    retrying will not fix. Both are logged; only the reason tells them apart.
+    """
+    finish_reason = None
+    generation_id = None
+    try:
+        entry = lm.history[-1]
+        response = entry.get("response")
+        choice = response.choices[0]
+        finish_reason = getattr(choice, "finish_reason", None)
+        generation_id = getattr(response, "id", None)
+    except Exception:  # noqa: BLE001 - diagnostics must not mask the parse error
+        logger.debug("could not read finish_reason for a failed extraction")
+
+    logger.warning(
+        "chat: profile extraction produced an unparseable response "
+        "(finish_reason=%s, generation=%s) — retrying once with the cache off. "
+        "finish_reason='length' means the model ran to its cap instead of "
+        "answering; resolve the generation id to a provider_name before "
+        "concluding anything about the model itself",
+        finish_reason or "unreported",
+        generation_id or "unknown",
+    )
+
+
 def _format_conversation(messages: list[ChatMessage]) -> str:
     lines = []
     for msg in messages:
@@ -321,13 +359,30 @@ async def extract_profile(
     thread/task) so it groups with the rest of the turn's calls.
     """
     import dspy
+    from dspy.utils.exceptions import AdapterParseError
 
     from app.services.recommender.dspy_pipeline import session_lm
 
     conversation = _format_conversation(messages)
     program = _get_extract_program()
-    with dspy.context(lm=session_lm(session_id)):
-        result = await asyncio.to_thread(program, conversation=conversation)
+    lm = session_lm(session_id)
+    with dspy.context(lm=lm):
+        try:
+            result = await asyncio.to_thread(program, conversation=conversation)
+        except AdapterParseError:
+            _log_extraction_runaway(lm)
+            # RETRY WITH THE CACHE OFF, and the flag is the whole point.
+            # dspy.LM caches on by default, and the retry sends byte-identical
+            # inputs — so a plain second attempt is served the same unparseable
+            # response out of the cache and fails exactly the same way, for
+            # free, forever. `copy` leaves the configured LM untouched.
+            #
+            # One retry, not a loop. Degeneration is a sampling accident and a
+            # fresh sample almost always parses; a model that has genuinely
+            # stopped honouring the signature will not be fixed by asking
+            # again, and the second failure is worth surfacing as one.
+            with dspy.context(lm=lm.copy(cache=False)):
+                result = await asyncio.to_thread(program, conversation=conversation)
 
     if usage_sink is not None:
         _capture_dspy_usage(result, usage_sink)

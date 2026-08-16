@@ -239,3 +239,134 @@ def test_an_ordinary_completion_logs_nothing(caplog):
         _drive(_FakeStreamModel())
 
     assert caplog.records == []
+
+
+# ------------------------------------------------- extraction parse failures --
+
+
+class _FakeLM:
+    """Stands in for the configured dspy.LM, tracking copies made of it."""
+
+    def __init__(self, finish_reason="length"):
+        self.cache = True
+        self.copies: list[dict] = []
+        self.history = [
+            {
+                "response": type(
+                    "R",
+                    (),
+                    {
+                        "choices": [type("C", (), {"finish_reason": finish_reason})()],
+                        "id": "gen-runaway",
+                    },
+                )()
+            }
+        ]
+
+    def copy(self, **kwargs):
+        self.copies.append(kwargs)
+        clone = _FakeLM()
+        clone.cache = kwargs.get("cache", self.cache)
+        return clone
+
+
+def test_extraction_retries_once_with_the_cache_disabled(monkeypatch):
+    """The retry is worthless unless it bypasses the cache.
+
+    dspy.LM caches by default and the retry sends byte-identical inputs, so a
+    plain second attempt would be served the same unparseable response from the
+    cache and fail identically. This pins the flag, not just the retry.
+    """
+    import dspy
+    from dspy.utils.exceptions import AdapterParseError
+
+    from app.services import chat_pipeline as cp
+    from app.schemas.chat import ChatMessage
+
+    lm = _FakeLM()
+    monkeypatch.setattr(
+        "app.services.recommender.dspy_pipeline.session_lm", lambda _sid: lm
+    )
+
+    calls = {"n": 0}
+
+    class _Program:
+        def __call__(self, conversation):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise AdapterParseError(
+                    adapter_name="ChatAdapter",
+                    signature=type("S", (), {"output_fields": {}}),
+                    lm_response="our our our",
+                )
+            return type(
+                "P",
+                (),
+                {
+                    "games": "",
+                    "workloads": "",
+                    "notes": "",
+                    "primary_use": "gaming",
+                    "budget_tier": "mid",
+                    "gaming_resolution": "1440p",
+                    "gaming_fps": "144",
+                    "streaming_style": "none",
+                    "ai_workload": "none",
+                    "ai_model_scale": "none",
+                    "server_workload": "none",
+                    "server_gpu_count": "none",
+                    "editing_resolution": "none",
+                    "rendering_software": "",
+                    "workload_intensity": "none",
+                    "price_sensitivity": "firm",
+                    "form_factor": "no_preference",
+                    "color_theme": "none",
+                    "rgb_lighting": "none",
+                    "noise_tolerance": "none",
+                },
+            )()
+
+    monkeypatch.setattr(cp, "_get_extract_program", lambda: _Program())
+    monkeypatch.setattr(
+        dspy, "context", lambda **kw: __import__("contextlib").nullcontext()
+    )
+
+    profile = asyncio.run(
+        cp.extract_profile([ChatMessage(role="user", content="gaming pc")])
+    )
+
+    assert calls["n"] == 2, "should have retried exactly once"
+    assert lm.copies == [{"cache": False}], "retry must disable the cache"
+    assert profile.primary_use == "gaming"
+
+
+def test_a_second_parse_failure_is_not_swallowed(monkeypatch):
+    """One retry, not a loop. A model that has stopped honouring the signature
+    is not fixed by asking again, and the turn's own handler is what should
+    report it."""
+    import dspy
+    from dspy.utils.exceptions import AdapterParseError
+
+    from app.services import chat_pipeline as cp
+    from app.schemas.chat import ChatMessage
+
+    lm = _FakeLM(finish_reason="stop")
+    monkeypatch.setattr(
+        "app.services.recommender.dspy_pipeline.session_lm", lambda _sid: lm
+    )
+
+    class _AlwaysFails:
+        def __call__(self, conversation):
+            raise AdapterParseError(
+                adapter_name="ChatAdapter",
+                signature=type("S", (), {"output_fields": {}}),
+                lm_response="our our our",
+            )
+
+    monkeypatch.setattr(cp, "_get_extract_program", lambda: _AlwaysFails())
+    monkeypatch.setattr(
+        dspy, "context", lambda **kw: __import__("contextlib").nullcontext()
+    )
+
+    with pytest.raises(AdapterParseError):
+        asyncio.run(cp.extract_profile([ChatMessage(role="user", content="gaming pc")]))
