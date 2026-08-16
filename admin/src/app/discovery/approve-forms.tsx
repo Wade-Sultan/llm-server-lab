@@ -911,9 +911,7 @@ export function ApproveGpuVariantForm({
   );
 }
 
-// ---------------------------------------------------------------------------
-// The remaining categories
-// ---------------------------------------------------------------------------
+// --- The remaining categories ------------------------------------------------
 // All follow the shape the three above established: prefill from
 // extractedFields, validate against the subtype's NOT NULL columns, call the
 // matching server action, surface its error verbatim. Free-text enum fields

@@ -87,9 +87,7 @@ def no_valkey(monkeypatch):
     monkeypatch.setattr(tb, "get_client", _get_client)
 
 
-# ---------------------------------------------------------------------------
-# The buffer
-# ---------------------------------------------------------------------------
+# --- The buffer ---------------------------------------------------------------
 
 
 def test_push_then_peek_round_trips(fake):
@@ -162,9 +160,7 @@ def test_buffer_is_length_capped(fake, monkeypatch):
     assert kept == ["3", "4", "5"]
 
 
-# ---------------------------------------------------------------------------
-# The invariant
-# ---------------------------------------------------------------------------
+# --- The invariant ------------------------------------------------------------
 
 
 def _recorder() -> rec.BuildRecorder:
@@ -222,9 +218,7 @@ def test_finish_buffers_the_whole_run(fake):
     assert payload["decisions"][0]["chosen_name"] == "RTX 5070 Ti"
 
 
-# ---------------------------------------------------------------------------
-# Chronology
-# ---------------------------------------------------------------------------
+# --- Chronology ---------------------------------------------------------------
 # module_decisions.created_at is part of ix_module_decisions_category_pipeline_created,
 # the index every GEPA extraction windows on. If the buffer let it default to
 # now(), a run drained hours later by the backstop job would land in the wrong

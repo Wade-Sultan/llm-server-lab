@@ -33,7 +33,6 @@ test.describe("Edit user full name and email successfully", () => {
 
     await createUser({ email, password })
 
-    // Log in the user
     await logInUser(page, email, password)
 
     await page.goto("/settings")
@@ -55,7 +54,6 @@ test.describe("Edit user full name and email successfully", () => {
 
     await createUser({ email, password })
 
-    // Log in the user
     await logInUser(page, email, password)
 
     await page.goto("/settings")
@@ -80,7 +78,6 @@ test.describe("Edit user with invalid data", () => {
 
     await createUser({ email, password })
 
-    // Log in the user
     await logInUser(page, email, password)
 
     await page.goto("/settings")
@@ -98,7 +95,6 @@ test.describe("Edit user with invalid data", () => {
 
     const user = await createUser({ email, password })
 
-    // Log in the user
     await logInUser(page, email, password)
 
     await page.goto("/settings")
@@ -118,7 +114,6 @@ test.describe("Edit user with invalid data", () => {
 
     await createUser({ email, password })
 
-    // Log in the user
     await logInUser(page, email, password)
 
     await page.goto("/settings")
@@ -144,7 +139,6 @@ test.describe("Change password successfully", () => {
 
     await createUser({ email, password })
 
-    // Log in the user
     await logInUser(page, email, password)
 
     await page.goto("/settings")
@@ -172,7 +166,6 @@ test.describe("Change password with invalid data", () => {
 
     await createUser({ email, password })
 
-    // Log in the user
     await logInUser(page, email, password)
 
     await page.goto("/settings")
@@ -196,7 +189,6 @@ test.describe("Change password with invalid data", () => {
 
     await createUser({ email, password })
 
-    // Log in the user
     await logInUser(page, email, password)
 
     await page.goto("/settings")
@@ -214,7 +206,6 @@ test.describe("Change password with invalid data", () => {
 
     await createUser({ email, password })
 
-    // Log in the user
     await logInUser(page, email, password)
 
     await page.goto("/settings")

@@ -60,9 +60,7 @@ def _utc_now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
 
-# ---------------------------------------------------------------------------
-# In-memory decision record (flushed to module_decisions at finish)
-# ---------------------------------------------------------------------------
+# --- In-memory decision record (flushed to module_decisions at finish) --------
 
 
 @dataclass
@@ -95,9 +93,7 @@ class _DecisionRecord:
     recorded_at: str = field(default_factory=lambda: _utc_now_iso())
 
 
-# ---------------------------------------------------------------------------
-# Usage / prompt extraction helpers
-# ---------------------------------------------------------------------------
+# --- Usage / prompt extraction helpers ----------------------------------------
 
 
 def _as_int(value: Any) -> int | None:
@@ -183,9 +179,7 @@ def _parse_candidates(candidates_json: str | None) -> list[dict] | None:
         return None
 
 
-# ---------------------------------------------------------------------------
-# BuildRecorder
-# ---------------------------------------------------------------------------
+# --- BuildRecorder ------------------------------------------------------------
 
 
 class BuildRecorder:
@@ -515,9 +509,7 @@ class BuildRecorder:
         }
 
 
-# ---------------------------------------------------------------------------
-# Drain — the only place build telemetry reaches Postgres
-# ---------------------------------------------------------------------------
+# --- Drain — the only place build telemetry reaches Postgres ------------------
 # Called from turn_runner after save_turn, and by the telemetry-drain job as a
 # backstop for anything a dead worker left buffered. Never called from a graph
 # node: that is the whole point of the buffer sitting in front of it.

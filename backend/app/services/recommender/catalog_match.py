@@ -242,9 +242,7 @@ class CatalogRequirements:
         }
 
 
-# ---------------------------------------------------------------------------
-# Per-entity requirement extraction
-# ---------------------------------------------------------------------------
+# --- Per-entity requirement extraction ----------------------------------------
 
 
 async def _apply_game(
@@ -478,9 +476,7 @@ async def _match_by_alias(db: AsyncSession, term: str) -> _Hit | None:
     return None
 
 
-# ---------------------------------------------------------------------------
-# Entry point
-# ---------------------------------------------------------------------------
+# --- Entry point --------------------------------------------------------------
 
 
 async def resolve_requirements(

@@ -44,9 +44,7 @@ def _server_profile(**overrides) -> BuildProfile:
     return BuildProfile(**{**base, **overrides})
 
 
-# ---------------------------------------------------------------------------
-# Which builds are LLM builds
-# ---------------------------------------------------------------------------
+# --- Which builds are LLM builds ----------------------------------------------
 
 
 @pytest.mark.parametrize("workload", ["inference", "training"])
@@ -74,9 +72,7 @@ def test_a_gaming_build_is_never_an_llm_build():
     assert not cp._is_llm_build(BuildProfile(primary_use="gaming", budget_tier="mid"))
 
 
-# ---------------------------------------------------------------------------
-# The gate
-# ---------------------------------------------------------------------------
+# --- The gate -----------------------------------------------------------------
 
 
 def test_an_llm_build_is_incomplete_without_a_quantization_answer():
@@ -147,9 +143,7 @@ def test_the_gate_and_the_missing_list_agree():
         assert cp._missing_fields(profile)
 
 
-# ---------------------------------------------------------------------------
-# What the build steps are actually told
-# ---------------------------------------------------------------------------
+# --- What the build steps are actually told -----------------------------------
 
 
 def test_the_answer_reaches_the_build_as_an_instruction():

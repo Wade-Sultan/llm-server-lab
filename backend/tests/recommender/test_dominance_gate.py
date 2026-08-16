@@ -91,9 +91,7 @@ class _Recorder:
         self.deterministic.append(kwargs)
 
 
-# ---------------------------------------------------------------------------
-# CPU step
-# ---------------------------------------------------------------------------
+# --- CPU step -----------------------------------------------------------------
 
 
 def test_cpu_step_skips_the_llm_when_a_candidate_dominates(monkeypatch):
@@ -176,9 +174,7 @@ def test_cpu_step_falls_through_to_the_llm_without_a_dominant_candidate(monkeypa
     assert state.cpu_name == "Fast"
 
 
-# ---------------------------------------------------------------------------
-# GPU step — the extra eligibility rules
-# ---------------------------------------------------------------------------
+# --- GPU step — the extra eligibility rules -----------------------------------
 
 
 def test_gpu_step_skips_the_llm_on_a_single_slot_gaming_board(monkeypatch):

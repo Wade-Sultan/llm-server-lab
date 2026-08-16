@@ -28,9 +28,7 @@ def _price(part) -> float | None:
     return round(part.street_price_cents / 100, 2)
 
 
-# ---------------------------------------------------------------------------
-# Serializers — one per component type.
-# ---------------------------------------------------------------------------
+# --- Serializers — one per component type. ------------------------------------
 
 
 def _serialize_cpu(p: CPU) -> dict:
@@ -214,9 +212,7 @@ def _to_json(parts: list, serializer) -> str:
     return json.dumps([serializer(p) for p in parts], indent=None)
 
 
-# ---------------------------------------------------------------------------
-# Public query functions
-# ---------------------------------------------------------------------------
+# --- Public query functions ---------------------------------------------------
 
 
 async def get_cpu_candidates(

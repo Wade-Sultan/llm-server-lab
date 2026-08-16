@@ -36,7 +36,6 @@ test("User can reset password successfully using the link", async ({
   const password = randomPassword()
   const newPassword = randomPassword()
 
-  // Sign up a new user
   await signUpNewUser(page, fullName, email, password)
 
   await page.goto("/recover-password")
@@ -92,7 +91,6 @@ test("Weak new password validation", async ({ page, request }) => {
   const password = randomPassword()
   const weakPassword = "123"
 
-  // Sign up a new user
   await signUpNewUser(page, fullName, email, password)
 
   await page.goto("/recover-password")

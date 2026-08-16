@@ -29,9 +29,7 @@ def _msgs(*user_turns: str) -> list[ChatMessage]:
     return out
 
 
-# ---------------------------------------------------------------------------
-# _resolve_budget
-# ---------------------------------------------------------------------------
+# --- _resolve_budget ----------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -145,9 +143,7 @@ def test_permissive_budget_talk_always_reaches_a_complete_profile(statement):
     assert cp._missing_fields(profile) == []
 
 
-# ---------------------------------------------------------------------------
-# Budget totals and per-slot ceilings
-# ---------------------------------------------------------------------------
+# --- Budget totals and per-slot ceilings --------------------------------------
 
 
 def _profile(**overrides) -> BuildProfile:
@@ -174,9 +170,7 @@ def test_custom_overrides_the_server_ladder_too():
     )
 
 
-# ---------------------------------------------------------------------------
-# A stated figure beats the ladder
-# ---------------------------------------------------------------------------
+# --- A stated figure beats the ladder -----------------------------------------
 
 
 def test_a_stated_figure_is_spent_as_given():
@@ -272,9 +266,7 @@ def test_ordinary_budget_still_splits_per_slot():
     assert budget["mobo"] > dp._allocate_budget(2000, ["gaming"])["mobo"]
 
 
-# ---------------------------------------------------------------------------
-# Downstream consumers of the tier
-# ---------------------------------------------------------------------------
+# --- Downstream consumers of the tier -----------------------------------------
 
 
 def test_custom_is_a_complete_profile():
@@ -290,9 +282,7 @@ def test_custom_is_a_complete_profile():
     assert "budget expectations" not in cp._missing_fields(profile)
 
 
-# ---------------------------------------------------------------------------
-# The sentinel at the CRUD boundary
-# ---------------------------------------------------------------------------
+# --- The sentinel at the CRUD boundary ----------------------------------------
 # The whole point of NO_BUDGET_CEILING is that it stops being a comparison at
 # all. Asserted against the compiled SQL because that is where a regression
 # would actually bite: a ceiling that silently survives as `price <= -100`
@@ -323,9 +313,7 @@ def test_no_ceiling_compiles_away_entirely():
     assert sql.lower().strip() == "true"
 
 
-# ---------------------------------------------------------------------------
-# Market drift: the ladder tracks the catalog
-# ---------------------------------------------------------------------------
+# --- Market drift: the ladder tracks the catalog ------------------------------
 # The tier constants encode what a PC cost when someone last reviewed them. Part
 # prices move hard, and a stale ladder fails as a cliff rather than a slope:
 # ceilings stay fixed while the catalog inflates, candidate sets shrink, and

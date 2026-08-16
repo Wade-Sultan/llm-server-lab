@@ -31,9 +31,7 @@ def _endpoint(base_url: str = "") -> LLMEndpoint:
     )
 
 
-# ---------------------------------------------------------------------------
-# Production: unset means OpenRouter
-# ---------------------------------------------------------------------------
+# --- Production: unset means OpenRouter ---------------------------------------
 
 
 def test_unset_base_url_is_openrouter():
@@ -65,9 +63,7 @@ def test_settings_default_to_openrouter(monkeypatch):
     assert settings.discovery_endpoint.url == OPENROUTER_URL
 
 
-# ---------------------------------------------------------------------------
-# Local: an override moves chat, and only chat
-# ---------------------------------------------------------------------------
+# --- Local: an override moves chat, and only chat -----------------------------
 
 
 def test_base_url_moves_the_endpoint_off_openrouter():
@@ -108,9 +104,7 @@ def test_discovery_follows_chat_when_it_has_no_override(monkeypatch):
     assert not settings.discovery_endpoint.is_openrouter
 
 
-# ---------------------------------------------------------------------------
-# Token budgets
-# ---------------------------------------------------------------------------
+# --- Token budgets ------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -132,9 +126,7 @@ def test_dspy_token_budget_default():
     assert dspy_pipeline.RECOMMEND_MAX_TOKENS == 1024
 
 
-# ---------------------------------------------------------------------------
-# OpenRouter provider pinning
-# ---------------------------------------------------------------------------
+# --- OpenRouter provider pinning ----------------------------------------------
 
 
 def test_no_provider_pin_by_default(monkeypatch):

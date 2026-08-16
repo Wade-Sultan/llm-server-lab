@@ -84,9 +84,7 @@ def test_migration_predicates_match_the_model():
     assert "_MULTI_ROLES = \"'fan', 'gpu', 'storage'\"" in src
 
 
-# ---------------------------------------------------------------------------
-# Constraint wiring
-# ---------------------------------------------------------------------------
+# --- Constraint wiring --------------------------------------------------------
 
 
 def _index(name: str):
@@ -130,9 +128,7 @@ def test_a_singleton_role_cannot_be_smuggled_in_as_quantity_two():
     assert IS_MULTI_INSTANCE_ROLE_SQL in str(check.sqltext)
 
 
-# ---------------------------------------------------------------------------
-# Quantity arithmetic
-# ---------------------------------------------------------------------------
+# --- Quantity arithmetic ------------------------------------------------------
 
 
 def test_line_total_multiplies_the_per_unit_price():

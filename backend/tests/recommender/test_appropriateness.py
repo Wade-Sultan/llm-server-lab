@@ -42,9 +42,7 @@ def _board(name, price, slots=1, **extra):
     }
 
 
-# ---------------------------------------------------------------------------
-# Shared curve behaviour
-# ---------------------------------------------------------------------------
+# --- Shared curve behaviour ---------------------------------------------------
 
 
 def test_shortfall_is_steep_not_linear():
@@ -84,9 +82,7 @@ def test_spending_the_whole_slot_budget_twice_over_scores_zero():
     assert eff == 0.0
 
 
-# ---------------------------------------------------------------------------
-# GPU
-# ---------------------------------------------------------------------------
+# --- GPU ----------------------------------------------------------------------
 
 
 def test_gpu_below_vram_floor_scores_near_zero_however_cheap():
@@ -142,9 +138,7 @@ def test_gpu_name_matching_is_case_insensitive():
     assert result.score == 1.0
 
 
-# ---------------------------------------------------------------------------
-# CPU
-# ---------------------------------------------------------------------------
+# --- CPU ----------------------------------------------------------------------
 
 
 def test_cpu_below_core_floor_is_penalized():
@@ -186,9 +180,7 @@ def test_cpu_missing_perf_score_is_reported():
     assert "perf_score" in result.missing_signals
 
 
-# ---------------------------------------------------------------------------
-# Motherboard — the asymmetry
-# ---------------------------------------------------------------------------
+# --- Motherboard — the asymmetry ----------------------------------------------
 
 
 def test_board_with_too_few_slots_scores_zero_for_a_multi_gpu_profile():
@@ -252,9 +244,7 @@ def test_board_missing_required_ecc_fails_sufficiency():
     assert "cannot be added later" in result.feedback
 
 
-# ---------------------------------------------------------------------------
-# GEPA adapter
-# ---------------------------------------------------------------------------
+# --- GEPA adapter -------------------------------------------------------------
 
 
 def test_gepa_metric_returns_score_and_feedback():
@@ -297,9 +287,7 @@ def test_gepa_metric_rejects_an_unknown_module():
         ap.make_gepa_metric("DecideToaster")
 
 
-# ---------------------------------------------------------------------------
-# context_from_requirements — the bridge from stored telemetry to the scorers
-# ---------------------------------------------------------------------------
+# --- context_from_requirements — the bridge from stored telemetry to the scorers ---
 
 
 def test_context_translates_a_stored_requirements_blob():

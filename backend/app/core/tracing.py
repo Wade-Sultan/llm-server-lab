@@ -298,9 +298,7 @@ def shutdown_tracing() -> None:
         logger.debug("tracing shutdown failed (exiting anyway)", exc_info=True)
 
 
-# ---------------------------------------------------------------------------
-# Run metadata — the join key between LangSmith and our own telemetry
-# ---------------------------------------------------------------------------
+# --- Run metadata — the join key between LangSmith and our own telemetry ------
 #
 # LangSmith's OTel ingestion promotes span attributes named
 # `langsmith.metadata.<key>` into a run's metadata, and groups runs into Threads

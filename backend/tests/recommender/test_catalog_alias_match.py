@@ -52,9 +52,7 @@ def test_empty_and_whitespace_terms_normalize_to_empty():
     assert _normalize_term("   ") == ""
 
 
-# ---------------------------------------------------------------------------
-# What the summary tells the build steps
-# ---------------------------------------------------------------------------
+# --- What the summary tells the build steps -----------------------------------
 
 
 def test_an_unmatched_model_is_reported_rather_than_dropped():

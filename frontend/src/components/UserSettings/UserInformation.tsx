@@ -56,7 +56,6 @@ const UserInformation = () => {
     setError(null)
 
     try {
-      // Update display name if changed
       if (data.full_name !== currentFullName) {
         await updateProfile(auth.currentUser, {
           displayName: data.full_name || null,

@@ -31,9 +31,7 @@ def _timestamps():
 def upgrade():
     op.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
 
-    # ------------------------------------------------------------------
-    # 1) Group tables
-    # ------------------------------------------------------------------
+    # --- 1) Group tables ------------------------------------------------------
     op.create_table(
         "gpu_chipsets",
         sa.Column("id", sa.UUID(), nullable=False),

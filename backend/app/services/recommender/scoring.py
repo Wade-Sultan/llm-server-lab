@@ -69,9 +69,7 @@ DOMINANCE_SKIP_ENABLED = os.getenv("RECOMMEND_DOMINANCE_SKIP", "1") not in (
 )
 
 
-# ---------------------------------------------------------------------------
-# Axis definitions — which benchmark keys measure the same thing
-# ---------------------------------------------------------------------------
+# --- Axis definitions — which benchmark keys measure the same thing -----------
 # Keys match the pydantic field names in app/models/benchmarks.py
 # (CPUBenchmarkScores / GPUBenchmarkScores). Both models set extra="allow", so
 # unknown keys may appear in the JSONB; anything not listed here is ignored
@@ -96,9 +94,7 @@ _GPU_AXES: dict[str, tuple[str, ...]] = {
 }
 
 
-# ---------------------------------------------------------------------------
-# Workload → axis weights
-# ---------------------------------------------------------------------------
+# --- Workload → axis weights --------------------------------------------------
 # Keyed by BuildRequest.use_cases entries (the frontend's use-case keys, which
 # chat_pipeline._PRIMARY_USE_TO_USE_CASE also maps the extracted profile onto).
 # Weights within a part type sum to 1.0.
@@ -207,9 +203,7 @@ def weights_for(
     return _resolution_adjusted(weights, answers or {}, part_type)
 
 
-# ---------------------------------------------------------------------------
-# Scoring
-# ---------------------------------------------------------------------------
+# --- Scoring ------------------------------------------------------------------
 
 
 def _as_float(value) -> float | None:
@@ -320,9 +314,7 @@ def score_candidates(
     return rows
 
 
-# ---------------------------------------------------------------------------
-# Dominance gate
-# ---------------------------------------------------------------------------
+# --- Dominance gate -----------------------------------------------------------
 
 
 class Dominant:

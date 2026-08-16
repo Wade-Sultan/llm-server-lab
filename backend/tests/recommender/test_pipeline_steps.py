@@ -24,9 +24,7 @@ from app.services.recommender import dspy_pipeline as dp
 from app.services.recommender.db import queries as q
 
 
-# ---------------------------------------------------------------------------
-# Fakes / helpers
-# ---------------------------------------------------------------------------
+# --- Fakes / helpers ----------------------------------------------------------
 
 BUDGET = {
     "cpu": 300,
@@ -128,9 +126,7 @@ def _patch_run_step(monkeypatch, prediction, capture: dict | None = None):
     monkeypatch.setattr(dp, "_run_step", _fake)
 
 
-# ---------------------------------------------------------------------------
-# _cheapest_exact
-# ---------------------------------------------------------------------------
+# --- _cheapest_exact ----------------------------------------------------------
 
 
 def test_pick_exact_returns_first():
@@ -144,9 +140,7 @@ def test_pick_exact_empty_returns_none():
     assert dp._pick_exact([]) is None
 
 
-# ---------------------------------------------------------------------------
-# _resolve_gpu_variant — chipset → exact board
-# ---------------------------------------------------------------------------
+# --- _resolve_gpu_variant — chipset → exact board -----------------------------
 
 
 def test_resolve_gpu_variant_picks_first_that_fits(monkeypatch):
@@ -270,9 +264,7 @@ def test_resolve_gpu_variant_no_constraints_when_case_and_psu_unknown(monkeypatc
     assert state.gpu_name == "long-cheap"
 
 
-# ---------------------------------------------------------------------------
-# _step_gpu — chooses a chipset, sizes PSU on chipset TDP
-# ---------------------------------------------------------------------------
+# --- _step_gpu — chooses a chipset, sizes PSU on chipset TDP ------------------
 
 
 def test_step_gpu_sets_chipset_and_tdp(monkeypatch):
@@ -323,9 +315,7 @@ def test_step_gpu_not_required_leaves_chipset_empty(monkeypatch):
     assert state.gpu_chipset == ""
 
 
-# ---------------------------------------------------------------------------
-# RAM / Storage / PSU — pick a group, resolve the cheapest exact
-# ---------------------------------------------------------------------------
+# --- RAM / Storage / PSU — pick a group, resolve the cheapest exact -----------
 
 
 def test_step_ram_picks_group_and_resolves_first_kit(monkeypatch):
@@ -405,9 +395,7 @@ def test_step_psu_picks_group_and_resolves_first_unit(monkeypatch):
     assert state.psu_name == "Corsair RM850x"
 
 
-# ---------------------------------------------------------------------------
-# Group-candidate aggregation (queries.py) — one row per group
-# ---------------------------------------------------------------------------
+# --- Group-candidate aggregation (queries.py) — one row per group -------------
 
 
 def test_gpu_chipset_candidates_aggregates_one_row_per_chipset(monkeypatch):
@@ -506,9 +494,7 @@ def test_step_cpu_raises_when_cpu_not_found(monkeypatch):
         asyncio.run(dp._step_cpu(state, object(), BUDGET, object(), None))
 
 
-# ---------------------------------------------------------------------------
-# _step_motherboard — passes the CPU's full DDR set, records the board's gen
-# ---------------------------------------------------------------------------
+# --- _step_motherboard — passes the CPU's full DDR set, records the board's gen ---
 
 
 def test_step_motherboard_passes_ddr_set_and_records_board_gen(monkeypatch):
@@ -575,9 +561,7 @@ def test_step_ram_uses_chosen_board_generation(monkeypatch):
     assert capture["ddr_gen"] == "ddr5"
 
 
-# ---------------------------------------------------------------------------
-# _ensure_candidates — empty candidate list fails the step
-# ---------------------------------------------------------------------------
+# --- _ensure_candidates — empty candidate list fails the step -----------------
 
 
 def test_step_motherboard_empty_candidates_raises(monkeypatch):
@@ -588,9 +572,7 @@ def test_step_motherboard_empty_candidates_raises(monkeypatch):
         asyncio.run(dp._step_motherboard(state, object(), BUDGET, object(), None))
 
 
-# ---------------------------------------------------------------------------
-# Multi-instance selection: GPUs, storage, fans
-# ---------------------------------------------------------------------------
+# --- Multi-instance selection: GPUs, storage, fans ----------------------------
 # The physical ceilings (board x16 slots, drive mounts, fan mounts) are stated
 # to the LLM but enforced here, because a model that overshoots would otherwise
 # produce a build that cannot be assembled.

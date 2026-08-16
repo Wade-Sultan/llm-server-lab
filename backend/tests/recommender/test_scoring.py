@@ -20,9 +20,7 @@ import pytest
 from app.services.recommender import scoring
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+# --- Helpers ------------------------------------------------------------------
 
 
 def _cpu(name, price, *, single=None, multi=None):
@@ -55,9 +53,7 @@ def _gpu(name, price, *, timespy=None, compute=None, speedway=None, port_royal=N
     }
 
 
-# ---------------------------------------------------------------------------
-# Weights
-# ---------------------------------------------------------------------------
+# --- Weights ------------------------------------------------------------------
 
 
 def test_gaming_weights_favor_single_thread_for_cpu():
@@ -97,9 +93,7 @@ def test_resolution_does_not_shift_gpu_weights():
     assert base == at_4k
 
 
-# ---------------------------------------------------------------------------
-# score_candidates
-# ---------------------------------------------------------------------------
+# --- score_candidates ---------------------------------------------------------
 
 
 def test_best_candidate_scores_one_and_scores_are_relative():
@@ -195,9 +189,7 @@ def test_two_suites_on_one_axis_are_averaged_not_double_counted():
     assert rows[0]["perf_score"] == rows[1]["perf_score"] == 1.0
 
 
-# ---------------------------------------------------------------------------
-# Dominance gate
-# ---------------------------------------------------------------------------
+# --- Dominance gate -----------------------------------------------------------
 
 
 def test_dominant_candidate_is_cheapest_and_fastest():

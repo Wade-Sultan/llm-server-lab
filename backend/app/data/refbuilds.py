@@ -22,9 +22,7 @@ class Build(TypedDict):
     parts: list[dict[str, Any]]  # Part fields + component-type spec fields for seeding
 
 
-# ---------------------------------------------------------------------------
-# Spec field reference by component type
-# ---------------------------------------------------------------------------
+# --- Spec field reference by component type -----------------------------------
 # CPU:          socket, tdp_watts, has_igpu, ddr_generation (list[str]),
 #               cores, threads, base_clock_ghz, boost_clock_ghz, l3_cache_mb
 # CPU Cooler:   supported_sockets (list[str]), cooler_type,

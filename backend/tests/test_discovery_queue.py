@@ -117,9 +117,7 @@ def _mention(term: str, times: int = 1, kind: str = queue.KIND_AI_MODEL):
     asyncio.run(scenario())
 
 
-# ---------------------------------------------------------------------------
-# Demand ordering
-# ---------------------------------------------------------------------------
+# --- Demand ordering ----------------------------------------------------------
 
 
 def test_the_most_requested_term_comes_first(fake):
@@ -149,9 +147,7 @@ def test_take_respects_the_limit(fake):
     assert len(asyncio.run(queue.take(queue.KIND_AI_MODEL, 2))) == 2
 
 
-# ---------------------------------------------------------------------------
-# Normalization
-# ---------------------------------------------------------------------------
+# --- Normalization ------------------------------------------------------------
 
 
 def test_spellings_collapse_to_one_entry(fake):
@@ -172,9 +168,7 @@ def test_the_display_spelling_is_what_gets_searched(fake):
     assert asyncio.run(queue.take(queue.KIND_AI_MODEL, 10)) == ["Gemma 4 31B"]
 
 
-# ---------------------------------------------------------------------------
-# Guards — this is unauthenticated input that eventually reaches a paid API
-# ---------------------------------------------------------------------------
+# --- Guards — this is unauthenticated input that eventually reaches a paid API ---
 
 
 @pytest.mark.parametrize("junk", ["", " ", "!", "!!!!!", "12345", "x" * 200])
@@ -257,9 +251,7 @@ def test_everything_degrades_when_valkey_is_down(no_valkey):
     assert asyncio.run(queue.pending_count(queue.KIND_AI_MODEL)) is None
 
 
-# ---------------------------------------------------------------------------
-# Lifecycle
-# ---------------------------------------------------------------------------
+# --- Lifecycle ----------------------------------------------------------------
 
 
 def test_take_does_not_consume(fake):

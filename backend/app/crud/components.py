@@ -46,9 +46,7 @@ def _within_budget(price_column, budget_ceiling_usd: int):
     return price_column <= budget_ceiling_usd * 100
 
 
-# ---------------------------------------------------------------------------
-# Generic (polymorphic base)
-# ---------------------------------------------------------------------------
+# --- Generic (polymorphic base) -----------------------------------------------
 
 # Eager-load all subclass columns so a polymorphic lookup exposes group FKs
 # (gpu_chipset_id, ram_group_id, …) without triggering an async-unsafe lazy load.
@@ -134,9 +132,7 @@ async def _exacts_for_group(
     ]
 
 
-# ---------------------------------------------------------------------------
-# CPU
-# ---------------------------------------------------------------------------
+# --- CPU ----------------------------------------------------------------------
 
 
 async def get_cpu_by_name(db: AsyncSession, name: str) -> CPU | None:
@@ -177,9 +173,7 @@ async def get_all_cpus_active(db: AsyncSession) -> list[CPU]:
     return list(result.scalars().all())
 
 
-# ---------------------------------------------------------------------------
-# GPU
-# ---------------------------------------------------------------------------
+# --- GPU ----------------------------------------------------------------------
 
 
 async def get_gpu_by_name(db: AsyncSession, name: str) -> GPU | None:
@@ -237,9 +231,7 @@ async def get_gpu_candidates(
     return list(result.scalars().all())
 
 
-# ---------------------------------------------------------------------------
-# CPU Cooler
-# ---------------------------------------------------------------------------
+# --- CPU Cooler ---------------------------------------------------------------
 
 
 async def get_cooler_by_name(db: AsyncSession, name: str) -> CPUCooler | None:
@@ -272,9 +264,7 @@ async def get_cooler_candidates(
     ]
 
 
-# ---------------------------------------------------------------------------
-# Motherboard
-# ---------------------------------------------------------------------------
+# --- Motherboard --------------------------------------------------------------
 
 
 async def get_motherboard_by_name(db: AsyncSession, name: str) -> Motherboard | None:
@@ -337,9 +327,7 @@ async def get_all_motherboards_active(db: AsyncSession) -> list[Motherboard]:
     return list(result.scalars().all())
 
 
-# ---------------------------------------------------------------------------
-# RAM
-# ---------------------------------------------------------------------------
+# --- RAM ----------------------------------------------------------------------
 
 
 async def get_ram_candidates(
@@ -402,9 +390,7 @@ async def get_all_ram_active(db: AsyncSession) -> list[RAMKit]:
     return list(result.scalars().all())
 
 
-# ---------------------------------------------------------------------------
-# Storage
-# ---------------------------------------------------------------------------
+# --- Storage ------------------------------------------------------------------
 
 
 async def get_storage_candidates(
@@ -447,9 +433,7 @@ async def get_storage_drives_for_group(
     return await _exacts_for_group(db, StorageDrive, StorageDrive.group, group_name)
 
 
-# ---------------------------------------------------------------------------
-# PSU
-# ---------------------------------------------------------------------------
+# --- PSU ----------------------------------------------------------------------
 
 
 async def get_psu_by_name(db: AsyncSession, name: str) -> PSU | None:
@@ -494,9 +478,7 @@ async def get_psus_for_group(db: AsyncSession, group_name: str) -> list[PSU]:
     return await _exacts_for_group(db, PSU, PSU.group, group_name)
 
 
-# ---------------------------------------------------------------------------
-# Case
-# ---------------------------------------------------------------------------
+# --- Case ---------------------------------------------------------------------
 
 
 async def get_case_by_name(db: AsyncSession, name: str) -> Case | None:
@@ -530,9 +512,7 @@ async def get_case_candidates(
     ]
 
 
-# ---------------------------------------------------------------------------
-# Fan
-# ---------------------------------------------------------------------------
+# --- Fan ----------------------------------------------------------------------
 
 
 async def get_fan_candidates(

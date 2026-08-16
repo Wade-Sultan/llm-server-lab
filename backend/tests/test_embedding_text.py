@@ -66,9 +66,7 @@ def _game(**overrides):
     return SimpleNamespace(**base)
 
 
-# ---------------------------------------------------------------------------
-# The price-exclusion invariant
-# ---------------------------------------------------------------------------
+# --- The price-exclusion invariant --------------------------------------------
 
 
 def test_cpu_text_excludes_price():
@@ -101,9 +99,7 @@ def test_hash_is_stable_across_calls():
     assert t.content_hash(t.cpu_text(_cpu())) == t.content_hash(t.cpu_text(_cpu()))
 
 
-# ---------------------------------------------------------------------------
-# Null handling and content
-# ---------------------------------------------------------------------------
+# --- Null handling and content ------------------------------------------------
 
 
 def test_nulls_are_dropped_not_rendered():
@@ -165,9 +161,7 @@ def test_case_text_includes_colour_and_glass():
     assert "glass" in out.lower()
 
 
-# ---------------------------------------------------------------------------
-# Dispatch
-# ---------------------------------------------------------------------------
+# --- Dispatch -----------------------------------------------------------------
 
 
 def test_every_entity_type_has_a_builder():
@@ -182,9 +176,7 @@ def test_build_text_dispatches_by_entity_type():
     assert t.build_text(EmbeddedEntity.GAME, _game()).startswith("Cyberpunk")
 
 
-# ---------------------------------------------------------------------------
-# Aliases
-# ---------------------------------------------------------------------------
+# --- Aliases ------------------------------------------------------------------
 
 
 def test_game_text_includes_aliases_right_after_the_title():

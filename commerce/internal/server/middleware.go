@@ -63,9 +63,7 @@ func recoverPanic(logger *slog.Logger) middleware {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Firebase auth
-// ---------------------------------------------------------------------------
+// --- Firebase auth -----------------------------------------------------------
 
 type contextKey string
 
@@ -127,9 +125,7 @@ func optionalFirebaseAuth(client *fbauth.Client) middleware {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Internal (service-to-service) auth
-// ---------------------------------------------------------------------------
+// --- Internal (service-to-service) auth --------------------------------------
 
 // requireInternalKey gates the /internal/* routes on a shared secret in
 // X-Internal-Key, the same scheme admin uses to reach the builder's discovery
@@ -163,9 +159,7 @@ func requireInternalKey(key string) middleware {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// CORS
-// ---------------------------------------------------------------------------
+// --- CORS --------------------------------------------------------------------
 
 // cors mirrors backend/app/main.py's CORSMiddleware config: only the
 // configured origins are echoed back, credentials are allowed, and any

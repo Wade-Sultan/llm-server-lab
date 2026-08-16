@@ -98,9 +98,7 @@ def test_multiple_errors_all_reported():
     assert {("tdp_watts", "range"), ("brand", "enum")} <= _rules(errors)
 
 
-# ---------------------------------------------------------------------------
-# The categories added alongside the server use case
-# ---------------------------------------------------------------------------
+# --- The categories added alongside the server use case -----------------------
 # Coverage here is aimed at the two things ranges can't catch: the vocabulary
 # a category shares with another table (board sizes, module types), and the
 # cross-field checks that catch an extraction reading the right kind of number

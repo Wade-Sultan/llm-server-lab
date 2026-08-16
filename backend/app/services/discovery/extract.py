@@ -44,9 +44,7 @@ class Sourced(BaseModel, Generic[T]):
     snippet: str | None  # verbatim quote (<= 200 chars) supporting value
 
 
-# ---------------------------------------------------------------------------
-# Per-category schemas
-# ---------------------------------------------------------------------------
+# --- Per-category schemas -----------------------------------------------------
 # Field names mirror pc_parts + subtype columns exactly (msrp_usd is the one
 # rename — unwrap() converts it to msrp_cents), so a staged item's
 # extracted_fields dict is directly castable to the approval-time insert.

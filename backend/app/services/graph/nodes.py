@@ -38,9 +38,7 @@ def _messages_of(state: ChatTurnState) -> list[Any]:
     return [ChatMessage(**m) for m in state.get("messages", [])]
 
 
-# ---------------------------------------------------------------------------
-# collect
-# ---------------------------------------------------------------------------
+# --- collect ------------------------------------------------------------------
 
 
 async def collect(state: ChatTurnState) -> dict[str, Any]:
@@ -64,9 +62,7 @@ async def collect(state: ChatTurnState) -> dict[str, Any]:
     return {"profile": merged, "usage": usage}
 
 
-# ---------------------------------------------------------------------------
-# route
-# ---------------------------------------------------------------------------
+# --- route --------------------------------------------------------------------
 
 _ROUTER_SYSTEM = """\
 You order intake questions for a PC build advisor. You are NOT talking to the user.
@@ -215,9 +211,7 @@ def should_build(state: ChatTurnState) -> str:
     return "build" if state.get("next_question") is None else "ask"
 
 
-# ---------------------------------------------------------------------------
-# ask
-# ---------------------------------------------------------------------------
+# --- ask ----------------------------------------------------------------------
 
 
 async def ask(state: ChatTurnState) -> dict[str, Any]:
@@ -246,9 +240,7 @@ async def ask(state: ChatTurnState) -> dict[str, Any]:
     return {"usage": usage}
 
 
-# ---------------------------------------------------------------------------
-# build
-# ---------------------------------------------------------------------------
+# --- build --------------------------------------------------------------------
 
 
 async def build(state: ChatTurnState) -> dict[str, Any]:
@@ -340,9 +332,7 @@ async def build(state: ChatTurnState) -> dict[str, Any]:
     }
 
 
-# ---------------------------------------------------------------------------
-# present
-# ---------------------------------------------------------------------------
+# --- present ------------------------------------------------------------------
 
 
 async def present(state: ChatTurnState) -> dict[str, Any]:
@@ -368,9 +358,7 @@ async def present(state: ChatTurnState) -> dict[str, Any]:
     return {"usage": usage}
 
 
-# ---------------------------------------------------------------------------
-# finalize
-# ---------------------------------------------------------------------------
+# --- finalize -----------------------------------------------------------------
 
 
 async def finalize(state: ChatTurnState) -> dict[str, Any]:

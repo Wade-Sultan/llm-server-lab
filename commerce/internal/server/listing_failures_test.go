@@ -130,9 +130,7 @@ func listing(partID string) *store.Listing {
 	return &store.Listing{ID: "l1", PartID: partID, ListingType: "amazon", Marketplace: "amazon", IsActive: true}
 }
 
-// ---------------------------------------------------------------------------
-// Recording
-// ---------------------------------------------------------------------------
+// --- Recording ---------------------------------------------------------------
 
 const partID = "6f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d"
 
@@ -246,9 +244,7 @@ func TestCreatingAListingResolvesTheFailure(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// The digest
-// ---------------------------------------------------------------------------
+// --- The digest --------------------------------------------------------------
 
 func openFailure(i int) *store.ListingFailure {
 	return &store.ListingFailure{

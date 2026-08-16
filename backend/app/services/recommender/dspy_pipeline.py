@@ -197,9 +197,7 @@ def _resolve_pipeline_version() -> str:
 PIPELINE_VERSION = _resolve_pipeline_version()
 
 
-# ---------------------------------------------------------------------------
-# DSPy configuration
-# ---------------------------------------------------------------------------
+# --- DSPy configuration -------------------------------------------------------
 
 # Base extra_body sent on every OpenRouter call. Copied (not mutated) per
 # session so the "usage" flag survives alongside a per-session session_id.
@@ -320,9 +318,7 @@ def session_lm(session_id: str | None) -> dspy.LM:
     )
 
 
-# ---------------------------------------------------------------------------
-# Streamified execution helper
-# ---------------------------------------------------------------------------
+# --- Streamified execution helper ---------------------------------------------
 
 
 async def _call_streamified(
@@ -470,9 +466,7 @@ async def _run_step(
     return result
 
 
-# ---------------------------------------------------------------------------
-# Budget allocation
-# ---------------------------------------------------------------------------
+# --- Budget allocation --------------------------------------------------------
 
 # Per-slot budget ceilings by use case, as a fraction of the total budget.
 # These are independent soft maximums, not a partition — they are not
@@ -764,9 +758,7 @@ async def _resolve_catalog_requirements(
     return requirements
 
 
-# ---------------------------------------------------------------------------
-# Pipeline state
-# ---------------------------------------------------------------------------
+# --- Pipeline state -----------------------------------------------------------
 
 
 @dataclass
@@ -903,9 +895,7 @@ def _noop_status(_msg: str) -> None:
     return None
 
 
-# ---------------------------------------------------------------------------
-# Pipeline steps
-# ---------------------------------------------------------------------------
+# --- Pipeline steps -----------------------------------------------------------
 
 
 async def _step_ddr(
@@ -1507,9 +1497,7 @@ async def _step_fans(
         )
 
 
-# ---------------------------------------------------------------------------
-# Public entry point
-# ---------------------------------------------------------------------------
+# --- Public entry point -------------------------------------------------------
 
 
 async def run_pipeline(

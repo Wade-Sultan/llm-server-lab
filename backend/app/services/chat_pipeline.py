@@ -30,9 +30,7 @@ from app.services.resolver import resolve_build
 logger = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# LLM cost/usage capture
-# ---------------------------------------------------------------------------
+# --- LLM cost/usage capture ---------------------------------------------------
 # Every OpenRouter call in a conversation (profile extraction, routing,
 # elicitation, recommendation) is billed to the conversation.
 #
@@ -155,9 +153,7 @@ def _warn_if_runaway(model: BaseChatModel, usage: dict[str, Any]) -> None:
     )
 
 
-# ---------------------------------------------------------------------------
-# Stage 1 — Extract BuildProfile
-# ---------------------------------------------------------------------------
+# --- Stage 1 — Extract BuildProfile -------------------------------------------
 
 _extract_program = None
 _extract_program_lock = threading.Lock()
@@ -476,9 +472,7 @@ async def extract_profile(
     )
 
 
-# ---------------------------------------------------------------------------
-# Stage 2 — Stream Recommendation
-# ---------------------------------------------------------------------------
+# --- Stage 2 — Stream Recommendation ------------------------------------------
 
 _RECOMMEND_SYSTEM = """\
 You are Palladium's build advisor — friendly, knowledgeable, concise.
@@ -597,9 +591,7 @@ async def stream_recommendation(
         yield text
 
 
-# ---------------------------------------------------------------------------
-# Conversational fallback (not enough info yet)
-# ---------------------------------------------------------------------------
+# --- Conversational fallback (not enough info yet) ----------------------------
 
 _ELICIT_SYSTEM = """\
 You are Palladium's friendly intake assistant. Learn the user's needs to recommend a PC build.
@@ -899,9 +891,7 @@ def is_profile_complete(profile: BuildProfile) -> bool:
     return True
 
 
-# ---------------------------------------------------------------------------
-# Build resolution cache — profile → build mapping is deterministic
-# ---------------------------------------------------------------------------
+# --- Build resolution cache — profile → build mapping is deterministic --------
 
 _resolve_cache: dict[str, tuple[str, Build]] = {}
 
@@ -922,9 +912,7 @@ async def _resolve_build_cached(
     return build_key, build
 
 
-# ---------------------------------------------------------------------------
-# DSPy custom-build path
-# ---------------------------------------------------------------------------
+# --- DSPy custom-build path ---------------------------------------------------
 # Once the profile is complete, the DSPy pipeline and the reference-build
 # resolver are started together. The reference build is the guaranteed
 # fallback: if the DSPy run errors out or exceeds the timeout, its result is
@@ -1483,9 +1471,7 @@ def _build_payload(build: Build, profile: BuildProfile) -> dict:
     }
 
 
-# ---------------------------------------------------------------------------
-# Public API — orchestrate the full flow
-# ---------------------------------------------------------------------------
+# --- Public API — orchestrate the full flow -----------------------------------
 
 
 async def run_chat_turn(

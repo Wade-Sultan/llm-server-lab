@@ -15,9 +15,7 @@ def _usd(*prices: float) -> list[float]:
     return list(prices)
 
 
-# ---------------------------------------------------------------------------
-# The overestimation case
-# ---------------------------------------------------------------------------
+# --- The overestimation case --------------------------------------------------
 
 
 def test_prebuilt_does_not_drag_the_price_up():
@@ -61,9 +59,7 @@ def test_applied_price_is_the_median_not_the_mean():
     assert result.applied_cents < result.mean_cents
 
 
-# ---------------------------------------------------------------------------
-# The MSRP anchor
-# ---------------------------------------------------------------------------
+# --- The MSRP anchor ----------------------------------------------------------
 
 
 def test_anchor_rejects_implausible_prices_in_both_directions():
@@ -102,9 +98,7 @@ def test_missing_anchor_still_trims():
     assert result.rejected[4] == stats.REASON_HIGH_OUTLIER
 
 
-# ---------------------------------------------------------------------------
-# Thin and degenerate samples
-# ---------------------------------------------------------------------------
+# --- Thin and degenerate samples ----------------------------------------------
 
 
 def test_thin_sample_records_stats_but_applies_no_price():

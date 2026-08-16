@@ -35,9 +35,7 @@ _STUB_TEXT = (
 )
 
 
-# ---------------------------------------------------------------------------
-# Raw OpenAI/OpenRouter client, for the discovery pipeline
-# ---------------------------------------------------------------------------
+# --- Raw OpenAI/OpenRouter client, for the discovery pipeline -----------------
 # Two client stubs, because two real clients are in use: chat goes through
 # LangChain (StubChatModel below) and discovery stays on the openai SDK for its
 # response_format and multimodal parts. See
@@ -66,9 +64,7 @@ class StubOpenAIClient:
         self.chat = SimpleNamespace(completions=_StubCompletions())
 
 
-# ---------------------------------------------------------------------------
-# Chat model (LangChain), standing in for ChatOpenRouter
-# ---------------------------------------------------------------------------
+# --- Chat model (LangChain), standing in for ChatOpenRouter -------------------
 
 
 def _stub_usage() -> dict[str, Any]:
@@ -158,9 +154,7 @@ class StubChatModel(BaseChatModel):
         )
 
 
-# ---------------------------------------------------------------------------
-# DSPy
-# ---------------------------------------------------------------------------
+# --- DSPy ---------------------------------------------------------------------
 
 # The ChatAdapter system prompt declares output fields in a stable, parseable
 # block:

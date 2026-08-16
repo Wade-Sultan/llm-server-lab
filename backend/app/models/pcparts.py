@@ -156,9 +156,7 @@ class PCPart(Base):
     }
 
 
-# ---------------------------------------------------------------------------
-# Component groups
-# ---------------------------------------------------------------------------
+# --- Component groups ---------------------------------------------------------
 # A "group" holds the intrinsic spec shared across every purchasable variant of
 # the same part (e.g. one GPUChipset row per "RTX 5080", shared by every MSI /
 # Gigabyte / PNY board). Groups are NOT pc_parts rows — they carry no price and

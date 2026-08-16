@@ -130,9 +130,7 @@ func isForeignKeyViolation(err error) bool {
 	return errors.As(err, &pgErr) && pgErr.Code == "23503"
 }
 
-// ---------------------------------------------------------------------------
-// Users
-// ---------------------------------------------------------------------------
+// --- Users -------------------------------------------------------------------
 
 type User struct {
 	ID          string
@@ -251,9 +249,7 @@ func (s *Store) DeleteUserByFirebaseUID(ctx context.Context, firebaseUID string)
 	return nil
 }
 
-// ---------------------------------------------------------------------------
-// Listings
-// ---------------------------------------------------------------------------
+// --- Listings ----------------------------------------------------------------
 
 // Listing mirrors the columns returned by the Python API's ListingPublic /
 // AmazonListingPublic schemas (backend/app/schemas/listing.py). Only the
