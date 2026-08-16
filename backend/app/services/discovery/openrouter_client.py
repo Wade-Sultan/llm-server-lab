@@ -74,6 +74,11 @@ def extra_body(session_id: str | None) -> dict[str, Any]:
         return {}
 
     body: dict[str, Any] = {"usage": {"include": True}}
+    # Same provider pin the chat path uses. Applied here too so that pinning
+    # away from a bad upstream is not silently partial — a knob that covered
+    # only some of the calls to a model would be worse than none.
+    if settings.OPENROUTER_PROVIDER:
+        body["provider"] = settings.OPENROUTER_PROVIDER
     if session_id:
         body["session_id"] = session_id
     return {"extra_body": body}

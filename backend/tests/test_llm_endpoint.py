@@ -20,6 +20,7 @@ import pytest
 
 from app.core.config import OPENROUTER_URL, LLMEndpoint
 from app.services.chat_models import ChatModelConfig
+from app.services.llm import get_chat_model
 
 _LOCAL = "http://172.30.32.1:1234/v1"
 
@@ -129,3 +130,67 @@ def test_dspy_token_budget_default():
     from app.services.recommender import dspy_pipeline
 
     assert dspy_pipeline.RECOMMEND_MAX_TOKENS == 1024
+
+
+# ---------------------------------------------------------------------------
+# OpenRouter provider pinning
+# ---------------------------------------------------------------------------
+
+
+def test_no_provider_pin_by_default(monkeypatch):
+    """Unset must send exactly the request every deployment has always sent.
+
+    The pin is a response to a degenerate completion traced to one upstream; it
+    is not something to switch on speculatively, because narrowing routing
+    trades a rare bad sample for a dependency on one provider's uptime.
+    """
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "OPENROUTER_PROVIDER", None)
+    monkeypatch.setattr(settings, "LLM_BASE_URL", "")
+
+    model = get_chat_model("google/gemma-4-31b-it")
+    assert not getattr(model, "model_kwargs", None)
+
+
+def test_provider_pin_reaches_the_chat_model(monkeypatch):
+    from app.core.config import settings
+
+    pin = {"ignore": ["SomeUpstream"], "allow_fallbacks": True}
+    monkeypatch.setattr(settings, "OPENROUTER_PROVIDER", pin)
+    monkeypatch.setattr(settings, "LLM_BASE_URL", "")
+
+    model = get_chat_model("google/gemma-4-31b-it")
+    assert model.model_kwargs["provider"] == pin
+
+
+def test_provider_pin_reaches_discovery_and_dspy(monkeypatch):
+    """A pin that covered only some calls to a model would be worse than none."""
+    from app.core.config import settings
+    from app.services.discovery.openrouter_client import extra_body
+    from app.services.recommender.dspy_pipeline import _openrouter_extra_body
+
+    pin = {"ignore": ["SomeUpstream"]}
+    monkeypatch.setattr(settings, "OPENROUTER_PROVIDER", pin)
+    monkeypatch.setattr(settings, "LLM_BASE_URL", "")
+    monkeypatch.setattr(settings, "DISCOVERY_LLM_BASE_URL", "")
+
+    assert extra_body(None)["extra_body"]["provider"] == pin
+    assert _openrouter_extra_body()["provider"] == pin
+
+
+def test_provider_pin_is_not_sent_to_a_local_server(monkeypatch):
+    """ProviderPreferences is an OpenRouter concept; LM Studio would reject it."""
+    from app.core.config import settings
+    from app.services.recommender.dspy_pipeline import configure_dspy
+
+    monkeypatch.setattr(settings, "OPENROUTER_PROVIDER", {"ignore": ["X"]})
+    monkeypatch.setattr(settings, "LLM_BASE_URL", _LOCAL)
+
+    model = get_chat_model("qwen3.8-27b")
+    assert not getattr(model, "model_kwargs", None)
+
+    configure_dspy()
+    import dspy
+
+    assert not dspy.settings.lm.kwargs.get("extra_body")

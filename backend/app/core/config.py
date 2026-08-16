@@ -122,6 +122,31 @@ class Settings(BaseSettings):
 
     OPENROUTER_API_KEY: str
 
+    # OpenRouter provider routing preferences, as JSON. Unset (the default)
+    # sends nothing and lets OpenRouter route freely, which is what every
+    # environment has always done.
+    #
+    # This exists because a model slug names a model, not a machine. OpenRouter
+    # fans `google/gemma-4-31b-it` out across upstreams that differ in
+    # quantization and sampling defaults, so a reply can degenerate on one of
+    # them and be fine on the next request — which is exactly how a wall of one
+    # repeated token reached a user in production and then could not be
+    # reproduced. Pinning is the lever for that, once a trace names the culprit.
+    #
+    # Pin only against evidence. Narrowing this to a single upstream trades a
+    # rare bad sample for a hard dependency on one provider's uptime, so prefer
+    # `ignore` over `only`, and keep `allow_fallbacks` true unless the point is
+    # to fail rather than be served by anyone else. Shape is OpenRouter's
+    # ProviderPreferences — order / only / ignore / quantizations / sort:
+    #
+    #   OPENROUTER_PROVIDER={"ignore":["SomeProvider"],"allow_fallbacks":true}
+    #   OPENROUTER_PROVIDER={"quantizations":["bf16","fp16"]}
+    #
+    # Typed as a dict so pydantic-settings parses the env var as JSON and a
+    # malformed value fails at boot, where it is one clear error, rather than
+    # per request.
+    OPENROUTER_PROVIDER: dict[str, Any] | None = None
+
     # --- Chat-completion endpoint ---------------------------------------------
     # Empty (the default, and what production runs) means every chat completion
     # goes to OpenRouter. Setting it points them at any other OpenAI-compatible

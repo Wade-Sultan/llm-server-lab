@@ -110,6 +110,27 @@ def get_chat_model(
 
     from langchain_openrouter import ChatOpenRouter
 
+    # WHY `provider` IS SAFE HERE AND `usage` IS NOT — the two look alike and
+    # only one of them works. `model_kwargs` is splatted straight into
+    # `openrouter.chat.Chat.send_async`, whose signature is generated from the
+    # API spec, so a key is accepted only if that signature declares it.
+    # `provider` is declared (typed as ProviderPreferences); `usage` is not.
+    #
+    # So NO `model_kwargs={"usage": {"include": True}}` HERE, however much the
+    # REST API's `usage.include` invites it: it raises TypeError before a
+    # request is ever made, on every call, on both the streaming and
+    # non-streaming paths. It does not degrade cost accounting; it removes chat.
+    # Anything else added to this dict must be checked against that signature
+    # the same way.
+    #
+    # Cost still arrives regardless: `fetch_generation_cost` reads it from the
+    # generation endpoint whenever `usage_from_message` came back without one,
+    # which the module header describes and which the streaming path has always
+    # depended on.
+    model_kwargs: dict[str, Any] = {}
+    if settings.OPENROUTER_PROVIDER:
+        model_kwargs["provider"] = settings.OPENROUTER_PROVIDER
+
     return ChatOpenRouter(
         model=model,
         openrouter_api_key=api_key,
@@ -117,18 +138,9 @@ def get_chat_model(
         max_tokens=max_tokens,
         streaming=streaming,
         session_id=session_id,
-        # NO `model_kwargs={"usage": {"include": True}}` HERE, however much the
-        # REST API's `usage.include` invites it. `model_kwargs` is splatted
-        # straight into `openrouter.chat.Chat.send_async`, whose signature is
-        # generated from the API spec and takes no `usage` parameter — so it
-        # raises TypeError before a request is ever made, on every call, on both
-        # the streaming and non-streaming paths. It does not degrade cost
-        # accounting; it removes chat.
-        #
-        # Cost still arrives: `fetch_generation_cost` reads it from the
-        # generation endpoint whenever `usage_from_message` came back without
-        # one, which the header describes and which the streaming path has
-        # always depended on regardless.
+        # Omitted entirely when empty rather than passed as {}, so an
+        # unconfigured deployment sends exactly the request it always did.
+        **({"model_kwargs": model_kwargs} if model_kwargs else {}),
     )
 
 
@@ -156,6 +168,24 @@ def usage_from_message(message: BaseMessage) -> dict[str, Any]:
         # than assumed from ChatModelConfig.
         "model": meta.get("model_name"),
         "generation_id": meta.get("id"),
+        # Why the model stopped. "length" means it was cut off by max_tokens
+        # rather than finishing, which on a call whose prompt asks for under
+        # eighty words is not a budget that needs raising — it is a model that
+        # ran away. See the runaway check in chat_pipeline._stream_text.
+        "finish_reason": meta.get("finish_reason"),
+        # NO UPSTREAM PROVIDER HERE, and not for want of trying. A degenerate
+        # completion is usually a property of the machine that served it rather
+        # than of the model slug, so this is the field you actually want — but
+        # `response_metadata` does not carry it. Its `model_provider` is the
+        # LangChain integration name and is always the literal "openrouter",
+        # which is worse than nothing because it reads like an answer.
+        #
+        # The real name (e.g. "DeepInfra") is on the /generation endpoint as
+        # `provider_name`, keyed by generation_id — but that record takes the
+        # better part of ten seconds to finalise, far longer than the 1.5s
+        # `fetch_generation_cost` budgets, so it cannot be collected on the turn
+        # without holding it open. Hence generation_id is logged instead and the
+        # lookup is done by hand; see chat_pipeline._warn_if_runaway.
     }
 
 

@@ -205,6 +205,19 @@ PIPELINE_VERSION = _resolve_pipeline_version()
 _OPENROUTER_EXTRA_BODY: dict[str, Any] = {"usage": {"include": True}}
 
 
+def _openrouter_extra_body() -> dict[str, Any]:
+    """The base extra_body, plus the provider pin when one is configured.
+
+    A function rather than a module constant because OPENROUTER_PROVIDER is
+    settings, and freezing it at import time would make the pin depend on
+    whether this module was imported before or after the environment was read.
+    """
+    body = dict(_OPENROUTER_EXTRA_BODY)
+    if settings.OPENROUTER_PROVIDER:
+        body["provider"] = settings.OPENROUTER_PROVIDER
+    return body
+
+
 def litellm_model(name: str) -> str:
     """Normalise a model slug to the provider prefix litellm needs right now.
 
@@ -243,7 +256,7 @@ def configure_dspy() -> None:
         # Ask OpenRouter to include usage/cost accounting in the response so
         # litellm surfaces the real cost per call in the LM history. OpenRouter
         # extension, so omitted when talking to anything else.
-        extra_body=dict(_OPENROUTER_EXTRA_BODY) if endpoint.is_openrouter else None,
+        extra_body=_openrouter_extra_body() if endpoint.is_openrouter else None,
     )
     # track_usage lets prediction.get_lm_usage() return per-prediction tokens.
     dspy.configure(lm=lm, track_usage=True)
@@ -302,7 +315,7 @@ def session_lm(session_id: str | None) -> dspy.LM:
     if not session_id or not settings.chat_endpoint.is_openrouter:
         return dspy.settings.lm
     return dspy.settings.lm.copy(
-        extra_body={**_OPENROUTER_EXTRA_BODY, "session_id": session_id}
+        extra_body={**_openrouter_extra_body(), "session_id": session_id}
     )
 
 

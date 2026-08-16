@@ -105,8 +105,53 @@ async def _stream_text(
         if text := chunk.text:
             yield text
 
-    if usage_sink is not None and aggregate is not None:
-        usage_sink.update(usage_from_message(aggregate))
+    if aggregate is not None:
+        usage = usage_from_message(aggregate)
+        _warn_if_runaway(model, usage)
+        if usage_sink is not None:
+            usage_sink.update(usage)
+
+
+def _warn_if_runaway(model: BaseChatModel, usage: dict[str, Any]) -> None:
+    """Log a streamed prose call that was cut off by its own token cap.
+
+    THIS IS A DEGENERATION SIGNAL, NOT A BUDGET COMPLAINT. Both callers of
+    `_stream_text` ask for something short — the elicitation prompt says "under
+    80 words", the recommendation prompt "under 50 words" — against caps of 256
+    and 128. Finishing on `length` therefore means the model did not stop when
+    it should have, which in production has surfaced as a single token repeated
+    until the cap cut it off. Raising the cap would only make that longer.
+    Anything logged here is worth correlating with the provider: a runaway is
+    usually a property of the upstream that served the call rather than of the
+    model slug, and `provider` is recorded for exactly that reason.
+
+    Only the streaming path is checked. The router legitimately runs against an
+    8-token cap to return a single integer, so `length` is unremarkable there
+    and warning on it would be pure noise.
+
+    RESOLVING THE UPSTREAM. The generation id is in the message because the
+    thing worth correlating across occurrences is which provider OpenRouter
+    routed to, and that is not in the response — see the note in
+    app/services/llm/openrouter.py. Read it off the generation record:
+
+        curl -H "Authorization: Bearer $OPENROUTER_API_KEY" \
+             "https://openrouter.ai/api/v1/generation?id=<generation_id>"
+
+    and take `provider_name`. Allow ten seconds or so after the call; before
+    that the record 404s. If one name keeps coming up, OPENROUTER_PROVIDER is
+    the lever — see the note on it in app/core/config.py.
+    """
+    if usage.get("finish_reason") != "length":
+        return
+    logger.warning(
+        "chat: %s hit its %s-token cap instead of stopping (generation=%s) — "
+        "the reply was truncated mid-flow and may be degenerate. This is a "
+        "runaway, not a budget to raise: resolve the generation id to a "
+        "provider_name before changing anything",
+        usage.get("model") or getattr(model, "model_name", "unknown"),
+        getattr(model, "max_tokens", None),
+        usage.get("generation_id") or "unknown",
+    )
 
 
 # ---------------------------------------------------------------------------

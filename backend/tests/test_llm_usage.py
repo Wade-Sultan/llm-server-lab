@@ -173,3 +173,69 @@ def test_a_turns_calls_accumulate_into_one_total():
     assert total["cost_usd"] == pytest.approx(0.0035)
     # Deduplicated: one model served all three calls.
     assert total["models"] == ["stub/model"]
+
+
+# ------------------------------------------------------- runaway completions --
+
+
+class _FakeRunawayModel(_FakeStreamModel):
+    """A model that repeats itself until max_tokens cuts it off.
+
+    The shape production actually produced: a short prompt, a reply that never
+    stops, and finish_reason=length on the trailing chunk.
+    """
+
+    model_name = "stub/model"
+    max_tokens = 256
+
+    async def astream(self, messages, **kwargs):
+        from langchain_core.messages import AIMessageChunk
+
+        for _ in range(3):
+            yield AIMessageChunk(content="our ")
+        yield AIMessageChunk(
+            content="",
+            usage_metadata={
+                "input_tokens": 11,
+                "output_tokens": 256,
+                "total_tokens": 267,
+            },
+            response_metadata={
+                "model_name": "stub/model",
+                "id": self.generation_id,
+                "finish_reason": "length",
+            },
+        )
+
+
+def test_finish_reason_is_captured():
+    """It is what tells a runaway apart from a model that merely finished."""
+    _, sink = _drive(_FakeRunawayModel())
+
+    assert sink["finish_reason"] == "length"
+
+
+def test_a_runaway_completion_is_logged_with_its_generation_id(caplog):
+    """A cap-truncated prose reply is a degeneration signal, not a budget one.
+
+    The generation id is the payload that matters: the upstream provider is not
+    in the response at all, and that id is the only way to resolve one.
+    """
+    with caplog.at_level("WARNING"):
+        _drive(_FakeRunawayModel())
+
+    assert any(
+        "runaway" in r.message.lower() or "runaway" in str(r.args or "").lower()
+        for r in caplog.records
+    ), caplog.text
+    assert "gen-123" in caplog.text
+    assert "256" in caplog.text
+
+
+def test_an_ordinary_completion_logs_nothing(caplog):
+    """The router runs against an 8-token cap by design; noise here would bury
+    the real signal."""
+    with caplog.at_level("WARNING"):
+        _drive(_FakeStreamModel())
+
+    assert caplog.records == []
