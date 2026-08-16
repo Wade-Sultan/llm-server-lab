@@ -18,17 +18,25 @@ Create Date: 2026-08-15 00:00:00.000000
 
 import sqlalchemy as sa
 from alembic import op
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import ENUM, UUID
 
 revision = "d4f6b8a0c2e5"
 down_revision = "c3e5a7b9d1f4"
 branch_labels = None
 depends_on = None
 
-# Created explicitly rather than letting the first sa.Enum column emit it, so
-# that downgrade has something unambiguous to drop and a second table using the
-# type later does not try to create it again.
-_RATING = sa.Enum("up", "down", name="feedback_rating")
+# postgresql.ENUM with create_type=False, NOT sa.Enum, and the flag is the whole
+# point. A plain sa.Enum column makes create_table emit its own CREATE TYPE
+# through SQLAlchemy's before_create hook, which passes checkfirst=False no
+# matter what the explicit create below asked for — so the type is created
+# twice in the same migration and the second one fails with
+# `DuplicateObject: type "feedback_rating" already exists`.
+#
+# create_type=False detaches the type's lifecycle from the table's, which means
+# it must be created and dropped by hand — see upgrade/downgrade. That is also
+# what makes this rerunnable against a database where a failed earlier attempt
+# left the type behind: checkfirst=True then finds it and moves on.
+_RATING = ENUM("up", "down", name="feedback_rating", create_type=False)
 
 
 def upgrade():
