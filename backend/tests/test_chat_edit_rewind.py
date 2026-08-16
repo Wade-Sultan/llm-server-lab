@@ -233,6 +233,27 @@ def test_rewind_prefix_declines_rather_than_guesses(parent: str) -> None:
     assert transport.rewind_prefix(messages, parent) is None
 
 
+def test_rewind_prefix_treats_minus_one_as_the_parent_of_the_first_message() -> None:
+    """ "-1" must keep nothing, exactly as a null parent does.
+
+    THE RETRY BUTTON DEPENDS ON THIS and cannot express it any other way. It
+    re-runs a turn by calling the runtime's `append` with the parent of the user
+    message being retried, but assistant-ui's `toAppendMessage` resolves
+    `message.parentId ?? messages.at(-1)?.id` — and `??` treats null as absent.
+    A null parent would therefore be rewritten to the thread's TAIL, which
+    routes to onNew and appends a duplicate message instead of retrying.
+
+    So retrying the first turn sends "-1" instead: one before index 0, non-null
+    so it survives `??`, and `keep = int(parent) + 1 = 0` here. Note "-2" is in
+    the declining case above — only exactly one before the start is meaningful.
+    """
+    messages = _state("a", "b", "c", "d")["messages"]
+    assert transport.rewind_prefix(messages, "-1") == []
+    assert transport.rewind_prefix(messages, "-1") == transport.rewind_prefix(
+        messages, None
+    )
+
+
 # -- what persistence does with a rewound turn -----------------------------
 
 

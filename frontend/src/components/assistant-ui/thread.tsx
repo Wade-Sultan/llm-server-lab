@@ -24,7 +24,7 @@ import {
   RefreshCwIcon,
   SquareIcon,
 } from "lucide-react"
-import { type FC, useEffect, useState } from "react"
+import { type FC, useState } from "react"
 import {
   ComposerAddAttachment,
   ComposerAttachments,
@@ -342,17 +342,20 @@ const AssistantActionBar: FC = () => {
  */
 const RetryButton: FC = () => {
   const aui = useAui()
-  // The user message whose edit has been opened and is waiting to be sent.
-  const [pending, setPending] = useState<number | null>(null)
 
-  // The user message this reply answers.
+  // Position of the user message this reply answers.
   //
   // Located by matching ids, NOT by reading `s.message.index`. That field is
-  // declared on MessageState and is genuinely populated for statically rendered
-  // messages, but the live runtime path builds message state from
-  // MessageRuntime.getState(), which returns the repository's raw message and
-  // has no index on it. Reading it here yields undefined, so `index - 1` is NaN,
-  // the loop below never runs, and the button silently never renders.
+  // declared on MessageState and is populated for statically rendered messages,
+  // but the live runtime path builds message state from
+  // MessageRuntime.getState(), which returns the repository's raw message with
+  // no index on it. Reading it yields undefined, `index - 1` is NaN, and the
+  // button silently never renders at all.
+  //
+  // A number, not an object. useAuiState is useSyncExternalStore, which
+  // compares snapshots with Object.is — a selector returning a fresh object
+  // every call re-renders forever. Everything else this needs is read
+  // imperatively in the handler, where reactivity buys nothing.
   const userIndex = useAuiState((s) => {
     const messages = s.thread.messages
     const selfIndex = messages.findIndex((m) => m.id === s.message.id)
@@ -365,40 +368,57 @@ const RetryButton: FC = () => {
     return -1
   })
 
-  // Whether the edit composer we asked for has actually opened yet.
-  const isEditing = useAuiState((s) =>
-    pending === null
-      ? false
-      : (s.thread.messages[pending]?.composer?.isEditing ?? false),
-  )
-
-  // SENDING IS A SEPARATE RENDER FROM OPENING, and that is the whole reason
-  // this is an effect rather than two calls in the click handler.
-  // `composer.send()` resolves the edit composer core through a fresh
-  // `getEditComposer(messageId)` lookup, and nothing exists under that id until
-  // `beginEdit()` has run and the thread has notified its subscribers. Calling
-  // both synchronously throws "Composer is not available" before the send ever
-  // reaches the transport. Waiting on isEditing reproduces exactly what a
-  // person does — open the editor, then submit it — which is the path the Edit
-  // button and EditComposer already prove works.
-  useEffect(() => {
-    if (pending === null || !isEditing) return
-    aui.thread().message({ index: pending }).composer().send()
-    setPending(null)
-  }, [pending, isEditing, aui])
-
   if (userIndex < 0) return null
 
   return (
     <TooltipIconButton
       tooltip="Retry"
       onClick={() => {
-        // beginEdit seeds the composer with the message's existing text, so
-        // this re-sends it unchanged. Unchanged still counts as an edit: what
-        // makes the server rewind is the parentId the runtime attaches, not
-        // whether the text differs.
-        aui.thread().message({ index: userIndex }).composer().beginEdit()
-        setPending(userIndex)
+        const thread = aui.thread()
+        const message = thread.getState().messages[userIndex]
+        if (!message) return
+
+        const text = message.content
+          .map((part) => (part.type === "text" ? part.text : ""))
+          .join("")
+        if (!text.trim()) return
+
+        // NOT the edit composer. `DefaultEditComposerRuntimeCore.handleSend`
+        // guards its append with `if (text !== this._previousText)`, so an edit
+        // that changes nothing is discarded and only `handleCancel()` runs —
+        // the composer opens and closes and no request is ever made. That is
+        // precisely the flicker-and-nothing-happens symptom, and it means
+        // "retry as a no-op edit" cannot work through the composer at all.
+        //
+        // `append` is what the composer itself calls once it decides to send,
+        // so this reaches the same place with the guard skipped. Passing a
+        // parentId that is not the thread's tail is what routes it to `onEdit`
+        // rather than `onNew` (see external-store-thread-runtime-core), and
+        // onEdit is the path that sets the runtime's parentIdRef — which is the
+        // only reason the request body carries a parentId and the server
+        // rewinds instead of appending. See `rewind_prefix` in
+        // backend/app/services/transport.py.
+        thread.append({
+          role: "user",
+          content: [{ type: "text", text }],
+          // The message's own recorded parent rather than arithmetic on the
+          // array — this is exactly what the edit composer passes.
+          //
+          // EXCEPT for the first message, whose parent is null, and null must
+          // not be passed here. `toAppendMessage` resolves parentId with
+          // `message.parentId ?? messages.at(-1)?.id`, and `??` treats null as
+          // absent — so a null parent silently becomes the thread's TAIL, which
+          // routes to onNew and appends a duplicate user message instead of
+          // retrying. Retrying the first turn would corrupt the thread.
+          //
+          // "-1" is the parent of message 0 in an index-keyed scheme, and the
+          // ids here are array indices (rewind_prefix documents this: the
+          // converter labels each message with its position). The server does
+          // `keep = int(parentId) + 1`, so "-1" keeps nothing — identical to
+          // the null case it cannot receive, and non-null so `??` preserves it.
+          parentId: message.parentId ?? "-1",
+          sourceId: message.id,
+        })
       }}
     >
       <RefreshCwIcon />
