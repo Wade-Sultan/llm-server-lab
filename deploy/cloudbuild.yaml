@@ -148,7 +148,20 @@ steps:
         # never scale and nothing anywhere says why.
         sed -i "s/\bPROJECT_ID\b/$PROJECT_ID/g" \
           kustomization.yaml patches/workload-identity.yaml keda-worker.yaml
-        sed -i "s/newTag: latest/newTag: $SHORT_SHA/g" kustomization.yaml
+        # QUOTED, and it must stay quoted. A git short SHA is seven hex digits,
+        # which perhaps one time in thirty contains no letter at all — and then
+        # `newTag: 1184713` is a YAML *integer*, while kustomize types
+        # Image.newTag as a string. The build dies in this step with
+        #
+        #   invalid Kustomization: json: cannot unmarshal number into Go struct
+        #   field Image.images.newTag of type string
+        #
+        # which names neither the tag nor the commit and looks like a corrupted
+        # kustomization.yaml rather than a data-dependent parse. The same trap
+        # catches exponent-shaped SHAs (`1234e56` is a YAML 1.1 float) even
+        # though those are far rarer. Quoting makes the scalar a string for
+        # every possible SHA, so the failure cannot come back on a later commit.
+        sed -i "s/newTag: latest/newTag: \"$SHORT_SHA\"/g" kustomization.yaml
 
         # Fail loudly rather than deploying a half-substituted manifest.
         if grep -qE '\bPROJECT_ID\b|newTag: latest' kustomization.yaml keda-worker.yaml; then
