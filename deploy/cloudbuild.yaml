@@ -491,6 +491,23 @@ steps:
               *FailedScaleUp*)
                 [ "$$pending" -ge 60 ] && ABORT="the cluster autoscaler tried to add a node and GCE refused (FailedScaleUp) — this is a quota limit, not a slow migration" ;;
             esac
+
+            # The autoscaler only emits FailedScaleUp on the attempt that GCE
+            # actually rejected. Once it enters backoff it stops trying, and
+            # every later pod gets NotTriggerScaleUp / "N in backoff after
+            # failed scale-up" instead — the same dead end, reported in
+            # different words, and previously only caught by the 420s backstop
+            # seven minutes later. Matched on the message rather than the
+            # reason: NotTriggerScaleUp on its own is not always terminal.
+            if [ -z "$$ABORT" ] && [ "$$pending" -ge 60 ]; then
+              MSGS=$$(kubectl -n "$_NAMESPACE" get events \
+                        --field-selector "involvedObject.name=$$POD" \
+                        -o jsonpath='{.items[*].message}' 2>/dev/null || true)
+              case "$$MSGS" in
+                *"backoff after failed scale-up"*)
+                  ABORT="the cluster autoscaler is in backoff after an earlier scale-up was refused by GCE — same quota wall, it has simply stopped retrying" ;;
+              esac
+            fi
             # Backstop for the Pending causes that never emit FailedScaleUp at
             # all: an unsatisfiable nodeSelector, a taint nothing tolerates, a
             # namespace ResourceQuota rejecting the pod. 7 minutes is well past

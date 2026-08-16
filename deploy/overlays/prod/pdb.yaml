@@ -15,17 +15,33 @@ spec:
     matchLabels:
       app: builder
 ---
-# The worker qualifies on the same 2-replica grounds. It matters slightly less
-# than builder's — a drained worker's in-flight turns are redelivered rather
-# than lost — but "redelivered" still means the user watches their build stall
-# for the redelivery backoff, so keeping one pod pulling through a node drain is
-# worth the same protection.
+# The worker matters slightly less than builder — a drained worker's in-flight
+# turns are redelivered rather than lost — but "redelivered" still means the
+# user watches their build stall for the redelivery backoff, so keeping pods
+# pulling through a node drain is worth protecting.
+#
+# maxUnavailable, NOT minAvailable, and this one is not a style preference. The
+# worker's replica count is not fixed: KEDA floors it at 1 and scales to 8, so a
+# budget expressed as a floor behaves differently at each end of that range, and
+# badly at both:
+#
+#   minAvailable: 1 at 1 replica    allowed disruptions = 1 - 1 = 0. Nothing can
+#                                   ever be evicted. Node drains block and
+#                                   Autopilot upgrades stall — the failure this
+#                                   file's header describes for commerce/admin.
+#   minAvailable: 1 at 8 replicas   allows 7 of 8 to go at once, which is not a
+#                                   meaningful budget for a pool that size.
+#
+# maxUnavailable: 1 is correct at every count in the range: exactly one pod may
+# be disrupted at a time. At the floor that is the one pod, so drains proceed;
+# at full scale-out it is stricter than the old floor-based budget was. The
+# builder above keeps minAvailable because its HPA floor is a hard 2.
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
   name: worker
 spec:
-  minAvailable: 1
+  maxUnavailable: 1
   selector:
     matchLabels:
       app: worker

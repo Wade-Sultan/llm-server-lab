@@ -46,12 +46,32 @@ spec:
   scaleTargetRef:
     name: worker
 
-  # Matches the base Deployment's replicas: 2, so the first apply does not
-  # immediately fight KEDA — the same reasoning as builder's HPA. 2 is also what
-  # keeps the worker PDB (minAvailable: 1) able to permit a voluntary eviction
-  # at all; drop this to 1 and node drains block, exactly as pdb.yaml describes
-  # for the services that deliberately have no PDB.
-  minReplicaCount: 2
+  # Matched by the prod overlay's `replicas:` transformer (kustomization.yaml),
+  # so the first apply does not immediately fight KEDA — the same reasoning as
+  # builder's HPA. Change one and you must change the other, or every `kubectl
+  # apply` resets the Deployment to a count KEDA then has to undo.
+  #
+  # WAS 2, AND THE REASON IT COULD NOT BE 1 IS NOW FIXED. The old note here was
+  # correct: at 1 replica a PDB of minAvailable: 1 permits zero voluntary
+  # evictions and blocks node drains, exactly as pdb.yaml describes for the
+  # services that deliberately have no PDB. The worker's PDB is now
+  # maxUnavailable: 1, which allows the eviction at 1 replica AND caps
+  # simultaneous disruption harder than minAvailable did at scale-out — so the
+  # floor is no longer load-bearing for drains. See pdb.yaml.
+  #
+  # Dropped to 1 because the floor is 2Gi per replica of permanently reserved
+  # Autopilot memory, and this cluster is node-constrained: a 2-replica floor
+  # reserves 4Gi before a single turn arrives, which is what left the migration
+  # Job unschedulable at deploy time.
+  #
+  # THE TRADE, stated plainly. One replica x PUBSUB_MAX_CONCURRENCY 8 = 8
+  # concurrent turns before scaling matters, half the 16 the load test treated
+  # as comfortable. Crossing it costs a pollingInterval (30s) plus Autopilot's
+  # 60-120s to place a node, so the first burst after an idle period is slower
+  # to absorb than it was from a warm floor of 2. Turns are not lost — Pub/Sub
+  # redelivers — they queue. Raise this back to 2 if first-token latency under
+  # burst matters more than the 2Gi.
+  minReplicaCount: 1
 
   # 8 x 8 concurrency = 64 turns in flight. A ceiling, not a target: at the
   # worker's prod resources (250m/2Gi requested) a fully scaled-out pool is 16Gi

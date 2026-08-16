@@ -25,6 +25,20 @@ patches:
   - path: patches/resources.yaml
   - path: patches/secrets-scoped.yaml
 
+# The worker's replica count must equal keda-worker.yaml's minReplicaCount.
+# Every `kubectl apply` writes spec.replicas, so a Deployment whose manifest
+# disagrees with its autoscaler's floor gets reset on each deploy and dragged
+# back by the autoscaler afterwards — a pod started and killed for nothing, on
+# every build. Base carries replicas: 2 as the environment-independent default;
+# prod overrides it here rather than in base so the local overlay (which runs
+# the worker at 0, with no Pub/Sub) is unaffected.
+#
+# Kept as a `replicas:` transformer rather than a patch because it is one field
+# on one workload, and patches/ is already four files deep.
+replicas:
+  - name: worker
+    count: 1
+
 # NOTE: no secretGenerator here, deliberately — unlike the local overlay there
 # is no .env.prod to read. The three palladium-secrets-* Secrets are created
 # out-of-band from Secret Manager, so no prod credential is ever on a
