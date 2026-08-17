@@ -51,4 +51,6 @@ class SharedBuild(Base):
 
     conversation_id = Column(UUID(as_uuid=True), nullable=True, index=True)
 
-    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    created_at = Column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )

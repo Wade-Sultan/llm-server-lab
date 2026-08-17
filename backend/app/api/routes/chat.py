@@ -129,7 +129,12 @@ def _case_pick(commands: list[dict]) -> tuple[str, str] | None:
         if not isinstance(command, dict) or command.get("type") != "select-case":
             continue
         token, case_name = command.get("token"), command.get("caseName")
-        if isinstance(token, str) and isinstance(case_name, str) and token and case_name:
+        if (
+            isinstance(token, str)
+            and isinstance(case_name, str)
+            and token
+            and case_name
+        ):
             found = (token, case_name)
     return found
 

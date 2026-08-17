@@ -65,11 +65,7 @@ async def save(token: str, conversation_id: str | None, payload: dict) -> bool:
     try:
         conv_uuid = _as_uuid(conversation_id)
         async with AsyncSessionLocal() as db:
-            db.add(
-                PausedBuild(
-                    token=token, payload=payload, conversation_id=conv_uuid
-                )
-            )
+            db.add(PausedBuild(token=token, payload=payload, conversation_id=conv_uuid))
             await db.commit()
         stored = True
     except Exception:
@@ -78,9 +74,7 @@ async def save(token: str, conversation_id: str | None, payload: dict) -> bool:
     client = await get_client()
     if client is not None:
         try:
-            await client.set(
-                _key(token), json.dumps(payload, default=str), ex=_TTL_S
-            )
+            await client.set(_key(token), json.dumps(payload, default=str), ex=_TTL_S)
             stored = True
         except (RedisError, TypeError):
             logger.warning("paused build could not be written to Valkey", exc_info=True)

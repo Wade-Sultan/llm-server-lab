@@ -315,7 +315,9 @@ def save_turn(
             # message showed it, applied separately below — attaching it here
             # would put a second picker under the finished build.
             metadata: dict | None = None
-            opening_picker = case_options_data if _is_open_picker(case_options_data) else None
+            opening_picker = (
+                case_options_data if _is_open_picker(case_options_data) else None
+            )
             if is_this_turns_reply and (build_data or opening_picker):
                 metadata = {}
                 if build_data:

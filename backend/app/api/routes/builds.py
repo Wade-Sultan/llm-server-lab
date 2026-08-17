@@ -30,9 +30,7 @@ async def _get_shared_build(token: str) -> SharedBuild:
     if not _TOKEN_RE.match(token):
         raise HTTPException(status_code=404, detail="Build not found.")
     async with AsyncSessionLocal() as db:
-        result = await db.execute(
-            select(SharedBuild).where(SharedBuild.token == token)
-        )
+        result = await db.execute(select(SharedBuild).where(SharedBuild.token == token))
         row = result.scalars().first()
     if row is None:
         raise HTTPException(status_code=404, detail="Build not found.")

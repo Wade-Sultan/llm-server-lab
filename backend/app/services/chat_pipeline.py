@@ -1557,9 +1557,7 @@ async def resume_build(
         picked = resolve_case_choice(case_name, state.case_options)
 
         async with AsyncSessionLocal() as db:
-            state = await run_pipeline_post_case(
-                state, db, picked, recorder=recorder
-            )
+            state = await run_pipeline_post_case(state, db, picked, recorder=recorder)
             if state.error:
                 logger.warning("resumed post-case step failed: %s", state.error)
                 return None

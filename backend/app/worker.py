@@ -322,7 +322,9 @@ class Worker:
         if decoded is None:
             message.ack()  # permanent; see _decode
             return
-        turn_id, messages, user, conversation_id, load_test, rewound, case_pick = decoded
+        turn_id, messages, user, conversation_id, load_test, rewound, case_pick = (
+            decoded
+        )
 
         future = asyncio.run_coroutine_threadsafe(
             _handle(
