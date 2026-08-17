@@ -15,7 +15,9 @@ const GUEST_ALLOWED_PATHS = [
 
 // Guest-allowed route trees, matched by prefix. The blog is public marketing
 // content with a post per slug, so it can't be enumerated as exact paths.
-const GUEST_ALLOWED_PREFIXES = ["/blog"]
+// /b is the shared-build page — a share link exists precisely to be opened by
+// someone without an account.
+const GUEST_ALLOWED_PREFIXES = ["/blog", "/b"]
 
 export default function ClientAuthGuard({ children }: { children: ReactNode }) {
   const { user, loading } = useAuth()

@@ -18,6 +18,7 @@ import { Input } from '@/components/ui/input';
 import { Checkbox } from '@/components/ui/checkbox';
 import { ListingsDialog } from '@/components/listings-dialog';
 import { joinCommaList, centsToUsd, formatUsd } from '@/lib/utils';
+import { uploadPartImage } from '@/lib/upload-client';
 import { createCase, updateCase, deleteCase, type CaseFormData } from './actions';
 
 type CaseWithPart = PcCase & { pcPart: PcPart & { listings: (Listing & { amazonListing: AmazonListing | null })[] } };
@@ -26,6 +27,7 @@ const schema = z.object({
   name: z.string().min(1), manufacturer: z.string(), modelNumber: z.string(),
   yearReleased: z.coerce.number().int().nullable(), isActive: z.boolean(),
   streetPriceUsd: z.coerce.number().nullable(),
+  imageUrl: z.string(), imageCredit: z.string(), imageSourceUrl: z.string(), imageLicense: z.string(),
   supportedMoboFormFactorsInput: z.string(), maxGpuLengthMm: z.coerce.number().int().nullable(),
   maxCoolerHeightMm: z.coerce.number().int().nullable(), maxRadiatorFrontMm: z.coerce.number().int().nullable(),
   maxRadiatorTopMm: z.coerce.number().int().nullable(), maxPsuLengthMm: z.coerce.number().int().nullable(),
@@ -46,6 +48,8 @@ function CaseForm({ item, onSuccess }: { item: CaseWithPart | null; onSuccess: (
       modelNumber: item.pcPart.modelNumber ?? '', yearReleased: item.pcPart.yearReleased,
       isActive: item.pcPart.isActive,
       streetPriceUsd: centsToUsd(item.pcPart.streetPriceCents),
+      imageUrl: item.pcPart.imageUrl ?? '', imageCredit: item.pcPart.imageCredit ?? '',
+      imageSourceUrl: item.pcPart.imageSourceUrl ?? '', imageLicense: item.pcPart.imageLicense ?? '',
       supportedMoboFormFactorsInput: joinCommaList(item.supportedMoboFormFactors),
       maxGpuLengthMm: item.maxGpuLengthMm, maxCoolerHeightMm: item.maxCoolerHeightMm,
       maxRadiatorFrontMm: item.maxRadiatorFrontMm, maxRadiatorTopMm: item.maxRadiatorTopMm,
@@ -58,6 +62,7 @@ function CaseForm({ item, onSuccess }: { item: CaseWithPart | null; onSuccess: (
     } : {
       name: '', manufacturer: '', modelNumber: '', yearReleased: null, isActive: true,
       streetPriceUsd: null,
+      imageUrl: '', imageCredit: '', imageSourceUrl: '', imageLicense: '',
       supportedMoboFormFactorsInput: '', maxGpuLengthMm: null, maxCoolerHeightMm: null,
       maxRadiatorFrontMm: null, maxRadiatorTopMm: null, maxPsuLengthMm: null,
       includedFanCount: null, chamberCount: null, frontPanelMesh: false, color: '', size: '',
@@ -68,8 +73,24 @@ function CaseForm({ item, onSuccess }: { item: CaseWithPart | null; onSuccess: (
   });
 
   const [error, setError] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
   const numChange = (onChange: (v: number | null) => void) => (e: React.ChangeEvent<HTMLInputElement>) =>
     onChange(e.target.value === '' ? null : Number(e.target.value));
+
+  async function onImageFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploading(true);
+    setError(null);
+    try {
+      form.setValue('imageUrl', await uploadPartImage(file), { shouldDirty: true });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Image upload failed');
+    } finally {
+      setUploading(false);
+      e.target.value = '';
+    }
+  }
 
   async function onSubmit(data: CaseFormData) {
     setError(null);
@@ -135,6 +156,40 @@ function CaseForm({ item, onSuccess }: { item: CaseWithPart | null; onSuccess: (
             </FormItem>
           )}
         />
+        {/* Product image + attribution. Credit/source/license travel with the
+            image because displaying manufacturer imagery under attribution is
+            the licensing basis for using it — see pc_parts image_* columns. */}
+        <div className="rounded-md border p-3 space-y-3">
+          <div className="flex items-center gap-3">
+            {form.watch('imageUrl') ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={form.watch('imageUrl')} alt="Case" className="h-16 w-16 rounded object-contain bg-muted" />
+            ) : (
+              <div className="h-16 w-16 rounded bg-muted" />
+            )}
+            <div className="space-y-1">
+              <FormLabel>Product Image</FormLabel>
+              <Input type="file" accept="image/*" onChange={onImageFile} disabled={uploading} />
+              {uploading && <p className="text-xs text-muted-foreground">Uploading…</p>}
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            {([ ['imageCredit','Image Credit (e.g. "Image: Fractal Design")'],
+                ['imageSourceUrl','Image Source URL'],
+                ['imageLicense','Image License (e.g. "manufacturer press kit")'],
+                ['imageUrl','Image URL (or upload above)'],
+            ] as [keyof CaseFormData, string][]).map(([name, label]) => (
+              <FormField key={name} control={form.control} name={name}
+                render={({ field }) => (
+                  <FormItem><FormLabel>{label}</FormLabel>
+                    <FormControl><Input {...field} value={field.value as string ?? ''} /></FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            ))}
+          </div>
+        </div>
         <div className="flex gap-6">
           {([ ['frontPanelMesh','Mesh Front'], ['hasGlassPanel','Glass Panel'], ['isActive','Active'] ] as [keyof CaseFormData, string][]).map(([name, label]) => (
             <FormField key={name} control={form.control} name={name}
@@ -171,6 +226,11 @@ export function CaseTable({ data }: { data: CaseWithPart[] }) {
   };
 
   const columns: ColumnDef<CaseWithPart>[] = [
+    { id: 'image', header: '', enableSorting: false,
+      cell: ({ row }) => row.original.pcPart.imageUrl ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={row.original.pcPart.imageUrl} alt="" className="h-8 w-8 rounded object-contain" />
+      ) : null },
     { id: 'name', accessorFn: (r) => r.pcPart.name, header: 'Name', enableSorting: true },
     { id: 'manufacturer', accessorFn: (r) => r.pcPart.manufacturer ?? '', header: 'Manufacturer' },
     { accessorKey: 'size', header: 'Size', enableSorting: true },

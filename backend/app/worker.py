@@ -54,7 +54,18 @@ WORKER_ID = os.getenv("HOSTNAME") or f"worker-{uuid.uuid4().hex[:8]}"
 
 def _decode(
     message: Any,
-) -> tuple[str, list[ChatMessage], dict | None, str | None, bool, bool] | None:
+) -> (
+    tuple[
+        str,
+        list[ChatMessage],
+        dict | None,
+        str | None,
+        bool,
+        bool,
+        tuple[str, str] | None,
+    ]
+    | None
+):
     """Parse a Pub/Sub message into run_turn's arguments, or None if malformed.
 
     A malformed message is permanent: it will decode exactly as badly on every
@@ -85,7 +96,22 @@ def _decode(
         # is the safe direction for the same shape of reason: it degrades to the
         # old append-only behaviour rather than deleting rows on a guess.
         bool(payload.get("rewound")),
+        # (token, case_name) when this turn finishes a build paused at the case
+        # step. Absent on every ordinary turn, and on anything published before
+        # the picker existed — None simply means "run the graph".
+        _decode_case_pick(payload.get("case_pick")),
     )
+
+
+def _decode_case_pick(value: Any) -> tuple[str, str] | None:
+    """[token, case_name] off the wire, or None if it is not that."""
+    if (
+        isinstance(value, list | tuple)
+        and len(value) == 2
+        and all(isinstance(v, str) and v for v in value)
+    ):
+        return (value[0], value[1])
+    return None
 
 
 async def _buffer_gauge_loop(interval_s: int = 60) -> None:
@@ -126,6 +152,7 @@ async def _handle(
     conversation_id: str | None,
     load_test: bool = False,
     rewound: bool = False,
+    case_pick: tuple[str, str] | None = None,
 ) -> None:
     if not await turn_stream.claim(
         turn_id, WORKER_ID, settings.PUBSUB_ACK_EXTENSION_S * 2
@@ -138,7 +165,14 @@ async def _handle(
         # behave identically either way, and the scope exists solely to put the
         # LM chokepoints into stub mode for the duration of the pipeline.
         with load_test_scope(load_test):
-            await run_turn(turn_id, messages, user, conversation_id, rewound=rewound)
+            await run_turn(
+                turn_id,
+                messages,
+                user,
+                conversation_id,
+                rewound=rewound,
+                case_pick=case_pick,
+            )
     except BaseException:
         # Includes CancelledError from a SIGTERM mid-turn. Releasing the claim is
         # what lets the redelivery actually re-run the turn instead of being
@@ -288,10 +322,18 @@ class Worker:
         if decoded is None:
             message.ack()  # permanent; see _decode
             return
-        turn_id, messages, user, conversation_id, load_test, rewound = decoded
+        turn_id, messages, user, conversation_id, load_test, rewound, case_pick = decoded
 
         future = asyncio.run_coroutine_threadsafe(
-            _handle(turn_id, messages, user, conversation_id, load_test, rewound),
+            _handle(
+                turn_id,
+                messages,
+                user,
+                conversation_id,
+                load_test,
+                rewound,
+                case_pick,
+            ),
             self._loop,
         )
         try:

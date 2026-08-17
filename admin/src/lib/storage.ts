@@ -83,3 +83,49 @@ export async function uploadBlogImage(file: File): Promise<string> {
   const base = BASE_URL?.replace(/\/$/, '') ?? `https://storage.googleapis.com/${BUCKET}`;
   return `${base}/${objectName}`;
 }
+
+// Part product images (case picker cards, and eventually other parts). Their
+// own bucket when configured, falling back to the blog bucket under a distinct
+// prefix so nothing breaks before PARTS_MEDIA_BUCKET exists.
+const PARTS_BUCKET = process.env.PARTS_MEDIA_BUCKET || process.env.BLOG_MEDIA_BUCKET;
+const PARTS_BASE_URL = process.env.PARTS_MEDIA_BASE_URL;
+
+/**
+ * Upload a part product image to GCS and return its public URL.
+ *
+ * Same shape as uploadBlogImage (randomised object names, immutable caching)
+ * for the same reasons. Kept separate rather than parameterised because the
+ * two flows are configured independently and should be free to diverge.
+ */
+export async function uploadPartImage(file: File): Promise<string> {
+  if (!PARTS_BUCKET) {
+    throw new UploadError(
+      'Neither PARTS_MEDIA_BUCKET nor BLOG_MEDIA_BUCKET is configured on this server'
+    );
+  }
+
+  const contentType = file.type;
+  if (!ALLOWED_IMAGE_TYPES.includes(contentType as (typeof ALLOWED_IMAGE_TYPES)[number])) {
+    throw new UploadError(`Unsupported image type: ${contentType || 'unknown'}`);
+  }
+  if (file.size > MAX_IMAGE_BYTES) {
+    throw new UploadError(
+      `Image is ${(file.size / 1024 / 1024).toFixed(1)} MB; the limit is ${MAX_IMAGE_BYTES / 1024 / 1024} MB`
+    );
+  }
+
+  const objectName = ['parts', `${randomUUID()}.${EXTENSIONS[contentType]}`].join('/');
+  const buffer = Buffer.from(await file.arrayBuffer());
+
+  await getStorage()
+    .bucket(PARTS_BUCKET)
+    .file(objectName)
+    .save(buffer, {
+      contentType,
+      metadata: { cacheControl: 'public, max-age=31536000, immutable' },
+    });
+
+  const base =
+    PARTS_BASE_URL?.replace(/\/$/, '') ?? `https://storage.googleapis.com/${PARTS_BUCKET}`;
+  return `${base}/${objectName}`;
+}

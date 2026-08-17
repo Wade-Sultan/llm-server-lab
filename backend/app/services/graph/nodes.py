@@ -257,6 +257,13 @@ async def build(state: ChatTurnState) -> dict[str, Any]:
     and a pipeline that emitted steady progress for an hour should still be cut
     off. Cancelling dspy_task is what makes the deadline real; _run_dspy_build
     catches the CancelledError to flush its telemetry and re-raises.
+
+    THE DEADLINE IS STILL ONLY ABOUT COMPUTE. The pipeline stops at the case
+    step to ask the user which case they want, and that wait is not on this
+    clock at all: _run_dspy_build saves the run and returns a PausedAtCase, so
+    the node finishes promptly and the turn ends with a picker on screen. The
+    pick arrives as its own turn (see resume in chat_pipeline / turn_runner),
+    which is what lets the user take an hour without a worker waiting on them.
     """
     writer = get_stream_writer()
     profile = _profile_of(state)
@@ -267,10 +274,16 @@ async def build(state: ChatTurnState) -> dict[str, Any]:
     progress_queue: asyncio.Queue = asyncio.Queue()
     ref_task = asyncio.create_task(cp._get_reference_build(profile, conversation_id))
     dspy_task = asyncio.create_task(
-        cp._run_dspy_build(profile, progress_queue, ref_task, conversation_id)
+        cp._run_dspy_build(
+            profile,
+            progress_queue,
+            ref_task,
+            conversation_id,
+            messages=_messages_of(state),
+        )
     )
 
-    dspy_build: dict | None = None
+    dspy_build: dict | cp.PausedAtCase | None = None
     try:
         async with asyncio.timeout(cp._DSPY_CHAT_TIMEOUT_S):
             while True:
@@ -289,6 +302,12 @@ async def build(state: ChatTurnState) -> dict[str, Any]:
             "DSPy pipeline timed out after %.0fs; using reference build",
             cp._DSPY_CHAT_TIMEOUT_S,
         )
+
+    if isinstance(dspy_build, cp.PausedAtCase):
+        # The pipeline is mid-flight and saved. Show the picker and stop; the
+        # reference build task is left to be reaped rather than cancelled, so
+        # its result is still cached onto the conversation for the resume.
+        return await _pause_for_case(writer, dspy_build, ref_task, profile)
 
     ref_key: str | None = None
     ref_data: dict[str, Any] | None = None
@@ -315,6 +334,12 @@ async def build(state: ChatTurnState) -> dict[str, Any]:
         writer({"type": "reference_estimate", "key": ref_key, "data": ref_data})
 
     payload = cp._build_payload(built, profile)
+    # Every emitted build gets a public snapshot up front, so the card can show
+    # its share link and PDF button immediately. Guarded inside — a failed
+    # snapshot only costs the share actions, never the build.
+    share_token = await cp.create_shared_build(payload, build_key, conversation_id)
+    if share_token is not None:
+        payload["share_token"] = share_token
     writer({"type": "build", "key": build_key, "data": payload})
     writer(
         {
@@ -329,7 +354,67 @@ async def build(state: ChatTurnState) -> dict[str, Any]:
         "build_data": payload,
         "ref_estimate_key": ref_key,
         "ref_estimate_data": ref_data,
+        "build_paused": False,
     }
+
+
+# The line that accompanies the case picker. Written here rather than streamed
+# from a model: it is an instruction about the UI directly below it, not a
+# recommendation, and the picker's own copy already explains the choice. A
+# model call would cost a second of latency and a few cents to paraphrase one
+# sentence, and could drift into describing cases it cannot see.
+_CASE_PROMPT = (
+    "Your parts are picked out. Last choice is the case — here are three that "
+    "all fit your build. Choose one and I'll finish up."
+)
+
+
+async def _pause_for_case(
+    writer: Any,
+    paused: Any,
+    ref_task: asyncio.Task,
+    profile: Any,
+) -> dict[str, Any]:
+    """End the turn showing the case picker, with the pipeline saved.
+
+    The reference build is still awaited and reported, because the conversation
+    caches it (see turn_runner's ref_estimate handling) and the resumed turn
+    will want that cache rather than resolving it a second time.
+    """
+    ref_key: str | None = None
+    ref_data: dict[str, Any] | None = None
+    try:
+        rkey, rbuild, rcached = await ref_task
+        if not rcached:
+            ref_key, ref_data = rkey, cp._build_payload(rbuild, profile)
+    except Exception:
+        logger.debug("reference build task errored while pausing", exc_info=True)
+
+    if ref_key is not None:
+        writer({"type": "reference_estimate", "key": ref_key, "data": ref_data})
+
+    case_options = {
+        "token": paused.token,
+        "chosen": None,
+        "options": paused.options,
+    }
+    writer({"type": "case_options", "data": case_options})
+    for chunk in _CASE_PROMPT.split(" "):
+        # Word by word so the line arrives the way every other assistant
+        # message does; the client renders tokens, not whole messages.
+        writer({"type": "token", "text": chunk + " "})
+
+    return {
+        "build_paused": True,
+        "case_options": case_options,
+        "ref_estimate_key": ref_key,
+        "ref_estimate_data": ref_data,
+    }
+
+
+def should_present(state: ChatTurnState) -> str:
+    """Conditional edge out of `build`. A paused turn has no build to introduce."""
+    return "finalize" if state.get("build_paused") else "present"
 
 
 # --- present ------------------------------------------------------------------

@@ -1,7 +1,14 @@
 """Assembly and caching of the compiled chat turn graph.
 
-    START → collect → route ─┬─ (incomplete) → ask   ──────→ finalize → END
-                             └─ (complete)   → build → present → finalize → END
+    START → collect → route ─┬─ (incomplete) → ask ────────────→ finalize → END
+                             └─ (complete)   → build ─┬─ present → finalize → END
+                                                      └─ (paused) → finalize → END
+
+The `paused` branch is the case picker: the builder stops after choosing three
+cases, saves the pipeline mid-flight (app/services/paused_build.py) and ends
+the turn without a build. There is nothing for `present` to introduce until the
+user picks, and the pick arrives as its own turn, which resumes the pipeline
+outside the graph entirely — see resume_build in chat_pipeline.py.
 
 The builder is one node, not ten. Its ten DSPy steps have their own sequencing,
 their own budget allocation and their own telemetry recorder in
@@ -54,7 +61,9 @@ def build_graph() -> StateGraph:
         "route", nodes.should_build, {"ask": "ask", "build": "build"}
     )
     builder.add_edge("ask", "finalize")
-    builder.add_edge("build", "present")
+    builder.add_conditional_edges(
+        "build", nodes.should_present, {"present": "present", "finalize": "finalize"}
+    )
     builder.add_edge("present", "finalize")
     builder.add_edge("finalize", END)
 

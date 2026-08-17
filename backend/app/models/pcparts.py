@@ -131,6 +131,18 @@ class PCPart(Base):
     )
     used_market_viable = Column(Boolean, nullable=True, server_default="false")
 
+    # Product image, admin-uploaded to GCS (see admin/src/lib/storage.ts). The
+    # credit fields exist because the images are sourced from manufacturer
+    # press/product pages rather than owned outright — every displayed image
+    # carries its attribution, and image_source_url records where it came from
+    # so the licensing basis can be re-checked later.
+    image_url = Column(String(500), nullable=True)
+    image_credit = Column(String(255), nullable=True)  # e.g. "Image: Fractal Design"
+    image_source_url = Column(String(500), nullable=True)
+    image_license = Column(
+        String(100), nullable=True, comment="e.g. 'manufacturer press kit', 'CC BY 4.0'"
+    )
+
     is_active = Column(Boolean, nullable=False, default=True, server_default="true")
 
     created_at = Column(

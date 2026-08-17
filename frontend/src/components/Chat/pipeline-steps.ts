@@ -31,6 +31,9 @@ export const PIPELINE_STEP_MESSAGES: Record<string, string> = {
   psu: "Calculating power supply…",
   case: "Picking case options for you…",
   fans: "Checking airflow…",
+
+  // The turn a case pick starts, which resumes the paused pipeline.
+  resuming: "Finishing your build…",
 }
 
 export function stepMessage(

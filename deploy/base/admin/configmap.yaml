@@ -16,3 +16,13 @@ data:
   # If this key is absent the upload route returns a 400 explaining it is
   # unconfigured — posting still works, image upload does not.
   BLOG_MEDIA_BUCKET: "palladium-blog-media"
+  # Public GCS bucket holding part product images — currently the case photos
+  # the build flow's case picker renders. Written by /api/parts/upload through
+  # the same GSA as the blog bucket, read directly by browsers.
+  #
+  # Separate from the blog bucket because the two have different lifecycles: a
+  # blog image belongs to one post, a part image is catalog data that outlives
+  # any post and is served on every build that recommends the part. Falls back
+  # to BLOG_MEDIA_BUCKET (under a `parts/` prefix) when unset, so the upload
+  # route works before this bucket exists.
+  PARTS_MEDIA_BUCKET: "palladium-parts-media"

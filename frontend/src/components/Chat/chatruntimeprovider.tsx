@@ -20,10 +20,11 @@ import {
 import { toast } from "sonner"
 
 import { BuildCard } from "@/components/assistant-ui/build-card"
+import { CaseOptionsCard } from "@/components/assistant-ui/case-card"
 import { getAccessToken } from "@/hooks/useAuth"
 import { usePipelineStatusStore } from "@/hooks/usePipelineStatus"
 import type { FeedbackRating } from "@/lib/feedback"
-import type { BuildData } from "@/types/build"
+import type { BuildData, CaseOptionsData } from "@/types/build"
 import {
   type ChatAgentState,
   commandsToMessages,
@@ -34,6 +35,10 @@ import {
 import { type AgentTransition, diffAgentState } from "./transitions"
 
 const BuildDataUI = makeAssistantDataUI({ name: "build", render: BuildCard })
+const CaseOptionsUI = makeAssistantDataUI({
+  name: "case_options",
+  render: CaseOptionsCard,
+})
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"
 
@@ -71,6 +76,23 @@ const ChatConversationContext = createContext<ChatConversation | null>(null)
 
 export function useChatConversation() {
   return useContext(ChatConversationContext)
+}
+
+/**
+ * Renders children as belonging to no conversation.
+ *
+ * Every route under (main) mounts a chat runtime, so a page that merely
+ * *reuses* a chat component — the shared-build page rendering BuildCard — sits
+ * inside a ChatConversationContext for a conversation that has nothing to do
+ * with it, and in the shared case does not exist at all. Without this, the
+ * card offers feedback thumbs that POST a rating against a random id.
+ */
+export function OutsideConversation({ children }: { children: ReactNode }) {
+  return (
+    <ChatConversationContext.Provider value={null}>
+      {children}
+    </ChatConversationContext.Provider>
+  )
 }
 
 interface ChatRuntimeProviderProps {
@@ -136,7 +158,7 @@ function ConversationLoader({
             role: string
             content: string | null
             created_at: string
-            metadata?: { build?: BuildData }
+            metadata?: { build?: BuildData; case_options?: CaseOptionsData }
           }>
         ).filter((m) => m.role === "user" || m.role === "assistant")
 
@@ -156,6 +178,9 @@ function ConversationLoader({
               role: m.role as "user" | "assistant",
               content: m.content ?? "",
               build: m.metadata?.build ?? null,
+              // Persisted with `chosen` always set (see save_turn), so history
+              // renders a locked picker, never one still soliciting a click.
+              case_options: m.metadata?.case_options ?? null,
             })),
             pipeline: null,
           },
@@ -303,6 +328,7 @@ function ChatRuntimeMount({
     <ChatConversationContext.Provider value={conversation}>
       <AssistantRuntimeProvider runtime={runtime}>
         <BuildDataUI />
+        <CaseOptionsUI />
         <AgentStateSync />
         {children}
       </AssistantRuntimeProvider>

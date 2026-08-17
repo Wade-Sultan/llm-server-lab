@@ -7,7 +7,7 @@ import type {
 import { unstable_createMessageConverter as createMessageConverter } from "@assistant-ui/react"
 import type { ReadonlyJSONValue } from "assistant-stream/utils"
 
-import type { BuildData } from "@/types/build"
+import type { BuildData, CaseOptionsData } from "@/types/build"
 import { stepMessage } from "./pipeline-steps"
 
 /**
@@ -29,6 +29,8 @@ export interface ChatMessageState {
   role: "user" | "assistant"
   content: string
   build?: BuildData | null
+  /** The mid-build case picker, on the turn that asked. See types/build.ts. */
+  case_options?: CaseOptionsData | null
 }
 
 export interface ChatAgentState {
@@ -52,18 +54,32 @@ export const initialAgentState: ChatAgentState = {
  */
 const messageConverter = createMessageConverter<ChatMessageState>(
   (message): ThreadMessageLike => {
-    if (message.role !== "assistant" || !message.build) {
+    if (
+      message.role !== "assistant" ||
+      (!message.build && !message.case_options)
+    ) {
       return { role: message.role, content: message.content }
     }
 
-    const buildPart: DataMessagePart<BuildData> = {
-      type: "data",
-      name: "build",
-      data: message.build,
+    // Picker above the card: the options appear mid-turn, before the build
+    // exists, and keeping that order on replay preserves the story of the turn.
+    const parts: (
+      | DataMessagePart<CaseOptionsData>
+      | DataMessagePart<BuildData>
+    )[] = []
+    if (message.case_options) {
+      parts.push({
+        type: "data",
+        name: "case_options",
+        data: message.case_options,
+      })
+    }
+    if (message.build) {
+      parts.push({ type: "data", name: "build", data: message.build })
     }
     return {
       role: "assistant",
-      content: [{ type: "text", text: message.content }, buildPart],
+      content: [{ type: "text", text: message.content }, ...parts],
     }
   },
 )

@@ -18,6 +18,10 @@ model PcPart {
   isActive         Boolean  @default(true) @map("is_active")
   msrpCents        Int?     @map("msrp_cents")
   streetPriceCents Int?     @map("street_price_cents")
+  imageUrl         String?  @map("image_url")
+  imageCredit      String?  @map("image_credit")
+  imageSourceUrl   String?  @map("image_source_url")
+  imageLicense     String?  @map("image_license")
   createdAt        DateTime @default(now()) @map("created_at")
   updatedAt        DateTime @updatedAt @map("updated_at")
 

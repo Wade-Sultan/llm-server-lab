@@ -108,6 +108,7 @@ def test_the_users_own_message_is_put_into_state_by_the_run(monkeypatch):
         "role": "user",
         "content": "I want a gaming PC for 1440p",
         "build": None,
+        "case_options": None,
     }
 
 
@@ -254,6 +255,83 @@ def test_a_build_stays_on_the_turn_that_produced_it(monkeypatch):
     assert state["messages"][build_index]["build"] == {"label": "Custom Build"}
     assert state["messages"][-1]["content"] == "Yes."
     assert state["messages"][-1]["build"] is None
+
+
+def test_case_options_land_on_the_streaming_message(monkeypatch):
+    """The picker hangs off the turn that asked, like the build does."""
+    opening = {"token": "tok-1", "chosen": None, "options": [{"name": "NZXT H5"}]}
+    state = _drive(monkeypatch, {"type": "case_options", "data": opening})
+
+    assert state["messages"][-1]["case_options"] == opening
+
+
+def test_a_resolved_picker_updates_the_message_that_showed_it(monkeypatch):
+    """The pick is a separate turn, and its `chosen` belongs to the EARLIER
+    message — the one holding the cards being clicked — not to the new message
+    the finished build streams into. Targeting the current message instead
+    would render a second picker under the build."""
+    options = [{"name": "NZXT H5"}, {"name": "Fractal North"}]
+    state = _drive(
+        monkeypatch,
+        {
+            "type": "case_options",
+            "data": {"token": "tok-1", "chosen": None, "options": options},
+        },
+        {"type": "token", "text": "Pick a case."},
+    )
+    picker_index = len(state["messages"]) - 1
+
+    # The turn the pick starts, on the same conversation.
+    state = _drive(
+        monkeypatch,
+        {
+            "type": "case_options",
+            "data": {"token": "tok-1", "chosen": "Fractal North", "options": options},
+        },
+        {"type": "build", "data": {"label": "Custom Build"}},
+        {"type": "token", "text": "Here it is."},
+        state=state,
+    )
+
+    assert state["messages"][picker_index]["case_options"]["chosen"] == "Fractal North"
+    # ...and the new message carries the build alone, with no picker of its own.
+    assert state["messages"][-1]["build"] == {"label": "Custom Build"}
+    assert state["messages"][-1]["case_options"] is None
+
+
+def test_a_picker_for_an_unknown_token_lands_on_the_current_message(monkeypatch):
+    """Falling back keeps a resolved picker visible rather than dropping it
+    when the message that showed it is somehow absent."""
+    state = _drive(
+        monkeypatch,
+        {
+            "type": "case_options",
+            "data": {"token": "tok-9", "chosen": "NZXT H5", "options": []},
+        },
+    )
+
+    assert state["messages"][-1]["case_options"]["chosen"] == "NZXT H5"
+
+
+def test_resuming_clears_stale_case_options_before_the_replay(monkeypatch):
+    """The replay rebuilds from zero into the reused trailing message, so
+    whatever picker the client already had must be wiped first — same contract
+    as `content` and `build`."""
+    stale = {
+        "role": "assistant",
+        "content": "partial",
+        "build": None,
+        "case_options": {"token": "tok-0", "chosen": None, "options": []},
+    }
+    state = _drive(
+        monkeypatch,
+        {"type": "token", "text": "rebuilt"},
+        state={"messages": [stale], "pipeline": None},
+        resuming=True,
+    )
+
+    assert state["messages"][-1]["content"] == "rebuilt"
+    assert state["messages"][-1]["case_options"] is None
 
 
 def test_the_progress_line_is_cleared_even_when_a_turn_dies_mid_build(monkeypatch):

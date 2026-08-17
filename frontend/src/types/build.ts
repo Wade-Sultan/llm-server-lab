@@ -33,4 +33,40 @@ export interface BuildData {
   description: string
   total_approx: number
   parts: RecommendedPart[]
+  /**
+   * Token of the public shared_builds snapshot created alongside this build.
+   * Backs the "copy link" and "download PDF" actions. Absent on builds
+   * generated before the feature (and when the snapshot write failed).
+   */
+  share_token?: string | null
+}
+
+/**
+ * One of the three cases the pipeline offers mid-build. Enriched from the
+ * catalog (see _enrich_case_options in backend chat_pipeline.py); everything
+ * beyond name + reason is best-effort and may be null when the model named a
+ * case the catalog couldn't resolve.
+ */
+export interface CaseOption {
+  name: string
+  reason: string
+  part_id: string
+  /** Street price PER UNIT in cents, like RecommendedPart.approx_price. */
+  approx_price: number | null
+  size: string | null
+  image_url: string | null
+  /** Attribution line for the image, e.g. "Image: Fractal Design". */
+  image_credit: string | null
+  image_source_url: string | null
+}
+
+/**
+ * The case picker's wire shape. `chosen` is null while the pipeline is
+ * waiting; once set (by the user's pick or the timeout fallback) the picker is
+ * closed — including on history replays, which only ever see the closed state.
+ */
+export interface CaseOptionsData {
+  token: string
+  chosen: string | null
+  options: CaseOption[]
 }

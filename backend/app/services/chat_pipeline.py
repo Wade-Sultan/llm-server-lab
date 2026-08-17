@@ -7,8 +7,8 @@ import re
 import threading
 import time
 import uuid
-from collections.abc import AsyncIterator
-from typing import Any
+from collections.abc import AsyncIterator, Callable
+from typing import Any, NamedTuple
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
@@ -1314,33 +1314,114 @@ async def _resolve_drift_scaled_budget(profile: BuildProfile) -> int:
         return _budget_for(profile)
 
 
+async def _enrich_case_options(options: list[dict], db) -> list[dict]:
+    """Resolve the 3 chosen case names against the catalog for the picker cards.
+
+    The pipeline's options carry only {name, reason} — what the LLM decided.
+    The cards additionally need identity (part_id), the street price, the size
+    and the image with its attribution, all of which live on the Case row. A
+    name the catalog can't resolve (the model does occasionally paraphrase)
+    still yields a card: name and reason are the load-bearing fields, and the
+    picker renders missing images and prices gracefully.
+    """
+    from app.crud.components import get_case_by_name
+
+    enriched: list[dict] = []
+    for option in options:
+        name = option.get("name") or ""
+        case = await get_case_by_name(db, name) if name else None
+        enriched.append(
+            {
+                "name": name,
+                "reason": option.get("reason") or "",
+                "part_id": str(case.id) if case is not None else "",
+                "approx_price": case.street_price_cents if case is not None else None,
+                "size": case.size if case is not None else None,
+                "image_url": case.image_url if case is not None else None,
+                "image_credit": case.image_credit if case is not None else None,
+                "image_source_url": (
+                    case.image_source_url if case is not None else None
+                ),
+            }
+        )
+    return enriched
+
+
+def resolve_case_choice(submitted: str | None, options: list[dict]) -> str:
+    """Which case the build actually uses, given what came back with the pick.
+
+    A name outside the offered three is refused and the best-value option used
+    instead. The endpoint that accepts picks cannot know which three cases a
+    given build proposed — the options live in the paused payload, not in the
+    request — so validating happens here, against what was actually generated.
+    Anything else is a name the picker UI could not have produced (a stale
+    token replayed against a newer build, a hand-crafted request), and obeying
+    it would let a caller steer a build into a case the pipeline never checked
+    for fit.
+
+    `submitted` is None only when a resume arrives with no name at all, which
+    the same fallback covers.
+    """
+    valid = {o["name"] for o in options if o.get("name")}
+    if submitted in valid:
+        return submitted  # type: ignore[return-value]
+    if submitted is not None:
+        logger.warning("case choice %r not among offered options", submitted)
+    return options[0]["name"]
+
+
+# Marks a build that stopped at the case step rather than finishing. Returned
+# by _run_dspy_build in place of a payload, so the `build` node can tell "the
+# pipeline is waiting on the user" apart from "the pipeline failed" — the
+# first ends the turn with a picker, the second falls back to the reference
+# build.
+class PausedAtCase:
+    """The pipeline stopped to ask for a case. Carries what the turn still
+    has to emit: the options to show, and the token that resumes them."""
+
+    __slots__ = ("token", "options")
+
+    def __init__(self, token: str, options: list[dict]) -> None:
+        self.token = token
+        self.options = options
+
+
 async def _run_dspy_build(
     profile: BuildProfile,
     progress_queue: asyncio.Queue,
     ref_task: asyncio.Task,
     conversation_id: str | None = None,
-) -> dict | None:
+    messages: list[ChatMessage] | None = None,
+) -> dict | PausedAtCase | None:
     """
-    Run the full DSPy pipeline for a chat turn on its own DB session.
+    Run the DSPy pipeline as far as the case step, on its own DB session.
 
-    Returns a build payload dict shaped like a reference Build, or None on any
-    failure — the caller falls back to the reference build. Always enqueues
-    _PIPELINE_DONE last. Never raises.
+    Three outcomes, and the caller treats each differently:
+      PausedAtCase  the pipeline reached the case step and saved itself. The
+                    turn ends showing the picker; the user's pick resumes it.
+      None          something failed. The caller falls back to the reference
+                    build, exactly as before.
+      dict          not produced here any more — a completed build now only
+                    ever comes out of the resume (see resume_build below).
 
-    ref_task is the reference build being resolved in parallel. On success it is
-    recorded onto the same build_sessions row as the DSPy run (via the recorder),
-    so a completed run carries both the shown DSPy build and the reference build.
+    Always enqueues _PIPELINE_DONE last. Never raises.
 
-    The pipeline's case step returns 3 options meant for a user round-trip;
-    the chat flow has no case-picker UI yet, so the best-value option (option 1)
-    is auto-selected. All 3 options and their reasons are still recorded.
+    ref_task is the reference build being resolved in parallel. It is recorded
+    onto the same build_sessions row as the DSPy run via the recorder, which
+    means it has to be awaited *before* the pause: the recorder is serialized
+    into the paused payload, and a reference build attached after that snapshot
+    would not survive into the resumed half.
+
+    WHY THE PAUSE IS PERSISTED RATHER THAN WAITED OUT. Nine LLM-backed
+    decisions have been made by this point, and the tenth needs a human. Waiting
+    inline would hold a worker thread and a Pub/Sub lease for as long as the
+    user takes, and still strand anyone who answered late. Writing the state to
+    Valkey and Postgres instead (services/paused_build.py) makes the wait free
+    and effectively unbounded — the pick simply picks the pipeline back up.
     """
     from app.models.build_session import BuildSessionStatus
-    from app.services.recommender.dspy_pipeline import (
-        PIPELINE_VERSION,
-        run_pipeline,
-        run_pipeline_post_case,
-    )
+    from app.services import paused_build
+    from app.services.recommender.dspy_pipeline import PIPELINE_VERSION, run_pipeline
     from app.services.recommender.recording import BuildRecorder
 
     request = _profile_to_build_request(
@@ -1370,22 +1451,43 @@ async def _run_dspy_build(
                 recorder.finish(BuildSessionStatus.ERROR)
                 return None
 
-            case_name = state.case_options[0]["name"]
-            # Both builds succeeded far enough to record together: attach the
-            # reference build before post_case finishes (flushes) the recorder.
+            options = await _enrich_case_options(state.case_options, db)
+            # The pipeline session id doubles as the pick token: unique per
+            # run, already minted, and meaningless outside this build.
+            token = state.session_id or str(uuid.uuid4())
+
+            # Awaited before the snapshot, not after — see the docstring.
             await _attach_reference_build(recorder, ref_task)
-            state = await run_pipeline_post_case(
-                state, db, case_name, recorder=recorder
+
+            saved = await paused_build.save(
+                token,
+                conversation_id,
+                {
+                    "state": state.to_dict(),
+                    "recorder": recorder.to_dict(),
+                    "profile": profile.model_dump(),
+                    "options": options,
+                    "conversation_id": conversation_id,
+                    # The conversation as it read at the pause. The resume needs
+                    # it to write the build's lead-in in context, and reading it
+                    # back from Postgres instead would miss a guest's turns,
+                    # which are never persisted.
+                    "messages": [m.model_dump() for m in (messages or [])],
+                },
             )
-            if state.error:
+            if not saved:
+                # Neither store accepted the pause, so no pick could ever be
+                # acted on. Showing a picker here would be a lie; fall back to
+                # the reference build like any other failure.
                 logger.warning(
-                    "DSPy post-case step failed; using reference build: %s", state.error
+                    "paused build could not be persisted; using reference build"
                 )
+                recorder.finish(BuildSessionStatus.ERROR)
                 return None
 
-            return await _assemble_dspy_build(state, db)
+            return PausedAtCase(token=token, options=options)
     except asyncio.CancelledError:
-        # Timed out and cancelled by run_chat_turn — flush telemetry as error.
+        # Cancelled by run_chat_turn's deadline, or a worker shutting down.
         recorder.finish(BuildSessionStatus.ERROR)
         raise
     except Exception:
@@ -1393,6 +1495,88 @@ async def _run_dspy_build(
         return None
     finally:
         progress_queue.put_nowait(_PIPELINE_DONE)
+
+
+class ResumedBuild(NamedTuple):
+    """What a resumed pipeline produced, for the turn that resumed it."""
+
+    build: dict
+    profile: BuildProfile
+    messages: list[ChatMessage]
+    case_options: dict
+    session_id: str
+
+
+async def resume_build(
+    token: str,
+    case_name: str,
+    conversation_id: str | None = None,
+    progress_callback: Callable[[str, str], None] | None = None,
+) -> ResumedBuild | None:
+    """Finish a build that stopped at the case step.
+
+    Claims the paused payload (at most one caller wins, and only from the
+    conversation that paused it — see paused_build.load_and_claim), restores
+    the pipeline exactly as it stood, runs the remaining steps with the user's
+    case, and assembles the build.
+
+    Returns None when the pause cannot be claimed: an unknown token, a pick
+    that lost the race with another pick, one aimed at a different
+    conversation, or a payload that outlived both stores. The caller tells the
+    user rather than silently building something else — every one of those
+    means this particular build is gone, and quietly substituting a different
+    one would show parts they never chose a case for.
+    """
+    from app.models.build_session import BuildSessionStatus
+    from app.services import paused_build
+    from app.services.recommender.dspy_pipeline import (
+        DSPyBuildState,
+        run_pipeline_post_case,
+    )
+    from app.services.recommender.recording import BuildRecorder
+
+    payload = await paused_build.load_and_claim(token, conversation_id)
+    if payload is None:
+        logger.info("no claimable paused build for token %s", token)
+        return None
+
+    def _progress(step: str, message: str) -> None:
+        if progress_callback is not None:
+            progress_callback(step, message)
+
+    recorder: Any = None
+    try:
+        state = DSPyBuildState.from_dict(payload["state"], progress_callback=_progress)
+        recorder = BuildRecorder.restore(payload["recorder"])
+        profile = BuildProfile(**payload["profile"])
+        options = payload.get("options") or []
+        messages = [ChatMessage(**m) for m in payload.get("messages") or []]
+
+        # Validated against the options this build actually generated, which
+        # only exist here — see resolve_case_choice.
+        picked = resolve_case_choice(case_name, state.case_options)
+
+        async with AsyncSessionLocal() as db:
+            state = await run_pipeline_post_case(
+                state, db, picked, recorder=recorder
+            )
+            if state.error:
+                logger.warning("resumed post-case step failed: %s", state.error)
+                return None
+            build = await _assemble_dspy_build(state, db)
+
+        return ResumedBuild(
+            build=build,
+            profile=profile,
+            messages=messages,
+            case_options={"token": token, "chosen": picked, "options": options},
+            session_id=state.session_id or token,
+        )
+    except Exception:
+        logger.exception("resuming a paused build crashed")
+        if recorder is not None:
+            recorder.finish(BuildSessionStatus.ERROR)
+        return None
 
 
 async def _load_cached_reference_build(
@@ -1471,6 +1655,52 @@ def _build_payload(build: Build, profile: BuildProfile) -> dict:
     }
 
 
+async def create_shared_build(
+    payload: dict, build_key: str | None, conversation_id: str | None
+) -> str | None:
+    """Persist a public snapshot of this build and return its share token.
+
+    Called from the build node for every emitted build — DSPy and reference
+    alike — so the card can always offer a link and a PDF. The `profile` key is
+    stripped from the stored copy: it paraphrases what the user told the intake
+    chat, and a share link should republish the build, not the conversation.
+
+    Returns None on any failure. A build is never worth failing over its share
+    link; the card simply renders without the share actions.
+    """
+    from app.models.shared_build import SharedBuild
+
+    snapshot = {k: v for k, v in payload.items() if k != "profile"}
+    conv_uuid: uuid.UUID | None = None
+    if conversation_id:
+        try:
+            conv_uuid = uuid.UUID(conversation_id)
+        except ValueError:
+            # Guest turns pass a scratch "turn:<uuid>" id — no row to point at.
+            conv_uuid = None
+
+    from app.models.shared_build import new_share_token
+
+    # Minted here rather than left to the column default: reading it back off
+    # the row after commit would touch an expired attribute on an async session.
+    token = new_share_token()
+    try:
+        async with AsyncSessionLocal() as db:
+            db.add(
+                SharedBuild(
+                    token=token,
+                    build=snapshot,
+                    build_key=build_key,
+                    conversation_id=conv_uuid,
+                )
+            )
+            await db.commit()
+            return token
+    except Exception:
+        logger.warning("could not create shared build snapshot", exc_info=True)
+        return None
+
+
 # --- Public API — orchestrate the full flow -----------------------------------
 
 
@@ -1547,6 +1777,11 @@ async def run_chat_turn(
         "build_data": None,
         "ref_estimate_key": None,
         "ref_estimate_data": None,
+        # A pause belongs to the turn that paused. Left set, a later turn that
+        # reached the builder and finished would route to `finalize` on a stale
+        # flag and never present the build it just made.
+        "build_paused": False,
+        "case_options": None,
     }
 
     async for _mode, event in graph.astream(initial, config, stream_mode=["custom"]):
@@ -1560,6 +1795,108 @@ async def run_chat_turn(
     checkpoint_event = await _checkpoint_event(graph, config)
     if checkpoint_event is not None:
         yield checkpoint_event
+
+
+async def resume_chat_turn(
+    token: str,
+    case_name: str,
+    conversation_id: str | None = None,
+) -> AsyncIterator[dict]:
+    """Finish a build the user has just chosen a case for.
+
+    Yields the same event vocabulary as run_chat_turn, so every consumer —
+    the transport adapter, the turn runner's persistence, the Valkey stream —
+    works on a resumed turn without knowing it is one.
+
+    DELIBERATELY NOT A GRAPH RUN. The graph exists to decide what a turn should
+    do from the conversation; that decision was already made and acted on by
+    the turn that paused. Re-entering it would re-extract the profile and
+    re-route, spending two LLM calls to arrive back at "build" — and risking a
+    different answer than the pipeline that is already half-finished. So this
+    drives the remaining pipeline steps directly. The accumulated graph state
+    (`profile`, `asked_fields`) is untouched and stays valid for the next turn.
+
+    A resume that cannot be claimed yields an apology and nothing else: the
+    parts were never shown, but the case options were, and quietly building
+    something different would replace a choice the user made with one they
+    did not.
+    """
+    from app.services.graph.state import new_usage
+
+    progress: asyncio.Queue = asyncio.Queue()
+
+    def _progress(step: str, message: str) -> None:
+        progress.put_nowait({"type": "progress", "step": step, "message": message})
+
+    yield {"type": "progress", "step": "resuming", "message": "Finishing your build…"}
+
+    resumed = await resume_build(
+        token,
+        case_name,
+        conversation_id=conversation_id,
+        progress_callback=_progress,
+    )
+
+    # Drain whatever the pipeline emitted while it ran. Collected rather than
+    # interleaved because resume_build is awaited as a unit; the steps left
+    # after the case are short enough that ordering them live buys nothing.
+    while not progress.empty():
+        yield progress.get_nowait()
+
+    if resumed is None:
+        yield {
+            "type": "token",
+            "text": (
+                "That build session has expired, so I can't finish it from here. "
+                "Tell me what you're building and I'll put together a fresh one."
+            ),
+        }
+        yield {"type": "usage", **new_usage()}
+        yield {"type": "done"}
+        return
+
+    # Locks the picker on the message that showed it — matched by token, so it
+    # lands on the earlier turn rather than this one. See transport._apply_event.
+    yield {"type": "case_options", "data": resumed.case_options}
+
+    payload = _build_payload_from_dict(resumed.build, resumed.profile)
+    share_token = await create_shared_build(payload, "custom_dspy", conversation_id)
+    if share_token is not None:
+        payload["share_token"] = share_token
+    yield {"type": "build", "key": "custom_dspy", "data": payload}
+    yield {
+        "type": "progress",
+        "step": "presenting",
+        "message": "Preparing your recommendation…",
+    }
+
+    usage = new_usage()
+    sink: dict[str, Any] = {}
+    async for chunk in stream_recommendation(
+        resumed.messages,
+        resumed.profile,
+        "custom_dspy",
+        payload,  # type: ignore[arg-type]
+        usage_sink=sink,
+        session_id=resumed.session_id,
+    ):
+        yield {"type": "token", "text": chunk}
+
+    await _finalize_usage(sink)
+    _merge_usage(usage, sink)
+    yield {"type": "usage", **usage}
+    yield {"type": "done"}
+
+
+def _build_payload_from_dict(build: dict, profile: BuildProfile) -> dict:
+    """_build_payload for an already-assembled dict rather than a Build."""
+    return {
+        "label": build["label"],
+        "description": build["description"],
+        "total_approx": build["total_approx"],
+        "parts": build["parts"],
+        "profile": profile.model_dump(),
+    }
 
 
 async def _checkpoint_event(graph, config: dict) -> dict | None:

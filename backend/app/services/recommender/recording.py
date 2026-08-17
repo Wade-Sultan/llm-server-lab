@@ -242,6 +242,67 @@ class BuildRecorder:
         self.reference_build_key: str | None = None
         self.reference_build: dict | None = None
 
+    # -- surviving a pause -------------------------------------------------
+
+    def to_dict(self) -> dict:
+        """A JSON-safe snapshot, so a run paused at the case step can be
+        finished later as ONE build_sessions row rather than two.
+
+        Carrying the recorder across the pause is not merely tidier than
+        flushing twice — it is the only thing that works. The drain upserts
+        with `on_conflict_do_nothing` on the session id (see _drain), so a row
+        written at pause time would win permanently and the completed build's
+        decisions would be silently dropped.
+        """
+        return {
+            "session_id": str(self.session_id),
+            "started_at": self.started_at,
+            "conversation_id": (
+                str(self.conversation_id) if self.conversation_id else None
+            ),
+            "pipeline_version": self.pipeline_version,
+            "user_id": str(self.user_id) if self.user_id else None,
+            "input_profile": self.input_profile,
+            "budget_cents": self.budget_cents,
+            "decisions": [asdict(d) for d in self._decisions],
+            "catalog_requirements": self.catalog_requirements,
+            "reference_build_key": self.reference_build_key,
+            "reference_build": self.reference_build,
+        }
+
+    @classmethod
+    def restore(cls, data: dict) -> BuildRecorder:
+        """Rebuild a recorder from to_dict().
+
+        Bypasses __init__ rather than feeding it stand-in arguments, because
+        __init__'s job is to *start* a run — it mints a session id and stamps
+        started_at, both of which would overwrite the values being restored.
+        Its two side effects are re-applied deliberately below: the resume runs
+        in a different process than the pause, and its log lines and spans
+        should carry the same build session id as the half that came before.
+        """
+        recorder = cls.__new__(cls)
+        recorder.session_id = uuid.UUID(data["session_id"])
+        recorder.started_at = data["started_at"]
+        conversation_id = data.get("conversation_id")
+        recorder.conversation_id = (
+            uuid.UUID(conversation_id) if conversation_id else None
+        )
+        recorder.pipeline_version = data["pipeline_version"]
+        recorder.user_id = data.get("user_id")
+        recorder.input_profile = data.get("input_profile") or {}
+        recorder.budget_cents = data.get("budget_cents")
+        recorder._decisions = [
+            _DecisionRecord(**d) for d in data.get("decisions") or []
+        ]
+        recorder.catalog_requirements = data.get("catalog_requirements")
+        recorder.reference_build_key = data.get("reference_build_key")
+        recorder.reference_build = data.get("reference_build")
+
+        set_build_session_id(str(recorder.session_id))
+        attach_run_metadata(build_session_id=recorder.session_id)
+        return recorder
+
     def record_decision(
         self,
         *,

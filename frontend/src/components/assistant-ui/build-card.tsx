@@ -1,7 +1,12 @@
 "use client"
 
 import type { DataMessagePartComponent } from "@assistant-ui/react"
-import { ThumbsDownIcon, ThumbsUpIcon } from "lucide-react"
+import {
+  FileDownIcon,
+  LinkIcon,
+  ThumbsDownIcon,
+  ThumbsUpIcon,
+} from "lucide-react"
 import { useEffect, useState } from "react"
 import type { IconType } from "react-icons"
 import { FaAmazon, FaEbay } from "react-icons/fa6"
@@ -23,6 +28,7 @@ import {
   setBuildFeedback,
 } from "@/lib/feedback"
 import { fetchListingsByPart, type PartListings } from "@/lib/listings"
+import { sharedBuildPdfUrl, sharedBuildUrl } from "@/lib/share"
 import { cn } from "@/lib/utils"
 import type { BuildData } from "@/types/build"
 
@@ -178,6 +184,50 @@ function usePartListings(parts: BuildData["parts"]) {
   return listings
 }
 
+/**
+ * Copy-link and PDF actions for a build that has a public snapshot. Both are
+ * addressed by the share token; builds generated before the snapshot feature
+ * (and turns whose snapshot write failed) have none, and render no actions
+ * rather than dead buttons.
+ */
+function ShareActions({ shareToken }: { shareToken: string }) {
+  const copyLink = async () => {
+    try {
+      await navigator.clipboard.writeText(sharedBuildUrl(shareToken))
+      toast.success("Build link copied")
+    } catch {
+      toast.error("Couldn't copy the link")
+    }
+  }
+
+  return (
+    <div className="flex shrink-0 items-center gap-1">
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-sm"
+        aria-label="Copy link to this build"
+        title="Copy link to this build"
+        onClick={copyLink}
+      >
+        <LinkIcon className="size-4" />
+      </Button>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-sm"
+        aria-label="Download this build as PDF"
+        title="Download this build as PDF"
+        asChild
+      >
+        <a href={sharedBuildPdfUrl(shareToken)} download>
+          <FileDownIcon className="size-4" />
+        </a>
+      </Button>
+    </div>
+  )
+}
+
 export const BuildCard: DataMessagePartComponent<BuildData> = (props) => {
   const data = props.data as BuildData
   const listings = usePartListings(data.parts)
@@ -275,7 +325,10 @@ export const BuildCard: DataMessagePartComponent<BuildData> = (props) => {
         <p className="text-muted-foreground text-xs">
           *Based on approximate prices derived from Google Shopping
         </p>
-        <BuildFeedback buildKey={data.key} />
+        <div className="flex items-center gap-1">
+          {data.share_token && <ShareActions shareToken={data.share_token} />}
+          <BuildFeedback buildKey={data.key} />
+        </div>
       </div>
     </div>
   )

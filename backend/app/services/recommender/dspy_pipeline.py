@@ -862,6 +862,64 @@ class DSPyBuildState:
     # Reconsideration thresholds — surfaced to user in the build card
     thresholds: dict[str, str] = field(default_factory=dict)
 
+    # -- pausing at the case step ---------------------------------------------
+    # The pipeline stops after the case step and waits for the user to pick,
+    # which can take minutes or days. Rather than hold a worker open, the state
+    # is serialized here and restored when the pick arrives (see
+    # app/services/paused_build.py).
+
+    def to_dict(self) -> dict:
+        """A JSON-safe snapshot of every decision made so far.
+
+        Driven off `dataclasses.fields` rather than an explicit field list, so
+        a step added to the pipeline later is carried across the pause without
+        anyone having to remember this method exists. The two fields that
+        cannot survive a JSON round trip are named explicitly below, and both
+        are re-supplied on the far side rather than stored:
+
+        `progress_callback` is a closure over the resuming turn's stream — the
+        resume attaches its own, because the stream a paused build was emitting
+        into is long gone.
+
+        `catalog_requirements` is dropped, not serialized. Nothing after the
+        case step reads it: it exists to shape the prompts of the steps that
+        already ran, and the recorder took its own dict copy before the first
+        one (`set_catalog_requirements`), so the telemetry keeps it regardless.
+        """
+        from dataclasses import fields as dataclass_fields
+
+        skip = {"request", "progress_callback", "catalog_requirements"}
+        data = {
+            f.name: getattr(self, f.name)
+            for f in dataclass_fields(self)
+            if f.name not in skip
+        }
+        data["request"] = self.request.model_dump(mode="json")
+        return data
+
+    @classmethod
+    def from_dict(
+        cls,
+        data: dict,
+        progress_callback: Callable[[str, str], None] | None = None,
+    ) -> DSPyBuildState:
+        """Rebuild a paused state. Unknown keys are ignored, so a payload
+        written by an older deploy still restores under a newer one — it simply
+        arrives with defaults for whatever was added since."""
+        from dataclasses import fields as dataclass_fields
+
+        known = {f.name for f in dataclass_fields(cls)}
+        payload = {
+            k: v
+            for k, v in data.items()
+            if k in known and k not in ("request", "progress_callback")
+        }
+        return cls(
+            request=BuildRequest(**data["request"]),
+            progress_callback=progress_callback,
+            **payload,
+        )
+
 
 # Stand-in for an unstated form factor, applied only where a *physical size* is
 # required. UserPreferences.form_factor defaults to "no_preference", which is a

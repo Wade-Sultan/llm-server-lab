@@ -31,6 +31,7 @@ import time
 import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from typing import Any
 
 from sqlalchemy import select
 
@@ -41,7 +42,7 @@ from app.core.turn_metrics import (
 )
 from app.schemas.chat import ChatMessage
 from app.services import chat_buffer, turn_stream
-from app.services.chat_pipeline import run_chat_turn
+from app.services.chat_pipeline import resume_chat_turn, run_chat_turn
 
 logger = logging.getLogger(__name__)
 
@@ -121,6 +122,41 @@ def _reconcile(
     return out, unmatched
 
 
+def _is_open_picker(case_options: dict | None) -> bool:
+    """Whether this picker is still asking, rather than reporting a choice."""
+    return bool(case_options) and not case_options.get("chosen")
+
+
+def _apply_case_pick(db: Any, conv_uuid: uuid.UUID, case_options: dict) -> None:
+    """Write the resolved picker back onto the message that showed it.
+
+    Matched on the token rather than on position, because a conversation can
+    hold several builds and therefore several pickers, and the one being
+    resolved is not necessarily the most recent. Best-effort: a picker that
+    cannot be located leaves history showing an open card, which is cosmetic
+    next to failing the turn that carries the build.
+    """
+    from app.models.message import Message
+
+    token = case_options.get("token")
+    if not token:
+        return
+    rows = (
+        db.execute(select(Message).where(Message.conversation_id == conv_uuid))
+        .scalars()
+        .all()
+    )
+    for row in rows:
+        existing = (row.metadata_ or {}).get("case_options")
+        if not existing or existing.get("token") != token:
+            continue
+        # Reassigned rather than mutated in place: JSONB columns are tracked by
+        # identity, so mutating the dict leaves SQLAlchemy unaware it changed.
+        row.metadata_ = {**(row.metadata_ or {}), "case_options": case_options}
+        db.add(row)
+        return
+
+
 def save_turn(
     firebase_uid: str,
     firebase_email: str | None,
@@ -136,6 +172,7 @@ def save_turn(
     graph_checkpoint: dict | None = None,
     graph_checkpoint_id: str | None = None,
     rewound: bool = False,
+    case_options_data: dict | None = None,
 ) -> bool:
     """Persist this chat turn. Runs in a thread executor (sync SQLAlchemy).
 
@@ -273,19 +310,34 @@ def save_turn(
                 and content == assistant_text
                 and offset == len(to_write) - 1
             )
+            # An unresolved picker (chosen still null) belongs to the turn that
+            # showed it. A resolved one is an update to whichever earlier
+            # message showed it, applied separately below — attaching it here
+            # would put a second picker under the finished build.
+            metadata: dict | None = None
+            opening_picker = case_options_data if _is_open_picker(case_options_data) else None
+            if is_this_turns_reply and (build_data or opening_picker):
+                metadata = {}
+                if build_data:
+                    metadata["build"] = build_data
+                if opening_picker:
+                    metadata["case_options"] = opening_picker
             db.add(
                 Message(
                     conversation_id=conv_uuid,
                     role=role,
                     content=content,
-                    metadata_=(
-                        {"build": build_data}
-                        if is_this_turns_reply and build_data
-                        else None
-                    ),
+                    metadata_=metadata,
                     created_at=written_at + timedelta(microseconds=offset),
                 )
             )
+
+        # A resolved picker updates the message that showed it, which is a turn
+        # or more back. Without this a reload after picking would rebuild an
+        # open picker above a finished build, inviting a second click that the
+        # paused build's one-shot claim would then refuse.
+        if case_options_data and not _is_open_picker(case_options_data):
+            _apply_case_pick(db, conv_uuid, case_options_data)
 
         # Roll this turn's OpenRouter spend into the conversation's running total.
         if turn_usage:
@@ -361,8 +413,16 @@ async def run_turn(
     user: dict | None,
     conversation_id: str | None,
     rewound: bool = False,
+    case_pick: tuple[str, str] | None = None,
 ) -> None:
     """Run one turn end to end, emitting into the turn's Valkey stream.
+
+    `case_pick` is (token, case_name) when this turn exists to finish a build
+    that paused at the case step. Such a turn adds no user message — the pick
+    was a click on a card, not something said — and resumes the saved pipeline
+    instead of running the graph. Everything after the events are produced
+    (buffering, persistence, the terminal entry) is identical, which is why it
+    shares this function rather than getting its own.
 
     Never raises. A turn that fails still gets an apology event and a terminal
     entry, because a reader blocked on a stream that never terminates is a hung
@@ -395,6 +455,7 @@ async def run_turn(
             ref_estimate_data,
             ref_estimate_key,
             rewound,
+            case_pick,
         )
     finally:
         TURNS_INFLIGHT.dec()
@@ -414,6 +475,7 @@ async def _run_turn(
     ref_estimate_data: dict | None,
     ref_estimate_key: str | None,
     rewound: bool = False,
+    case_pick: tuple[str, str] | None = None,
 ) -> None:
     """The body of run_turn. Split out only so the metrics wrapper above stays
     readable; there is no second caller."""
@@ -422,12 +484,23 @@ async def _run_turn(
     # signature further.
     graph_checkpoint: dict | None = None
     graph_checkpoint_id: str | None = None
+    # Last case_options event wins: the closing emit (chosen set) overwrites
+    # the opening one, so what gets persisted is the resolved picker.
+    case_options_data: dict | None = None
+
+    events = (
+        resume_chat_turn(case_pick[0], case_pick[1], conversation_id=conversation_id)
+        if case_pick is not None
+        else run_chat_turn(messages, conversation_id=conversation_id)
+    )
 
     try:
-        async for event in run_chat_turn(messages, conversation_id=conversation_id):
+        async for event in events:
             etype = event.get("type")
             if etype == "token":
                 assistant_text += event.get("text", "")
+            elif etype == "case_options":
+                case_options_data = event.get("data")
             elif etype == "build":
                 # The recommend path emitted a build — this conversation is a completed build.
                 reached_recommendation = True
@@ -488,6 +561,7 @@ async def _run_turn(
                 "ref_estimate_key": ref_estimate_key,
                 "graph_checkpoint": graph_checkpoint,
                 "graph_checkpoint_id": graph_checkpoint_id,
+                "case_options_data": case_options_data,
             },
         )
 
@@ -508,6 +582,7 @@ async def _run_turn(
                 graph_checkpoint,
                 graph_checkpoint_id,
                 rewound,
+                case_options_data,
             ),
         )
 

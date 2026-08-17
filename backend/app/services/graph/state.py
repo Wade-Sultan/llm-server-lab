@@ -44,6 +44,14 @@ class ChatTurnState(TypedDict, total=False):
     build_data: dict[str, Any] | None
     ref_estimate_key: str | None
     ref_estimate_data: dict[str, Any] | None
+    # True when the builder stopped at the case step to ask the user which case
+    # they want. The turn ends there — there is no build to present yet — and
+    # the pick starts a fresh turn that resumes the pipeline. This is the value
+    # the edge out of `build` branches on.
+    build_paused: bool
+    # The picker shown by a paused turn, persisted onto the assistant message
+    # so a reload rebuilds it. Shaped like the case_options event's data.
+    case_options: dict[str, Any] | None
 
 
 def new_usage() -> dict[str, Any]:

@@ -23,9 +23,11 @@ from .listing_failure import (
     ListingLookupFailure,
 )
 from .message import Message
+from .paused_build import PausedBuild
 from .pcbuild import BuildPart, PCBuild
 from .pcparts import PCPart
 from .price_subscription import PriceSubscription, PriceSubscriptionTarget
 from .pricing_etl import PriceCheck, PricingRun, SerpApiQuota
+from .shared_build import SharedBuild
 from .software_catalog import Software, SoftwareCategory, SoftwareMinimumPart
 from .user import User

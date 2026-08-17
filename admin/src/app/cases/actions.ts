@@ -11,6 +11,10 @@ export interface CaseFormData {
   yearReleased: number | null;
   isActive: boolean;
   streetPriceUsd: number | null;
+  imageUrl: string;
+  imageCredit: string;
+  imageSourceUrl: string;
+  imageLicense: string;
   supportedMoboFormFactorsInput: string;
   maxGpuLengthMm: number | null;
   maxCoolerHeightMm: number | null;
@@ -38,6 +42,8 @@ const partData = (d: CaseFormData) => ({
   name: d.name, manufacturer: d.manufacturer || null,
   modelNumber: d.modelNumber || null, yearReleased: d.yearReleased, isActive: d.isActive,
   streetPriceCents: usdToCents(d.streetPriceUsd),
+  imageUrl: d.imageUrl || null, imageCredit: d.imageCredit || null,
+  imageSourceUrl: d.imageSourceUrl || null, imageLicense: d.imageLicense || null,
 });
 
 const specificData = (d: CaseFormData) => ({

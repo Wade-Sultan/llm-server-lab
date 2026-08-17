@@ -76,6 +76,7 @@ async def _dispatch(
     user: dict | None,
     conversation_id: str | None,
     rewound: bool = False,
+    case_pick: tuple[str, str] | None = None,
 ) -> bool:
     """Hand the turn to a worker. False means it must run in this process.
 
@@ -104,9 +105,33 @@ async def _dispatch(
             # them. Only this pod can know: the evidence is `parentId`, which
             # never leaves the request.
             "rewound": rewound,
+            # [token, case_name] when this turn finishes a build that paused at
+            # the case step, rather than answering something the user typed.
+            "case_pick": list(case_pick) if case_pick else None,
         },
     )
     return dispatched
+
+
+def _case_pick(commands: list[dict]) -> tuple[str, str] | None:
+    """The case the user clicked, if this request carries a pick.
+
+    `select-case` is a custom assistant-transport command (declared on the
+    client in types/assistant-ui.d.ts). It rides the ordinary /chat request
+    rather than a side channel of its own, which is what lets a pick reuse the
+    whole turn machinery — dispatch, the Valkey event stream, resume-on-reload
+    — instead of reimplementing it.
+
+    Last one wins, matching how the command queue would apply them in order.
+    """
+    found: tuple[str, str] | None = None
+    for command in commands or []:
+        if not isinstance(command, dict) or command.get("type") != "select-case":
+            continue
+        token, case_name = command.get("token"), command.get("caseName")
+        if isinstance(token, str) and isinstance(case_name, str) and token and case_name:
+            found = (token, case_name)
+    return found
 
 
 @router.post("/chat")
@@ -148,7 +173,11 @@ async def chat(
     history = state["messages"] if keep is None else keep
 
     messages = transport.to_chat_messages(history + pending)
-    if not messages:
+    # A case pick is a click on a card, not something the user said, so it
+    # arrives with no message of its own — and the turn it starts is still a
+    # real turn. Only a request carrying neither has nothing to respond to.
+    case_pick = _case_pick(req.commands)
+    if not messages and case_pick is None:
         raise HTTPException(status_code=400, detail="No message to respond to.")
 
     # One id per turn, minted here rather than derived from conversation_id: a
@@ -157,7 +186,12 @@ async def chat(
     conversation_id = req.conversation_id
 
     dispatched = await _dispatch(
-        turn_id, messages, user, conversation_id, rewound=keep is not None
+        turn_id,
+        messages,
+        user,
+        conversation_id,
+        rewound=keep is not None,
+        case_pick=case_pick,
     )
 
     if not dispatched and await valkey_available():
@@ -165,7 +199,14 @@ async def chat(
         # resumption works and this pod is no longer the only place the events
         # exist. Not awaited — the callback below consumes what it writes.
         task = asyncio.create_task(
-            run_turn(turn_id, messages, user, conversation_id, rewound=keep is not None)
+            run_turn(
+                turn_id,
+                messages,
+                user,
+                conversation_id,
+                rewound=keep is not None,
+                case_pick=case_pick,
+            )
         )
         _background_turns.add(task)
         task.add_done_callback(_background_turns.discard)
@@ -186,7 +227,12 @@ async def chat(
 
     async def inline_callback(controller: RunController) -> None:
         await transport.run_turn_inline_into(
-            controller, messages, conversation_id, pending=pending, keep=keep
+            controller,
+            messages,
+            conversation_id,
+            pending=pending,
+            keep=keep,
+            case_pick=case_pick,
         )
 
     return _stream_response(inline_callback, state)

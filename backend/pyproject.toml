@@ -34,6 +34,9 @@ dependencies = [
     "trafilatura>=1.12",
     "pypdfium2>=4.30",
     "Pillow>=10.0",
+    # Shared-build PDF export (app/services/build_pdf.py). Pure-Python — no
+    # pango/cairo system deps, which is what kept WeasyPrint out of the image.
+    "fpdf2>=2.8",
     "rapidfuzz>=3.9",
     # Valkey speaks the Redis wire protocol, so redis-py is the supported client
     # — there is no separate valkey package to install. 5.0 is the floor for

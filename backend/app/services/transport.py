@@ -62,8 +62,11 @@ def _message(role: str, content: str = "") -> dict[str, Any]:
     slot both loses the older ones and re-attaches the survivor to whichever
     assistant message happens to be last — so asking a follow-up question after
     a build would drag the card down onto the reply.
+
+    `case_options` hangs off the message for the same reason: it is the case
+    picker shown mid-build, and it must stay on the turn that asked.
     """
-    return {"role": role, "content": content, "build": None}
+    return {"role": role, "content": content, "build": None, "case_options": None}
 
 
 def initial_state(messages: list[ChatMessage] | None = None) -> dict[str, Any]:
@@ -244,6 +247,7 @@ def _begin_assistant_turn(controller: RunController, *, resuming: bool = False) 
         index = len(messages) - 1
         messages[index]["content"] = ""
         messages[index]["build"] = None
+        messages[index]["case_options"] = None
         return index
 
     messages.append(_message("assistant"))
@@ -277,7 +281,35 @@ def _apply_event(controller: RunController, index: int, event: dict) -> bool:
         # The build has landed, so there is no step in flight any more. Left
         # set, it would pin the progress line under a finished card.
         controller.state["pipeline"] = None
+    elif etype == "case_options":
+        _apply_case_options(controller, index, event.get("data") or {})
     return True
+
+
+def _apply_case_options(
+    controller: RunController, index: int, data: dict[str, Any]
+) -> None:
+    """Put the case picker on the message it belongs to.
+
+    Emitted twice, and by two different turns. The turn that pauses emits it
+    open (`chosen` null) and it belongs to that turn's own message. The turn
+    the user's pick starts emits it resolved — and that one belongs to the
+    EARLIER message, the one showing the cards being clicked, not to the new
+    message the finished build is streaming into.
+
+    So the target is found by token rather than assumed to be the current
+    message. Falling back to the current index keeps a resolved picker whose
+    original message is somehow absent visible rather than silently dropped.
+    """
+    token = data.get("token")
+    messages = controller.state["messages"]
+    if token:
+        for i in range(len(messages) - 1, -1, -1):
+            existing = messages[i].get("case_options")
+            if existing and existing.get("token") == token:
+                messages[i]["case_options"] = data
+                return
+    messages[index]["case_options"] = data
 
 
 async def stream_turn_into(
@@ -358,6 +390,7 @@ async def run_turn_inline_into(
     *,
     pending: list[dict[str, Any]] | None = None,
     keep: list[dict[str, Any]] | None = None,
+    case_pick: tuple[str, str] | None = None,
 ) -> None:
     """Drive a run directly from the pipeline, with no Valkey in between.
 
@@ -365,15 +398,27 @@ async def run_turn_inline_into(
     in the test suite and on a laptop, so it has to keep working — but it is not
     a production mode: the turn dies with this request, which is precisely what
     dispatch exists to prevent.
+
+    A `case_pick` turn resumes a paused build instead of running the graph.
+    Note what that means without Valkey: the pause was still saved, because
+    paused_build writes to Postgres first and treats Valkey as the cache. So
+    the picker works on a laptop even though nothing else about a turn survives
+    the request that started it.
     """
-    from app.services.chat_pipeline import run_chat_turn
+    from app.services.chat_pipeline import resume_chat_turn, run_chat_turn
 
     _rewind(controller, keep)
     _append_pending(controller, pending or [])
     index = _begin_assistant_turn(controller)
 
+    events = (
+        resume_chat_turn(case_pick[0], case_pick[1], conversation_id=conversation_id)
+        if case_pick is not None
+        else run_chat_turn(messages, conversation_id=conversation_id)
+    )
+
     try:
-        async for event in run_chat_turn(messages, conversation_id=conversation_id):
+        async for event in events:
             _apply_event(controller, index, event)
     except Exception:
         logger.exception("inline transport run failed")
