@@ -182,6 +182,39 @@ steps:
 
         kubectl kustomize . > /workspace/manifests.yaml
 
+        # Every workload must have been scoped to one of the three prod Secrets
+        # by patches/secrets-scoped.yaml. A bare `palladium-secrets` here is a
+        # workload that file forgot: base points all of them at it, and it does
+        # not exist in this cluster.
+        #
+        # WORTH A BUILD FAILURE BECAUSE NOTHING ELSE CATCHES IT. The manifest is
+        # valid, `kubectl apply` succeeds, and the object schedules — then the
+        # kubelet cannot resolve the secretRef and parks the pod in
+        # CreateContainerConfigError. For a Deployment that at least shows up as
+        # a stalled rollout; for a CronJob there is no rollout to stall, so the
+        # only symptom is an hourly Job that produces no logs and no rows, which
+        # is indistinguishable from the "found nothing to do" case it is
+        # supposed to have most of the time. telemetry-drain sat that way from
+        # 2026-08-16 until it was noticed by eye.
+        #
+        # Anchored to end-of-line so the scoped names (-builder, -commerce,
+        # -admin) do not match. Prod-only by construction: this step runs in
+        # $$_OVERLAY, and the local overlay's single Secret is correct there.
+        #
+        # `$$` IS THE ANCHOR, not a typo. Cloud Build substitutes the whole args
+        # string before bash sees it and reads a lone `$` as the start of a
+        # substitution; `$$` is how it emits a literal one. The sed above spells
+        # the same anchor `\$` because it sits in double quotes, where bash does
+        # the unescaping — inside these single quotes that would reach grep as a
+        # backslash-dollar and match a literal `$` instead of end-of-line,
+        # silently matching nothing and passing every build.
+        if grep -nE '^ *name: palladium-secrets$$' /workspace/manifests.yaml; then
+          echo "ERROR: the workloads above render with the base Secret 'palladium-secrets'," >&2
+          echo "       which does not exist in prod. Add each one to" >&2
+          echo "       patches/secrets-scoped.yaml with the Secret it needs." >&2
+          exit 1
+        fi
+
         # Split the migration Job from everything else: it must complete BEFORE
         # the Deployments roll, so it cannot ride along in the same apply.
         # Splitting on document separators needs no YAML parser — kustomize
