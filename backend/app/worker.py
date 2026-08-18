@@ -38,9 +38,10 @@ from app.core.loadtest import load_test_scope
 from app.core.logging import configure_logging
 from app.core.metrics import start_exporter as start_metrics_exporter
 from app.core.tracing import configure_tracing, shutdown_tracing
-from app.core.turn_metrics import CHAT_BUFFERS_RETAINED
 from app.schemas.chat import ChatMessage
-from app.services import chat_buffer, turn_stream
+from app.services import turn_stream
+from app.services.chat_buffer import buffer_gauge_loop
+from app.services.chat_pipeline import warm_dspy_pipeline
 from app.services.turn_runner import run_turn
 
 configure_logging()
@@ -114,37 +115,6 @@ def _decode_case_pick(value: Any) -> tuple[str, str] | None:
     return None
 
 
-async def _buffer_gauge_loop(interval_s: int = 60) -> None:
-    """Keep `palladium_chat_buffers_retained` current.
-
-    Sampled on a loop rather than updated at the point of retention, because the
-    question it answers is "how many turns are unpersisted right now" — including
-    ones retained by a worker that has since been replaced, which no in-process
-    counter would know about.
-
-    Every replica reports the same instance-wide number under its own pod label,
-    so the alert in deploy/monitoring/ reduces with REDUCE_MAX rather than
-    REDUCE_SUM; summing would multiply the count by the replica count.
-    """
-    while True:
-        try:
-            count = await chat_buffer.count_retained()
-            if count is not None:
-                CHAT_BUFFERS_RETAINED.set(count)
-                if count:
-                    logger.warning(
-                        "%d chat buffer(s) awaiting persistence — these are turns "
-                        "that did not reach Postgres (deploy/messaging.md §5)",
-                        count,
-                    )
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            # Never let a monitoring loop take down the worker it monitors.
-            logger.exception("buffer gauge sample failed")
-        await asyncio.sleep(interval_s)
-
-
 async def _handle(
     turn_id: str,
     messages: list[ChatMessage],
@@ -216,8 +186,28 @@ class Worker:
         # Scheduled onto the worker loop from this thread, so it starts as soon
         # as the loop is running rather than waiting for a first message.
         self._gauge_task = asyncio.run_coroutine_threadsafe(
-            _buffer_gauge_loop(), self._loop
+            buffer_gauge_loop(), self._loop
         )
+
+        # BEFORE subscribing, not lazily on the first turn. chat_pipeline defers
+        # the dspy/litellm import into its function bodies, so importing this
+        # module costs ~1s and the real work — the import chain, configure_dspy,
+        # and reading all ten Decide* weights files — lands on whichever turn
+        # happens to arrive first. That was survivable at a warm floor of 1,
+        # where the pod had paid it long before a user showed up. At
+        # minReplicaCount 0 (keda-worker.yaml) the pod is created *because* a
+        # turn is waiting, so "the first turn" is now always a real user's turn,
+        # and it would pay this on top of the cold-start wait that already got
+        # it here. Measured at ~2.5s on a dev box; budget 8-20s at the worker's
+        # 250m request with a cold page cache.
+        #
+        # The API pays the same cost the same way, in main.py's lifespan. It
+        # does it off-thread and gates /readyz on it; there is no equivalent
+        # gate here because nothing routes to a worker, so blocking startup
+        # ahead of subscribe() is both simpler and strictly what we want — an
+        # unsubscribed worker leaves its turns in the subscription rather than
+        # accepting one it is not ready to run.
+        warm_dspy_pipeline()
 
         from app.core.pubsub import _project_id  # deliberate: same resolution logic
 

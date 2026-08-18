@@ -17,6 +17,7 @@ from app.core.metrics import start_exporter as start_metrics_exporter
 from app.core.tracing import configure_tracing, shutdown_tracing
 from app.core.valkey import close_client as close_valkey
 from app.core.warmup import mark_dspy_warm
+from app.services.chat_buffer import buffer_gauge_loop
 
 # Before anything else logs, so uvicorn's startup lines are JSON too.
 configure_logging()
@@ -66,9 +67,24 @@ async def lifespan(app: FastAPI):
     # binding) isn't blocked on the dspy/litellm import chain.
     warm_task = asyncio.create_task(_warm_dspy_pipeline())
     app.state.dspy_warm_task = warm_task
+
+    # The buffers-retained gauge, which used to be the worker's alone. It moved
+    # here when the worker gained a scale-to-zero floor
+    # (deploy/overlays/prod/keda-worker.yaml): the alert it feeds is an ABSENCE
+    # condition over 10 minutes, so a metric only written by worker pods would
+    # page every time the pool sat idle that long — which is now the expected
+    # steady state rather than an outage. builder never drops below 2 replicas,
+    # so hosting it here keeps the series continuous. The worker still runs the
+    # same loop; both report the same instance-wide number and the alert already
+    # reduces with REDUCE_MAX. See buffer_gauge_loop's docstring.
+    gauge_task = asyncio.create_task(buffer_gauge_loop())
     try:
         yield
     finally:
+        gauge_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await gauge_task
+
         # A SIGTERM landing mid-cold-start leaves this task partway through the
         # import chain. Cancel and await it so shutdown isn't held open by it
         # and asyncio doesn't log "Task was destroyed but it is pending".

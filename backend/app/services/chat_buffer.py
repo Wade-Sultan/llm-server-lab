@@ -25,12 +25,14 @@ than the stream's TTL so the buffer outlives the events describing it.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 
 from redis.exceptions import RedisError
 
 from app.core.config import settings
+from app.core.turn_metrics import CHAT_BUFFERS_RETAINED
 from app.core.valkey import get_client
 
 logger = logging.getLogger(__name__)
@@ -140,3 +142,50 @@ async def discard(conversation_id: str) -> bool:
             exc_info=True,
         )
         return False
+
+
+async def buffer_gauge_loop(interval_s: int = 60) -> None:
+    """Keep `palladium_chat_buffers_retained` current.
+
+    Sampled on a loop rather than updated at the point of retention, because the
+    question it answers is "how many turns are unpersisted right now" — including
+    ones retained by a worker that has since been replaced, which no in-process
+    counter would know about.
+
+    Every replica reports the same instance-wide number under its own pod label,
+    so the alert in deploy/monitoring/ reduces with REDUCE_MAX rather than
+    REDUCE_SUM; summing would multiply the count by the replica count.
+
+    RUN BY BOTH THE API AND THE WORKER, which is why it lives here rather than in
+    worker.py where it started. The alert this feeds
+    (deploy/monitoring/alert-worker-metrics-absent.yaml) is an ABSENCE
+    condition: it fires when nothing has reported for 10 minutes. Once the
+    worker scales to zero between bursts — keda-worker.yaml, minReplicaCount 0 —
+    a worker-only gauge goes silent on every quiet stretch and pages for an idle
+    cluster. builder never scales below 2 (hpa.yaml), so hosting the same loop
+    there keeps the series alive continuously and the alert keeps meaning what
+    its header says it means.
+
+    The two things it actually detects both survive the move intact: Valkey
+    being unreachable (count_retained returns None from any pod, so the gauge
+    stops being set) and buffers accumulating (an instance-wide SCAN, not a
+    per-pod count — a builder replica sees turns a worker retained just as well
+    as another worker would).
+    """
+    while True:
+        try:
+            count = await count_retained()
+            if count is not None:
+                CHAT_BUFFERS_RETAINED.set(count)
+                if count:
+                    logger.warning(
+                        "%d chat buffer(s) awaiting persistence — these are turns "
+                        "that did not reach Postgres (deploy/messaging.md §5)",
+                        count,
+                    )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # Never let a monitoring loop take down the process it monitors.
+            logger.exception("buffer gauge sample failed")
+        await asyncio.sleep(interval_s)

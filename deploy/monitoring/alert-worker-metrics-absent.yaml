@@ -14,13 +14,30 @@
 # specifically because it is written unconditionally on a 60s timer rather than
 # per turn. A traffic-driven metric would look absent during any quiet hour and
 # would have to be threshold-tuned against usage patterns instead.
+#
+# IT IS NO LONGER A WORKER-ONLY METRIC, and that change is what keeps this
+# policy honest now that keda-worker.yaml runs the pool at minReplicaCount 0.
+# An empty worker Deployment is the expected steady state between bursts, so a
+# gauge written only by worker pods would go absent on every quiet stretch and
+# page for a perfectly healthy idle cluster — the exact false positive this
+# metric was chosen to avoid. The loop therefore runs in the API too
+# (app/main.py's lifespan, via app/services/chat_buffer.py), and builder never
+# drops below 2 replicas.
+#
+# So read this alert as "nothing anywhere is reaching Valkey" rather than "the
+# workers are down". Both original failure modes still reach it: Valkey
+# unreachable silences every pod at once, and a worker outage now shows up as a
+# backlog (alert-worker-backlog.yaml) rather than as silence — which is the
+# correct division, because with scale-to-zero "no worker pods" and "broken" are
+# no longer the same statement.
 displayName: "Palladium — worker metrics absent"
 documentation:
   mimeType: text/markdown
   content: |
-    No worker pod has reported `palladium_chat_buffers_retained` for 10 minutes.
-    It is written on a fixed 60s timer, so absence is never explained by low
-    traffic.
+    No pod — API or worker — has reported `palladium_chat_buffers_retained` for
+    10 minutes. It is written on a fixed 60s timer by every builder replica and
+    every running worker, so absence is never explained by low traffic, and it
+    is not explained by the worker pool being scaled to zero either.
 
     **Treat the other chat-turn alerts as unreliable until this clears** — they
     are threshold conditions on metrics that are no longer arriving, so their
@@ -42,9 +59,16 @@ documentation:
     - **Pods Running, no metrics** — the GMP scrape, not the worker. Check the
       PodMonitoring:
       `kubectl -n palladium describe podmonitoring worker`
-    - **Zero pods** — check whether replicas were scaled to 0, and whether
-      Autopilot has capacity to schedule them (`kubectl describe` the
-      ReplicaSet for FailedScheduling).
+    - **Zero worker pods** — EXPECTED when no turns are queued; KEDA runs this
+      Deployment at a floor of 0. It is only a finding if turns are also
+      backlogged, which is `alert-worker-backlog.yaml`'s job, not this one. If
+      the pool is stuck at zero *with* a backlog, the scaler is the suspect:
+      `kubectl -n palladium describe scaledobject worker` (a failed
+      TriggerAuthentication leaves it inactive and says so only there), then
+      check Autopilot capacity with `kubectl describe` on the ReplicaSet for
+      FailedScheduling.
+    - **Zero builder pods** — this is the real "nothing is reporting" case now.
+      `kubectl -n palladium get pods -l app=builder`.
 combiner: OR
 conditions:
   - displayName: "no worker has reported in 10 minutes"
@@ -55,6 +79,10 @@ conditions:
       # Ten sample intervals. Long enough that a rolling restart (maxUnavailable:
       # 0, so at least one pod is always up) never trips it, short enough to
       # catch a real outage before a shift's worth of turns go unpersisted.
+      #
+      # Unchanged by the worker's scale-to-zero floor precisely because builder
+      # now writes the same gauge — see the header. If that ever stops being
+      # true, no duration is long enough: an idle pool can last hours.
       duration: 600s
       aggregations:
         - alignmentPeriod: 60s

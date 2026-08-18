@@ -31,11 +31,18 @@ documentation:
     doubling replicas costs a pod. The ceiling is memory (each in-flight turn
     holds a DSPy state) and OpenRouter's own rate limits — not cores.
 
-    **If concurrency is already high**, the answer is more replicas, and at that
-    point backlog-based autoscaling (KEDA) is worth the setup rather than
-    hand-editing a replica count. The CPU-based HPA that builder uses will not
-    work here for the same reason it understates builder's own load — see the
-    note at the bottom of `deploy/overlays/prod/hpa.yaml`.
+    **If concurrency is already high**, the answer is more replicas — which KEDA
+    is already doing, up to `maxReplicaCount: 8`
+    (`deploy/overlays/prod/keda-worker.yaml`). A backlog that persists while the
+    pool sits below that ceiling means the scaler is not reacting, not that it
+    needs a bigger one: `kubectl -n palladium describe scaledobject worker`.
+
+    **Rule out a cold start first.** The pool floors at 0, so a burst arriving
+    into an idle cluster legitimately queues for ~1.5-2.5 minutes before the
+    first pod pulls. That is a slow first turn, not congestion, and it clears
+    itself. Both conditions below are duration-gated past it on purpose — if you
+    are seeing this fire on single turns into an idle pool, the fix is the
+    faster wake-up signal described in `keda-worker.yaml`, not a bigger pool.
 
     **A sudden backlog with no traffic change** usually means the workers are
     not pulling at all: check for `Valkey unreachable` or a crash loop before
@@ -52,6 +59,15 @@ conditions:
       # 120s of queue time, on top of a build that can legitimately take 180s.
       # Deliberately well below the 600s ack deadline: past that a turn is
       # redelivered, and by then the user has almost certainly given up.
+      #
+      # THE 300s DURATION IS NOW load-BEARING, not padding. With the worker
+      # pool floored at 0, a turn arriving into an idle cluster waits out the
+      # whole 0->1 path (Cloud Monitoring's 60-180s metric delay, then polling,
+      # scheduling and start), so this metric crossing 120s is the *expected*
+      # shape of a cold start rather than evidence of congestion. Five minutes
+      # is longer than that path's typical worst case, so a cold start resolves
+      # itself before the condition matures. Shortening this without also
+      # shortening the wake-up would trade a real alert for a recurring one.
       thresholdValue: 120
       duration: 300s
       trigger:
@@ -68,8 +84,13 @@ conditions:
         AND resource.labels.subscription_id = "chat-turns-workers"
         AND metric.type = "pubsub.googleapis.com/subscription/num_undelivered_messages"
       comparison: COMPARISON_GT
-      # 2 replicas x 8 concurrent = 16 in flight. 32 is two full rounds queued
-      # behind what is already running — real congestion, not a burst.
+      # 32 was picked as two full rounds behind a warm floor of 2 replicas x 8
+      # concurrent = 16 in flight. That floor is now 0 (keda-worker.yaml), so
+      # the number no longer derives from a standing capacity — but it is kept,
+      # because what it measures is unchanged: 32 queued turns is far more than
+      # any single cold start can explain, and KEDA asks for ceil(32/8) = 4
+      # replicas long before this matures. Reaching it for ten minutes means the
+      # scaler is not getting what it asked for.
       thresholdValue: 32
       duration: 600s
       trigger:
