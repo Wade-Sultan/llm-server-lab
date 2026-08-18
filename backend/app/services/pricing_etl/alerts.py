@@ -25,6 +25,10 @@ SKIP_NO_PRICE = "no_new_price"
 SKIP_NO_REFERENCE = "no_reference_price"
 SKIP_ABOVE_THRESHOLD = "above_threshold"
 SKIP_NOT_A_DROP = "not_a_drop"
+# The price was already at or under the threshold last time we looked, so this
+# run is not the moment it got there. The customer asked to be told when the
+# part reaches their price, and it already had.
+SKIP_ALREADY_BELOW = "already_below_threshold"
 
 
 @dataclass(frozen=True)
@@ -48,8 +52,15 @@ def decide(
     with the interesting edges: three nullable prices, and an email that must
     be able to say "was $X, now $Y" truthfully or not be sent at all.
 
-    - threshold_cents set     -> fire at or below it
-    - threshold_cents unset   -> fire below the price when the user subscribed
+    The alert marks a *crossing*, not merely a low price: the old price has to
+    have been above the target and the new one at or below it. A part that was
+    already under the customer's price when they subscribed has nothing to
+    announce — every subsequent wobble downward would otherwise read as "it
+    reached your price!" about a price it reached before they asked.
+
+    - threshold_cents set     -> fire when the price crosses it from above
+    - threshold_cents unset   -> fire on any drop below the price when the user
+      subscribed, which is the same crossing with the baseline as the target
     - old price for the email -> the last price we actually published
       (previous_cents), falling back to the subscribe-time baseline
     """
@@ -67,11 +78,19 @@ def decide(
 
     old_cents = previous_cents if previous_cents is not None else baseline_cents
     if old_cents is None or old_cents <= new_cents:
-        # Crossing the threshold without falling is not a price drop — it means
-        # the threshold was already met when the user subscribed, or the price
-        # rose into range from below. Commerce rejects a non-drop outright, so
-        # catching it here keeps that from looking like a dispatch failure.
+        # Reaching the target without falling is not a price drop — the price
+        # rose into range from below, or never moved. Commerce rejects a
+        # non-drop outright, so catching it here keeps that from looking like a
+        # dispatch failure.
         return Decision(False, SKIP_NOT_A_DROP)
+
+    if threshold_cents is not None and old_cents <= threshold_cents:
+        # Below the threshold before this run and below it after: a drop, but
+        # not the crossing the customer asked about. Only checked for an
+        # explicit threshold — with none, the target *is* the subscribe-time
+        # baseline, and "old is at the baseline and has now fallen under it" is
+        # exactly the crossing that "any drop" means.
+        return Decision(False, SKIP_ALREADY_BELOW)
 
     return Decision(True, "fire", old_cents=old_cents)
 

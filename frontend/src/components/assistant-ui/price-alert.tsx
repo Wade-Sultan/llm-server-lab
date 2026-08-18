@@ -125,8 +125,10 @@ export function PriceAlertBell({
 
   const thresholdCents = parseDollars(threshold)
   const invalid = threshold.trim() !== "" && thresholdCents === null
-  // A threshold at or above today's price isn't wrong — it still only fires on
-  // an actual drop — but it is almost always a typo, so say what it will do.
+  // A threshold at or above today's price leaves the alert dormant: the ETL
+  // fires on a crossing, so the price has to rise above the number and come
+  // back down before anything is sent (see alerts.decide). Almost always a
+  // typo, and silently doing nothing is the worst way to answer one.
   const aboveCurrent =
     thresholdCents !== null &&
     currentCents !== null &&
@@ -242,7 +244,7 @@ export function PriceAlertBell({
               {invalid
                 ? "Enter a price like 249.99."
                 : aboveCurrent
-                  ? "That's at or above today's price — you'll hear from us on the next drop."
+                  ? "That's at or above today's price, so nothing will send until it rises past that and comes back down. Leave it blank to hear about the next drop instead."
                   : thresholdCents === null
                     ? "Leave blank to hear about any drop from today's price."
                     : `We'll email you once it reaches ${formatCents(thresholdCents)}.`}
