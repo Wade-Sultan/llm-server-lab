@@ -106,8 +106,7 @@ class _FakePipeline:
 
     async def execute(self):
         return [
-            await getattr(self._client, name)(*a, **kw)
-            for name, a, kw in self._queued
+            await getattr(self._client, name)(*a, **kw) for name, a, kw in self._queued
         ]
 
 
@@ -121,6 +120,13 @@ def fake(monkeypatch) -> FakeValkey:
     monkeypatch.setattr(valkey, "get_client", _get_client)
     monkeypatch.setattr(turn_stream, "get_client", _get_client)
     monkeypatch.setattr(chat_buffer, "get_client", _get_client)
+    # tail() reads through the BLOCKING client, which is a separate pool with a
+    # socket timeout longer than its own XREAD block (app/core/valkey.py). The
+    # fake stands in for both — the split is about socket timeouts, which a fake
+    # has none of — but it has to be patched explicitly or tail() sees None and
+    # returns as if Valkey were unreachable.
+    monkeypatch.setattr(valkey, "get_blocking_client", _get_client)
+    monkeypatch.setattr(turn_stream, "get_blocking_client", _get_client)
     return client
 
 
@@ -132,6 +138,7 @@ def no_valkey(monkeypatch):
         return None
 
     monkeypatch.setattr(turn_stream, "get_client", _get_client)
+    monkeypatch.setattr(turn_stream, "get_blocking_client", _get_client)
     monkeypatch.setattr(chat_buffer, "get_client", _get_client)
 
 
@@ -175,7 +182,9 @@ def test_tail_resumes_after_last_id_without_duplicating():
         # Reconnect from the id of the first event, as the frontend would.
         resume_from = first[0][0]
         second = [
-            i async for i in turn_stream.tail("t2", last_id=resume_from) if i is not None
+            i
+            async for i in turn_stream.tail("t2", last_id=resume_from)
+            if i is not None
         ]
         return [e["text"] for _, e in second]
 
@@ -214,9 +223,7 @@ def test_tail_gives_up_rather_than_blocking_forever():
         # No emit_end. Tight bounds so the test does not actually wait 10 minutes.
         return [
             i
-            async for i in turn_stream.tail(
-                "t4", idle_timeout_ms=1, max_idle_rounds=3
-            )
+            async for i in turn_stream.tail("t4", idle_timeout_ms=1, max_idle_rounds=3)
         ]
 
     items = asyncio.run(scenario())
@@ -412,7 +419,11 @@ def test_internal_events_never_reach_the_stream(fake, monkeypatch):
     monkeypatch.setattr(turn_runner, "run_chat_turn", fake_pipeline)
     monkeypatch.setattr(turn_runner, "save_turn", lambda *a, **kw: True)
 
-    asyncio.run(turn_runner.run_turn("t12", [ChatMessage(role="user", content="hi")], None, None))
+    asyncio.run(
+        turn_runner.run_turn(
+            "t12", [ChatMessage(role="user", content="hi")], None, None
+        )
+    )
 
     emitted = [
         json.loads(f["e"])["type"]
@@ -432,7 +443,11 @@ def test_guest_turns_are_streamed_but_never_buffered(fake, monkeypatch):
 
     monkeypatch.setattr(turn_runner, "run_chat_turn", fake_pipeline)
 
-    asyncio.run(turn_runner.run_turn("t13", [ChatMessage(role="user", content="hi")], None, None))
+    asyncio.run(
+        turn_runner.run_turn(
+            "t13", [ChatMessage(role="user", content="hi")], None, None
+        )
+    )
 
     assert fake.streams[turn_stream.stream_key("t13")]
     assert not [k for k in fake.kv if k.startswith("chat:buf:")]
@@ -450,7 +465,11 @@ def test_pipeline_error_still_terminates_the_stream(fake, monkeypatch):
 
     monkeypatch.setattr(turn_runner, "run_chat_turn", exploding_pipeline)
 
-    asyncio.run(turn_runner.run_turn("t14", [ChatMessage(role="user", content="hi")], None, None))
+    asyncio.run(
+        turn_runner.run_turn(
+            "t14", [ChatMessage(role="user", content="hi")], None, None
+        )
+    )
 
     emitted = [
         json.loads(f["e"])["type"]
@@ -474,7 +493,9 @@ def test_cancellation_leaves_the_stream_open_for_redelivery(fake, monkeypatch):
 
     with pytest.raises(asyncio.CancelledError):
         asyncio.run(
-            turn_runner.run_turn("t15", [ChatMessage(role="user", content="hi")], None, None)
+            turn_runner.run_turn(
+                "t15", [ChatMessage(role="user", content="hi")], None, None
+            )
         )
 
     emitted = [
@@ -555,6 +576,90 @@ def test_inflight_gauge_returns_to_zero_even_when_a_turn_is_cancelled(monkeypatc
     before = TURNS_INFLIGHT._value.get()
     with pytest.raises(asyncio.CancelledError):
         asyncio.run(
-            turn_runner.run_turn("t21", [ChatMessage(role="user", content="hi")], None, None)
+            turn_runner.run_turn(
+                "t21", [ChatMessage(role="user", content="hi")], None, None
+            )
         )
     assert TURNS_INFLIGHT._value.get() == before
+
+
+# ------------------------------------------------- blocking-read contract --
+#
+# The bug these cover cost a full outage and was invisible to every other test
+# in this file, because a fake client has no socket and therefore no socket
+# timeout. tail() issues XREAD BLOCK 15000; redis-py enforces the pool's
+# socket_timeout on that parked read like any other, so reading through the
+# ordinary 5s client aborted the block, retried, and finally raised — which
+# stream_turn_into reports as "That build didn't start."
+#
+# It stayed hidden while the worker pool had a warm floor: an event always
+# arrived inside 5s, so the block never ran long enough to trip. The first cold
+# start after scale-to-zero broke every /chat.
+
+
+def test_tail_block_stays_under_the_blocking_clients_socket_timeout():
+    """The two numbers live in different modules and must not drift apart."""
+    import inspect
+
+    from app.core.valkey import BLOCKING_READ_TIMEOUT_S
+
+    default_block_ms = (
+        inspect.signature(turn_stream.tail).parameters["idle_timeout_ms"].default
+    )
+    assert default_block_ms / 1000 < BLOCKING_READ_TIMEOUT_S, (
+        f"tail() blocks for {default_block_ms}ms but its client aborts reads at "
+        f"{BLOCKING_READ_TIMEOUT_S}s — every read would fail before the block elapsed"
+    )
+
+
+@pytest.mark.usefixtures("fake")
+def test_tail_refuses_a_block_longer_than_its_socket_timeout():
+    """Fail loudly at the call, not silently as an apparently empty stream."""
+    from app.core.valkey import BLOCKING_READ_TIMEOUT_S
+
+    async def scenario():
+        return [
+            i
+            async for i in turn_stream.tail(
+                "t22", idle_timeout_ms=int(BLOCKING_READ_TIMEOUT_S * 1000) + 1
+            )
+        ]
+
+    with pytest.raises(ValueError, match="socket timeout"):
+        asyncio.run(scenario())
+
+
+def test_the_two_clients_really_do_differ_in_socket_timeout(monkeypatch):
+    """Guards the reason the second pool exists at all.
+
+    Collapsing them back into one client is the regression this catches: it
+    would look harmless in every test above and break only on a cold worker.
+    """
+    from app.core import valkey as valkey_module
+
+    monkeypatch.setattr(valkey_module.settings, "VALKEY_HOST", "localhost")
+    monkeypatch.setattr(valkey_module.settings, "VALKEY_CLUSTER", False)
+    monkeypatch.setattr(valkey_module.settings, "VALKEY_TLS", False)
+    valkey_module.reset_for_tests()
+
+    captured: dict[float, object] = {}
+
+    class _StubClient:
+        def __init__(self, **kwargs):
+            captured[kwargs["socket_timeout"]] = self
+
+        async def ping(self):
+            return True
+
+    monkeypatch.setattr(valkey_module, "Redis", _StubClient)
+
+    async def scenario():
+        await valkey_module.get_client()
+        await valkey_module.get_blocking_client()
+
+    asyncio.run(scenario())
+    valkey_module.reset_for_tests()
+
+    assert len(captured) == 2, "both clients were built with the same socket timeout"
+    ordinary, blocking = sorted(captured)
+    assert blocking > turn_stream.tail.__defaults__[1] / 1000 > ordinary

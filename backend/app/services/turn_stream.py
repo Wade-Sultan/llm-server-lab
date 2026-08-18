@@ -37,7 +37,11 @@ from collections.abc import AsyncIterator
 from redis.exceptions import RedisError
 
 from app.core.config import settings
-from app.core.valkey import get_client
+from app.core.valkey import (
+    BLOCKING_READ_TIMEOUT_S,
+    get_blocking_client,
+    get_client,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -115,8 +119,25 @@ async def tail(
     Bounded because a worker that was OOM-killed mid-turn will never write the
     terminal entry, and an unbounded tail would pin a connection and a Valkey
     connection from the pool forever waiting for it.
+
+    USES THE BLOCKING CLIENT, which is the whole reason that client exists. The
+    ordinary pool's 5s socket timeout is shorter than the block below, and
+    redis-py applies the socket timeout to a parked read like any other: the
+    XREAD is aborted at 5s, retried, and finally raised as a TimeoutError. The
+    caller sees that as "no worker wrote to this stream" — which is how a cold
+    worker pool turned into "That build didn't start. Please try again." on
+    every /chat. See app/core/valkey.py's BLOCKING_READ_TIMEOUT_S.
     """
-    client = await get_client()
+    if idle_timeout_ms >= BLOCKING_READ_TIMEOUT_S * 1000:
+        # Loud rather than silent: the failure this prevents looks like an empty
+        # stream, not like a misconfiguration, and it costs a whole turn.
+        raise ValueError(
+            f"idle_timeout_ms={idle_timeout_ms} must stay under the blocking "
+            f"client's socket timeout ({BLOCKING_READ_TIMEOUT_S}s), or every "
+            "read aborts before the block elapses."
+        )
+
+    client = await get_blocking_client()
     if client is None:
         return
 

@@ -42,11 +42,45 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-# Module-level singleton. redis-py maintains its own connection pool internally,
-# so one client per process is correct; building a second would double the
-# connection count against Memorystore's per-instance limit for no benefit.
+# TWO clients, and the split is not an optimisation — it is a correctness fix.
+#
+# redis-py enforces `socket_timeout` on every read, INCLUDING the read that is
+# deliberately parked by a blocking command. XREAD BLOCK 15000 against a stream
+# nothing has written to yet is a 15-second read by design, so a 5-second socket
+# timeout aborts it every time: redis-py raises TimeoutError (a RedisError),
+# retries the command a few times, and eventually gives up — about 60 seconds of
+# nothing, surfaced to the caller as an error rather than as "no events yet".
+#
+# HOW THIS HID FOR SO LONG. turn_stream.tail() is the only blocking reader, and
+# until the worker pool gained a scale-to-zero floor there was always a warm
+# worker that wrote its first event within a few hundred milliseconds — well
+# inside 5 seconds, so the block never ran long enough to trip the timeout. The
+# first cold start made every /chat fail with "That build didn't start", because
+# the tail now genuinely has to wait out the pod coming up. The bug was always
+# here; the warm floor was paying for it.
+#
+# So the ordinary client keeps the tight 5s guard, which is right for the short
+# commands that make up everything else (XADD, SCAN, GET, DEL), and blocking
+# readers get their own client whose socket timeout is longer than the block
+# they issue.
+#
+# Two pools, not two connection counts: redis-py creates connections lazily, so
+# the second pool costs nothing in a process that never issues a blocking read
+# — which is every process except the API pods serving SSE.
 _client: Redis | RedisCluster | None = None
+_blocking_client: Redis | RedisCluster | None = None
 _unavailable = False
+
+# Socket read timeout for the blocking client, and the CONTRACT with every
+# caller of get_blocking_client(): no blocking command may specify a block
+# longer than this, or it aborts exactly the way described above.
+# turn_stream.tail() checks its own idle_timeout_ms against this at call time
+# rather than trusting the two numbers to be edited together.
+#
+# 30s against tail()'s 15s block leaves the whole margin to spare. It is still a
+# bound: a partition parks a blocking reader for 30 seconds, not forever, which
+# is the property the 5s timeout exists to provide for ordinary commands.
+BLOCKING_READ_TIMEOUT_S = 30.0
 
 
 def is_enabled() -> bool:
@@ -85,15 +119,45 @@ async def is_available() -> bool:
 async def get_client() -> Redis | RedisCluster | None:
     """Return the shared client, or None if Valkey is unconfigured/unreachable.
 
+    For ordinary, short commands. Anything issuing a blocking command (XREAD
+    BLOCK, BLPOP) must use get_blocking_client() instead — see the note on
+    BLOCKING_READ_TIMEOUT_S for what this client's socket timeout does to one.
+
     Connects lazily on first use rather than at import, so that merely importing
     app.main (alembic, the test suite, the reloader parent) never opens a socket.
     """
-    global _client, _unavailable
+    global _client
 
     if not settings.VALKEY_HOST or _unavailable:
         return None
     if _client is not None:
         return _client
+
+    _client = await _connect(socket_timeout=5.0)
+    return _client
+
+
+async def get_blocking_client() -> Redis | RedisCluster | None:
+    """Return the client for blocking reads, or None if Valkey is unavailable.
+
+    Separate pool from get_client() purely so the socket timeout can outlive a
+    blocking command's own block duration. Callers must keep their block below
+    BLOCKING_READ_TIMEOUT_S.
+    """
+    global _blocking_client
+
+    if not settings.VALKEY_HOST or _unavailable:
+        return None
+    if _blocking_client is not None:
+        return _blocking_client
+
+    _blocking_client = await _connect(socket_timeout=BLOCKING_READ_TIMEOUT_S)
+    return _blocking_client
+
+
+async def _connect(*, socket_timeout: float) -> Redis | RedisCluster | None:
+    """Build and verify one client. None (with the latch set) if unreachable."""
+    global _unavailable
 
     common: dict[str, Any] = {
         "host": settings.VALKEY_HOST,
@@ -102,8 +166,12 @@ async def get_client() -> Redis | RedisCluster | None:
         # client keeps every call site from sprinkling .decode() around.
         "decode_responses": True,
         # Without a timeout a network partition parks a request forever holding
-        # a worker slot. 5s is far longer than a healthy in-VPC round trip.
-        "socket_timeout": 5.0,
+        # a worker slot. 5s (the ordinary client) is far longer than a healthy
+        # in-VPC round trip; the blocking client passes something longer than the
+        # block it intends to issue. See BLOCKING_READ_TIMEOUT_S.
+        "socket_timeout": socket_timeout,
+        # NOT the same knob, and it stays at 5s for both: this bounds the TCP
+        # handshake, which no blocking command lengthens.
         "socket_connect_timeout": 5.0,
         # Memorystore drops idle connections; without keepalive the first command
         # after a lull fails once before the pool replaces the connection.
@@ -142,35 +210,36 @@ async def get_client() -> Redis | RedisCluster | None:
         )
         return None
 
-    _client = client
     logger.info(
-        "Valkey connected: %s:%s (cluster=%s, tls=%s)",
+        "Valkey connected: %s:%s (cluster=%s, tls=%s, socket_timeout=%ss)",
         settings.VALKEY_HOST,
         settings.VALKEY_PORT,
         settings.VALKEY_CLUSTER,
         settings.VALKEY_TLS,
+        socket_timeout,
     )
-    return _client
+    return client
 
 
 async def close_client() -> None:
-    """Release the pool at shutdown. Idempotent."""
-    global _client
-    if _client is None:
-        return
-    client, _client = _client, None
-    try:
-        await client.aclose()
-    except Exception:
-        logger.debug("Valkey close failed (shutting down anyway)", exc_info=True)
+    """Release both pools at shutdown. Idempotent."""
+    global _client, _blocking_client
+    clients = [c for c in (_client, _blocking_client) if c is not None]
+    _client = _blocking_client = None
+    for client in clients:
+        try:
+            await client.aclose()
+        except Exception:
+            logger.debug("Valkey close failed (shutting down anyway)", exc_info=True)
 
 
 def reset_for_tests() -> None:
-    """Drop the cached client and clear the unavailable latch.
+    """Drop both cached clients and clear the unavailable latch.
 
     The latch is process-wide and deliberately sticky, which would otherwise make
     one test that simulates an outage poison every test after it.
     """
-    global _client, _unavailable
+    global _client, _blocking_client, _unavailable
     _client = None
+    _blocking_client = None
     _unavailable = False
