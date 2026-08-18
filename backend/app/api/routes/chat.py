@@ -110,6 +110,13 @@ async def _dispatch(
             "case_pick": list(case_pick) if case_pick else None,
         },
     )
+    if dispatched:
+        # The fast half of the worker pool's wake-up. Pub/Sub is the queue; this
+        # is the same fact written somewhere KEDA can read without waiting on
+        # Cloud Monitoring's 60-180s metric delay. Only on the dispatched path —
+        # the inline and in-process fallbacks below need no worker, so waking
+        # one would start a pod to do nothing. See turn_stream.push_wake.
+        await turn_stream.push_wake(turn_id)
     return dispatched
 
 

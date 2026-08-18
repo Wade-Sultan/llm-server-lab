@@ -124,6 +124,13 @@ async def _handle(
     rewound: bool = False,
     case_pick: tuple[str, str] | None = None,
 ) -> None:
+    # FIRST, and before the claim below. This turn has reached a worker, which
+    # is the entire question the wake queue answers — so it stops counting
+    # towards "the pool needs to exist" even if the claim then rejects this
+    # delivery as a duplicate, and even if the turn goes on to fail. Clearing it
+    # any later would keep the scaler asking for a pod that is already here.
+    await turn_stream.clear_wake(turn_id)
+
     if not await turn_stream.claim(
         turn_id, WORKER_ID, settings.PUBSUB_ACK_EXTENSION_S * 2
     ):

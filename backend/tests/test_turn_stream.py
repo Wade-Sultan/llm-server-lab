@@ -30,6 +30,7 @@ class FakeValkey:
     def __init__(self) -> None:
         self.streams: dict[str, list[tuple[str, dict]]] = {}
         self.kv: dict[str, str] = {}
+        self.lists: dict[str, list[str]] = {}
         self.expiries: dict[str, int] = {}
         self._seq = 0
 
@@ -70,11 +71,26 @@ class FakeValkey:
         return sum(1 for k in keys if self.kv.pop(k, None) is not None)
 
     async def exists(self, key):
-        return 1 if (key in self.streams or key in self.kv) else 0
+        return 1 if (key in self.streams or key in self.kv or key in self.lists) else 0
 
     async def expire(self, key, ttl):
         self.expiries[key] = ttl
         return True
+
+    # -- lists ---------------------------------------------------------
+    async def rpush(self, key, *values):
+        self.lists.setdefault(key, []).extend(str(v) for v in values)
+        return len(self.lists[key])
+
+    async def lrem(self, key, count, value):
+        items = self.lists.get(key, [])
+        assert count == 0, "the wake queue relies on count=0 (remove every match)"
+        removed = items.count(str(value))
+        self.lists[key] = [i for i in items if i != str(value)]
+        return removed
+
+    async def llen(self, key):
+        return len(self.lists.get(key, []))
 
     async def scan_iter(self, match=None, count=None):
         prefix = (match or "*").rstrip("*")
@@ -98,6 +114,10 @@ class _FakePipeline:
 
     def xadd(self, *a, **kw):
         self._queued.append(("xadd", a, kw))
+        return self
+
+    def rpush(self, *a, **kw):
+        self._queued.append(("rpush", a, kw))
         return self
 
     def expire(self, *a, **kw):
@@ -663,3 +683,107 @@ def test_the_two_clients_really_do_differ_in_socket_timeout(monkeypatch):
     assert len(captured) == 2, "both clients were built with the same socket timeout"
     ordinary, blocking = sorted(captured)
     assert blocking > turn_stream.tail.__defaults__[1] / 1000 > ordinary
+
+
+# -------------------------------------------------------------- wake queue --
+#
+# The fast half of the worker pool's scale-from-zero. KEDA polls LLEN on this
+# list (deploy/overlays/prod/keda-worker.yaml); everything below is really an
+# assertion about what that scaler will see.
+
+
+@pytest.mark.usefixtures("fake")
+def test_a_dispatched_turn_makes_the_pool_look_needed():
+    async def scenario():
+        before = await turn_stream.wake_depth()
+        await turn_stream.push_wake("t30")
+        return before, await turn_stream.wake_depth()
+
+    before, after = asyncio.run(scenario())
+    assert before == 0, "an idle pool must read 0 or KEDA never scales down"
+    assert after == 1, "one queued turn must be visible to the scaler immediately"
+
+
+@pytest.mark.usefixtures("fake")
+def test_pickup_clears_the_turn_so_the_pool_can_scale_back_down():
+    """Cleared at pickup, not completion — the pod already exists by then."""
+
+    async def scenario():
+        await turn_stream.push_wake("t31")
+        await turn_stream.clear_wake("t31")
+        return await turn_stream.wake_depth()
+
+    assert asyncio.run(scenario()) == 0
+
+
+@pytest.mark.usefixtures("fake")
+def test_a_redelivered_turn_cannot_leave_a_straggler_holding_a_pod_up():
+    """Pub/Sub is at-least-once, so the same id can be pushed more than once.
+
+    LREM with count=0 removes every match. With count=1 the survivor would keep
+    the scaler active forever, which is a pod that never scales down.
+    """
+
+    async def scenario():
+        await turn_stream.push_wake("t32")
+        await turn_stream.push_wake("t32")
+        await turn_stream.clear_wake("t32")
+        return await turn_stream.wake_depth()
+
+    assert asyncio.run(scenario()) == 0
+
+
+@pytest.mark.usefixtures("fake")
+def test_an_undrained_queue_expires_rather_than_pinning_a_pod_forever(fake):
+    """The one leak this design allows, and its backstop.
+
+    A turn that no worker ever receives keeps the pool awake — correct, but
+    unbounded without a TTL, which would quietly undo scale-to-zero.
+    """
+
+    async def scenario():
+        await turn_stream.push_wake("t33")
+
+    asyncio.run(scenario())
+    assert fake.expiries[turn_stream.WAKE_KEY] == settings.TURN_STREAM_TTL_S
+
+
+@pytest.mark.usefixtures("no_valkey")
+def test_the_wake_queue_degrades_instead_of_failing_the_turn():
+    """No Valkey means no fast wake-up, not a failed /chat.
+
+    The turn is already on Pub/Sub at this point; losing this only costs the
+    slower Cloud Monitoring trigger, which is what the system had before.
+    """
+
+    async def scenario():
+        pushed = await turn_stream.push_wake("t34")
+        await turn_stream.clear_wake("t34")  # must not raise either
+        return pushed, await turn_stream.wake_depth()
+
+    pushed, depth = asyncio.run(scenario())
+    assert pushed is False
+    assert depth is None
+
+
+@pytest.mark.usefixtures("fake")
+def test_the_worker_clears_the_wake_entry_even_for_a_duplicate_delivery():
+    """_handle clears before the claim, so a losing duplicate still clears.
+
+    Clearing after the claim would mean a redelivery that loses the claim race
+    returns with the entry still in the list, asking KEDA for a pod to handle a
+    turn another pod is already running.
+    """
+    from app import worker as worker_module
+    from app.schemas.chat import ChatMessage
+
+    async def scenario():
+        await turn_stream.push_wake("t35")
+        # Somebody else already owns it.
+        await turn_stream.claim("t35", "another-worker", 60)
+        await worker_module._handle(
+            "t35", [ChatMessage(role="user", content="hi")], None, None
+        )
+        return await turn_stream.wake_depth()
+
+    assert asyncio.run(scenario()) == 0

@@ -38,11 +38,18 @@ documentation:
     needs a bigger one: `kubectl -n palladium describe scaledobject worker`.
 
     **Rule out a cold start first.** The pool floors at 0, so a burst arriving
-    into an idle cluster legitimately queues for ~1.5-2.5 minutes before the
-    first pod pulls. That is a slow first turn, not congestion, and it clears
-    itself. Both conditions below are duration-gated past it on purpose — if you
-    are seeing this fire on single turns into an idle pool, the fix is the
-    faster wake-up signal described in `keda-worker.yaml`, not a bigger pool.
+    into an idle cluster queues for ~25-35s before the first pod pulls — longer
+    if Autopilot has to provision a node for it. That is a slow first turn, not
+    congestion, and it clears itself. Both conditions below are duration-gated
+    well past it.
+
+    **If a cold start is taking minutes rather than seconds**, the fast wake-up
+    trigger is not firing and the pool is falling back to the Cloud Monitoring
+    one. Check that the `valkey-wake` trigger resolved its connection details
+    from the worker's env: `kubectl -n palladium describe scaledobject worker`.
+    Compare `LLEN chat:wake` against what the scaler reports — a list that grows
+    and never drains means workers are not reaching `_handle`, not that the
+    scaler is broken.
 
     **A sudden backlog with no traffic change** usually means the workers are
     not pulling at all: check for `Valkey unreachable` or a crash loop before

@@ -65,17 +65,22 @@ spec:
   # scaling it to zero would mean no pod accepts POST /chat, so no message is
   # ever produced, so this scaler would never see a backlog to react to.
   #
-  # WHAT IT COSTS, stated plainly: the first turn after an idle period waits for
-  # the whole 0->1 path instead of being picked up immediately. The dominant
-  # term is not Kubernetes — it is the trigger metric below, which Cloud
-  # Monitoring samples every 60s and then withholds for up to another 120s. Add
-  # pollingInterval, pod scheduling, and (if no node has room) 60-120s of
-  # Autopilot node provisioning, and time-to-first-token for that turn is
-  # ~1.5-2.5 minutes, worst case ~5. Every turn after it, until the pool scales
-  # back down, is unaffected.
+  # WHAT IT COSTS: the first turn after an idle period waits for the whole 0->1
+  # path instead of being picked up immediately. Every turn after it, until the
+  # pool scales back down, is unaffected.
   #
-  # Lowering that floor means changing the SIGNAL, not the polling — see the
-  # note under `triggers` about reading queue depth from Valkey instead.
+  # That wait used to be ~1.5-2.5 minutes and was almost entirely one term — the
+  # Cloud Monitoring metric behind the Pub/Sub trigger, which is sampled every
+  # 60s and then withheld for up to 120s more. The valkey-wake trigger below
+  # removed it: the wake signal is now written synchronously by /chat and read
+  # directly, so the budget is pollingInterval (<=10s) + pod scheduling (~5s) +
+  # process start (~10-20s), or roughly 25-35s when a node has room.
+  #
+  # WHAT IS LEFT IS AUTOPILOT. If no node can fit a 2Gi pod, node provisioning
+  # adds 60-120s and no scaler change can help — the cluster is capped at 4
+  # nodes by SSD_TOTAL_GB quota, so this is the term to expect on a genuinely
+  # cold cluster. A low-priority balloon pod holding 2Gi would remove it, at the
+  # cost of reserving the memory this floor exists to release.
   minReplicaCount: 0
 
   # 8 x 8 concurrency = 64 turns in flight. A ceiling, not a target: at the
@@ -84,11 +89,22 @@ spec:
   # than raise reflexively when a run looks slow.
   maxReplicaCount: 8
 
-  # Every poll is a Cloud Monitoring API call, and Autopilot needs 60-120s to
-  # schedule a node anyway — polling faster than 30s would bill more to react no
-  # sooner. It is also not the term worth optimising: at minReplicaCount 0 the
-  # metric's own 60-180s visibility delay dwarfs it.
-  pollingInterval: 30
+  # 10, DOWN FROM 30, and only because the valkey-wake trigger below made it
+  # worth anything. The old note here was right at the time: every poll is a
+  # Cloud Monitoring API call, and with a single trigger whose metric is already
+  # 60-180s stale, polling faster bought nothing — the interval was rounding
+  # error against the delay. The wake trigger reads Valkey directly, so the
+  # interval is now genuinely the first term in the 0->1 path.
+  #
+  # ONE INTERVAL FOR THE WHOLE SCALEDOBJECT, not per trigger, which is the
+  # trade-off to understand here: this also triples the Cloud Monitoring query
+  # rate to 6/min. That is far inside the read quota and costs nothing material,
+  # but it is a real consequence of a number that looks like it only concerns
+  # Valkey.
+  #
+  # Not 5. Halving this again would shave five seconds off a path whose next
+  # step is 10-20s of pod start, while doubling the Monitoring traffic again.
+  pollingInterval: 10
 
   # EXPLICIT BECAUSE IT IS A DIFFERENT KNOB FROM THE ONE BELOW, and now that the
   # floor is 0 there is a scale-down transition that only this governs.
@@ -169,16 +185,13 @@ spec:
         # default of 0 means "any message at all wakes the pool", which is what
         # a chat request needs.
         #
-        # IF THE COLD-START WAIT BECOMES THE COMPLAINT, replace the signal
-        # rather than the interval. Polling this faster cannot beat Cloud
-        # Monitoring's own 60s sampling + up-to-120s visibility delay. Valkey is
-        # already in the request path and already tracks in-flight turns
-        # (turn_stream.set_active_turn), and KEDA's `redis` scaler reads it in
-        # real time — cluster mode is disabled on this instance (VALKEY_CLUSTER
-        # in patches/config-prod.yaml), which is what that scaler requires. Add
-        # it as a SECOND trigger at pollingInterval 5 and leave this one as the
-        # steady-state N-scaler: KEDA takes the max across triggers, so the fast
-        # one only ever decides the wake-up. That puts 0->1 at roughly 20-25s.
+        # THIS TRIGGER NO LONGER DECIDES THE WAKE-UP — the valkey-wake trigger
+        # below does, because no polling interval can outrun this metric's own
+        # 60s sampling plus up-to-120s visibility delay. What stays here is the
+        # steady-state answer: Pub/Sub is the real queue, so it remains the
+        # authority on how deep a backlog is once workers are already running,
+        # which is the one thing the wake queue cannot see (turns delivered
+        # straight to a live worker never enter it).
         threshold: "8"
 
         # Explicit because the failure mode is silent and confusing. An empty
@@ -187,3 +200,83 @@ spec:
         # queue would put the scaler into an error state and the HPA would stop
         # being able to compute a target at all.
         ignoreNullValues: "true"
+
+    # ---------------------------------------------------------------------
+    # THE WAKE-UP TRIGGER. Same arithmetic as the Pub/Sub trigger above, read
+    # from somewhere that answers immediately.
+    #
+    # THE PROBLEM IT SOLVES. `num_undelivered_messages` is sampled by Cloud
+    # Monitoring every 60s and then withheld for up to another 120s, so the
+    # metric proving a turn is queued shows up one to three minutes after the
+    # user pressed send. That was invisible at a warm floor — a pod was already
+    # there — and became the entire cold start once minReplicaCount went to 0.
+    # No polling interval can outrun it, because the staleness is upstream of
+    # KEDA. The only fix is a different signal.
+    #
+    # app/services/turn_stream.py's wake queue is that signal: /chat RPUSHes the
+    # turn id onto `chat:wake` on the same code path that publishes to Pub/Sub,
+    # and the worker LREMs it the moment a turn reaches _handle. So the list
+    # holds exactly the turns that are waiting for a worker to exist, it is
+    # written synchronously rather than sampled, and it drains itself as soon as
+    # the pool is up.
+    #
+    # BOTH TRIGGERS, NOT ONE. KEDA takes the max desired replicas across
+    # triggers, so this decides the wake-up and Pub/Sub stays the authority on
+    # depth under sustained load — which is right, because Pub/Sub is the real
+    # queue and this list is only ever a claim about the head of it. Deleting
+    # the Pub/Sub trigger would leave the pool blind to a backlog that built up
+    # while workers were already running, since those turns never enter this
+    # list at all.
+    #
+    # `redis`, NOT `redis-cluster`. VALKEY_CLUSTER is false in
+    # patches/config-prod.yaml (forced by the custom-pico node type), and the
+    # cluster scaler fails at connect against a non-clustered instance. If that
+    # instance type ever changes, this trigger type changes with it.
+    - type: redis
+      metadata:
+        # RESOLVED FROM THE WORKER'S OWN ENV, which is what keeps the
+        # Memorystore private IP out of git — it lives in
+        # palladium-secrets-builder, same as POSTGRES_SERVER, and reaches the
+        # pod through envFrom (patches/secrets-scoped.yaml). KEDA resolves
+        # *FromEnv against the scale target's pod spec, including envFrom
+        # ConfigMapRef and SecretRef, so it reads the same values the worker
+        # does with nothing duplicated here.
+        #
+        # This needs the KEDA operator to be able to read Secrets in this
+        # namespace. It can by default; if that is ever tightened, this trigger
+        # fails resolution and `kubectl describe scaledobject worker` is the
+        # only place that says so — same failure shape the file header
+        # describes for the Workload Identity grant.
+        hostFromEnv: VALKEY_HOST
+        portFromEnv: VALKEY_PORT
+        # Empty when Memorystore AUTH is off, which is how this instance is
+        # provisioned today. Naming the variable anyway means enabling AUTH
+        # later is a Secret change with no manifest edit.
+        passwordFromEnv: VALKEY_PASSWORD
+
+        # Must track turn_stream.WAKE_KEY.
+        listName: chat:wake
+
+        # DELIBERATELY IDENTICAL to the Pub/Sub trigger's threshold, and to
+        # PUBSUB_MAX_CONCURRENCY. Both triggers then compute ceil(depth / 8), so
+        # they do not fight: whichever sees the work first sets the count, and
+        # the other agrees as soon as it catches up. Changing one without the
+        # other would make the pool oscillate as the slower signal arrived and
+        # revised the faster one down.
+        listLength: "8"
+
+        # The activation threshold is what actually performs the 0->1 wake, and
+        # it is a SEPARATE knob from listLength above: listLength decides how
+        # many replicas the depth deserves, activation decides whether the
+        # ScaledObject is active at all. Default is 0 — "any element wakes the
+        # pool" — which is exactly right for one user pressing send, and is
+        # spelled out here only because leaving it implicit makes the single
+        # most important behaviour of this trigger invisible.
+        activationListLength: "0"
+
+        # Matches VALKEY_TLS in patches/config-prod.yaml. Memorystore only
+        # accepts TLS when the instance was created with in-transit encryption,
+        # so this must stay in step with how it was provisioned or the scaler
+        # hangs on a handshake that never completes — the same trap the app
+        # client has.
+        enableTLS: "false"

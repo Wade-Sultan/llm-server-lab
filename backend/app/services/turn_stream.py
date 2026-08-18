@@ -293,6 +293,103 @@ async def release_claim(turn_id: str) -> None:
         )
 
 
+# ------------------------------------------------------------ wake queue --
+#
+# A list of turn ids that have been published to Pub/Sub but not yet picked up
+# by a worker. It exists for exactly one reader — KEDA's `redis` scaler, which
+# polls LLEN to decide whether the worker pool needs to exist at all
+# (deploy/overlays/prod/keda-worker.yaml).
+#
+# WHY NOT JUST USE THE PUB/SUB BACKLOG, which is already the scaler's steady-
+# state signal. Because of when it becomes visible, not what it says: Cloud
+# Monitoring samples subscription/num_undelivered_messages every 60s and then
+# withholds it for up to another 120s, so the metric that proves a turn is
+# waiting arrives one to three minutes after the user pressed send. With the
+# pool floored at zero that delay IS the cold start. This list is written
+# synchronously on the dispatch path and read directly, so the same fact is
+# available to the scaler within one polling interval.
+#
+# It does not replace the Pub/Sub trigger, and must not: Pub/Sub is the real
+# queue and the authority on depth under load. This is a wake-up signal that
+# happens to use the same per-replica arithmetic, so the two triggers agree
+# about how many pods the work deserves and differ only in how fast they say so.
+#
+# REMOVED AT PICKUP, NOT AT COMPLETION. The question this answers is "does a
+# worker exist to take this turn", which is settled the moment one has it — so a
+# worker that crashes mid-turn leaks nothing here, and Pub/Sub redelivery (which
+# never goes back through /chat) needs no second push. The only way an entry
+# outlives its turn is a turn that no worker ever receives, which is a real
+# condition the pool should stay up for.
+#
+# No hash tag on the key. Every other key in this module carries one so a turn's
+# state co-locates; this is a single global list, so there is nothing to
+# co-locate it with and a tag would only pin it to an arbitrary slot.
+WAKE_KEY = "chat:wake"
+
+
+async def push_wake(turn_id: str) -> bool:
+    """Record that a dispatched turn is waiting for a worker.
+
+    Never raises, and a False return is not worth failing the request over: the
+    turn is already on Pub/Sub, so the worst case is that the pool wakes on the
+    slower Cloud Monitoring trigger instead — which is exactly the behaviour
+    this system had before the fast trigger existed.
+    """
+    client = await get_client()
+    if client is None:
+        return False
+    try:
+        pipe = client.pipeline()
+        pipe.rpush(WAKE_KEY, turn_id)
+        # A backstop against the one leak this design allows. If entries stop
+        # being drained — a broken subscription, a dead-lettered turn — the list
+        # would otherwise hold one pod up forever, which is precisely the cost
+        # scale-to-zero exists to avoid. Refreshed on every push, so it only
+        # expires after a genuine lull, by which point an undrained entry is
+        # stale by definition.
+        pipe.expire(WAKE_KEY, settings.TURN_STREAM_TTL_S)
+        await pipe.execute()
+        return True
+    except (RedisError, OSError):
+        logger.warning("wake queue push failed for %s", turn_id, exc_info=True)
+        return False
+
+
+async def clear_wake(turn_id: str) -> None:
+    """Drop a turn from the wake queue: a worker has it.
+
+    LREM with count=0 removes every matching element, so a redelivery that
+    somehow pushed twice cannot leave a straggler behind.
+    """
+    client = await get_client()
+    if client is None:
+        return
+    try:
+        await client.lrem(WAKE_KEY, 0, turn_id)
+    except (RedisError, OSError):
+        # Deliberately quiet about the consequence: a failed removal keeps the
+        # pool awake slightly longer than necessary, which costs a pod-minute
+        # and breaks nothing.
+        logger.warning("wake queue clear failed for %s", turn_id, exc_info=True)
+
+
+async def wake_depth() -> int | None:
+    """Turns waiting for a worker, or None if Valkey is unavailable.
+
+    Not used by the application — this is what KEDA reads with LLEN, exposed
+    here so the number is inspectable from the API rather than only from a
+    redis-cli against a private VPC address.
+    """
+    client = await get_client()
+    if client is None:
+        return None
+    try:
+        return int(await client.llen(WAKE_KEY))
+    except (RedisError, OSError):
+        logger.warning("wake queue depth check failed", exc_info=True)
+        return None
+
+
 async def exists(turn_id: str) -> bool:
     """Whether any events have been written for this turn yet."""
     client = await get_client()
