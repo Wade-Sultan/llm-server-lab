@@ -8,6 +8,7 @@ hit typed columns rather than Python-only @property values.
 from __future__ import annotations
 
 import re
+import uuid
 
 from sqlalchemy import func, or_, select, true
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -68,9 +69,21 @@ async def get_part_by_name(db: AsyncSession, name: str) -> PCPart | None:
     return result.scalars().first()
 
 
+async def get_part_by_id(db: AsyncSession, part_id: uuid.UUID) -> PCPart | None:
+    """The same polymorphic lookup by primary key, for callers holding a
+    part_id rather than a name (the build card's parts carry ids). Subclass
+    columns are eager-loaded for the same reason: reading a group FK off a
+    lazily-loaded subclass row raises under asyncio."""
+    result = await db.execute(select(_PART_POLY).where(_PART_POLY.id == part_id))
+    return result.scalars().first()
+
+
 # part_type -> (group FK attr on the exact, group model). Price for these types
-# lives on the group, not on the exact's pc_parts row.
-_GROUP_PRICE_LOOKUP = {
+# lives on the group, not on the exact's pc_parts row. Public because price
+# subscriptions need the same mapping to point a watch at the row that actually
+# moves (app/crud/price_subscriptions.py) — a second copy of it would be a
+# second place for "which parts are grouped" to go stale.
+GROUP_PRICE_LOOKUP = {
     "gpu": ("gpu_chipset_id", GPUChipset),
     "psu": ("psu_group_id", PSUGroup),
     "ramkit": ("ram_group_id", RAMGroup),
@@ -82,7 +95,7 @@ async def resolve_part_price_cents(db: AsyncSession, part: PCPart) -> int | None
     """Effective street price for a resolved part: for grouped types (GPU/PSU/
     RAMKit/StorageDrive) it lives on the group; everything else uses pc_parts.
     `part` must have its subclass columns loaded (see get_part_by_name)."""
-    entry = _GROUP_PRICE_LOOKUP.get(getattr(part, "part_type", None))
+    entry = GROUP_PRICE_LOOKUP.get(getattr(part, "part_type", None))
     if entry is None:
         return part.street_price_cents
     fk_attr, model = entry

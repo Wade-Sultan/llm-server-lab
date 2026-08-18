@@ -7,7 +7,8 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import func
 
-from app.crud.pricing_etl import TARGET_MODELS
+from app.crud.components import GROUP_PRICE_LOOKUP, get_part_by_id
+from app.crud.pricing_etl import GROUP_SPECS, TARGET_MODELS
 from app.models.price_subscription import (
     STATUS_ACTIVE,
     STATUS_CANCELED,
@@ -44,6 +45,55 @@ async def resolve_target(
         name=row.name,
         street_price_cents=row.street_price_cents,
     )
+
+
+# pc_parts part_type -> (group FK attr on the exact, the group's target_kind).
+# Derived from the two mappings that already exist rather than restated: a part
+# type that gained a group, or a group that gained a target_kind, would raise at
+# import here instead of quietly producing subscriptions that never fire.
+_PART_TYPE_TARGETS: dict[str, tuple[str, str]] = {
+    part_type: (fk_attr, {m: k for k, (m, _) in GROUP_SPECS.items()}[model])
+    for part_type, (fk_attr, model) in GROUP_PRICE_LOOKUP.items()
+}
+
+
+async def resolve_price_target(
+    db: AsyncSession, target_kind: str, target_id: uuid.UUID
+) -> TargetInfo | None:
+    """The row that actually carries a price for something the client named.
+
+    Callers hand us a pc_parts id — that is the only identifier a build card
+    has — but for GPU/PSU/RAM/storage the street price lives on the group, and
+    the ETL only ever prices the group. A subscription left pointing at the
+    exact part would sit active forever watching a column nothing writes, so
+    those are redirected to their group here, once, at the edge.
+
+    Everything else (and any kind already naming a group) resolves unchanged.
+    """
+    if target_kind != "pc_part":
+        return await resolve_target(db, target_kind, target_id)
+
+    part = await get_part_by_id(db, target_id)
+    if part is None:
+        return None
+
+    entry = _PART_TYPE_TARGETS.get(getattr(part, "part_type", None))
+    if entry is None:
+        return TargetInfo(
+            kind="pc_part",
+            id=target_id,
+            name=part.name,
+            street_price_cents=part.street_price_cents,
+        )
+
+    fk_attr, group_kind = entry
+    group_id = getattr(part, fk_attr, None)
+    # An exact with no group has no price anywhere, so there is nothing to
+    # watch — the caller turns this into "can't alert on this part" rather
+    # than a subscription that can never fire.
+    if group_id is None:
+        return None
+    return await resolve_target(db, group_kind, group_id)
 
 
 # Recomputed rather than incremented: the counts are a summary of rows that

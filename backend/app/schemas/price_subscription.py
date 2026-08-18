@@ -41,6 +41,31 @@ class PriceSubscriptionOut(BaseModel):
     notified_price_cents: int | None
 
 
+class PriceTargetLookup(BaseModel):
+    """Everything the UI needs to offer an alert on one part, in one row.
+
+    Keyed by the part_id the caller asked about, which is not necessarily the
+    target that gets watched: grouped parts are redirected to their group (see
+    crud.price_subscriptions.resolve_price_target), and the client has to
+    subscribe to — and match its own subscriptions against — the resolved pair,
+    not the part it started from.
+
+    `current_price_cents` is the catalog street price, which is what alerts are
+    evaluated against; a marketplace listing shown beside it on the same card
+    may differ.
+    """
+
+    part_id: uuid.UUID
+    target_kind: str
+    target_id: uuid.UUID
+    target_name: str
+    current_price_cents: int | None
+    active_count: int
+    # The caller's own live subscription to this target, if they have one.
+    # Always null for an unauthenticated request.
+    subscription: PriceSubscriptionOut | None = None
+
+
 class TargetSubscriberCount(BaseModel):
     """How many people are watching one part. active_count is the live figure;
     total_count includes sent and canceled rows, so a part's popularity does

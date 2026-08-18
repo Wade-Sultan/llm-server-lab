@@ -243,6 +243,53 @@
   }
 }
 
+/* ── Price-alert bell (see price-alert.tsx) ──
+   The bell swings while the pointer is over it, hinged at the top like a real
+   one, then hangs still for the rest of the cycle so a hovered card isn't a
+   permanent wobble. Same `@media (hover: hover)` gate as the buy buttons above:
+   on touch there is no hover to end, so the animation would simply never stop.
+   prefers-reduced-motion drops the movement and keeps the color change, which
+   is what actually carries the affordance. */
+@keyframes bell-ring {
+  0% {
+    transform: rotate(0deg);
+  }
+  6% {
+    transform: rotate(14deg);
+  }
+  14% {
+    transform: rotate(-12deg);
+  }
+  22% {
+    transform: rotate(9deg);
+  }
+  30% {
+    transform: rotate(-6deg);
+  }
+  38% {
+    transform: rotate(3deg);
+  }
+  46%,
+  100% {
+    transform: rotate(0deg);
+  }
+}
+
+@media (hover: hover) {
+  .bell-btn:hover .bell-btn-icon,
+  .bell-btn:focus-visible .bell-btn-icon {
+    transform-origin: 50% 15%;
+    animation: bell-ring 1.6s ease-in-out infinite;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bell-btn:hover .bell-btn-icon,
+  .bell-btn:focus-visible .bell-btn-icon {
+    animation: none;
+  }
+}
+
 /*
  * Custom-styled checkbox/radio options on the build configurator.
  *

@@ -11,6 +11,10 @@ import { useEffect, useState } from "react"
 import type { IconType } from "react-icons"
 import { FaAmazon, FaEbay } from "react-icons/fa6"
 import { toast } from "sonner"
+import {
+  PriceAlertBell,
+  usePriceTargets,
+} from "@/components/assistant-ui/price-alert"
 import { useChatConversation } from "@/components/Chat/chatruntimeprovider"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -29,11 +33,8 @@ import {
 } from "@/lib/feedback"
 import { fetchListingsByPart, type PartListings } from "@/lib/listings"
 import { sharedBuildPdfUrl, sharedBuildUrl } from "@/lib/share"
-import { cn } from "@/lib/utils"
+import { cn, formatCents } from "@/lib/utils"
 import type { BuildData } from "@/types/build"
-
-const formatPrice = (value: number, currency = "USD") =>
-  value.toLocaleString("en-US", { style: "currency", currency })
 
 /**
  * Thumbs up/down on this build.
@@ -231,6 +232,11 @@ function ShareActions({ shareToken }: { shareToken: string }) {
 export const BuildCard: DataMessagePartComponent<BuildData> = (props) => {
   const data = props.data as BuildData
   const listings = usePartListings(data.parts)
+  // One request for the whole card: which parts can be watched, what the
+  // catalog says they cost, and which the signed-in user already watches.
+  const { targets, setSubscription } = usePriceTargets(
+    data.parts.map((p) => p.part_id),
+  )
 
   return (
     <div className="my-2 flex w-full max-w-(--thread-max-width) flex-col gap-1">
@@ -239,7 +245,7 @@ export const BuildCard: DataMessagePartComponent<BuildData> = (props) => {
           <div className="flex items-center justify-between gap-2">
             <CardTitle className="text-base">{data.label}</CardTitle>
             <Badge variant="secondary">
-              ~{formatPrice(data.total_approx / 100)}*
+              ~{formatCents(data.total_approx)}*
             </Badge>
           </div>
           <CardDescription>{data.description}</CardDescription>
@@ -270,51 +276,68 @@ export const BuildCard: DataMessagePartComponent<BuildData> = (props) => {
             // A build can hold several of a part (four matched GPUs, three
             // fans). Absent on reference builds, which predate the field.
             const quantity = part.quantity ?? 1
+            const priceTarget = targets[part.part_id]
             return (
               <div
                 // part_id is "" for a name the catalog couldn't resolve, so it
                 // is not unique on its own once a build can carry several rows
                 // in one role — pair it with the component and model.
                 key={`${part.component}:${part.part_id || part.model}`}
-                className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2"
+                className="flex items-center gap-1"
               >
-                <div className="min-w-0">
-                  <p className="text-muted-foreground text-xs uppercase tracking-wide">
-                    {part.component}
-                  </p>
-                  <p className="truncate text-sm font-medium">
-                    {quantity > 1 && (
-                      <span className="text-muted-foreground">
-                        {quantity}×{" "}
+                <div className="flex min-w-0 flex-1 items-center justify-between gap-3 rounded-lg border px-3 py-2">
+                  <div className="min-w-0">
+                    <p className="text-muted-foreground text-xs uppercase tracking-wide">
+                      {part.component}
+                    </p>
+                    <p className="truncate text-sm font-medium">
+                      {quantity > 1 && (
+                        <span className="text-muted-foreground">
+                          {quantity}×{" "}
+                        </span>
+                      )}
+                      {part.brand} {part.model}
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+                    {unitPriceCents != null && (
+                      <span className="text-sm text-muted-foreground">
+                        {/* Line total: both price sources are per unit. */}
+                        {formatCents(unitPriceCents * quantity, priceCurrency)}
                       </span>
                     )}
-                    {part.brand} {part.model}
-                  </p>
+                    <MarketplaceButton
+                      url={amazonUrl}
+                      label="Amazon"
+                      icon={FaAmazon}
+                      className="mp-btn mp-btn-amazon"
+                      partLabel={partLabel}
+                    />
+                    <MarketplaceButton
+                      url={ebayUrl}
+                      label="eBay"
+                      icon={FaEbay}
+                      className="mp-btn mp-btn-ebay"
+                      partLabel={partLabel}
+                    />
+                  </div>
                 </div>
-                <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
-                  {unitPriceCents != null && (
-                    <span className="text-sm text-muted-foreground">
-                      {/* Line total: both price sources are per unit. */}
-                      {formatPrice(
-                        (unitPriceCents * quantity) / 100,
-                        priceCurrency,
-                      )}
-                    </span>
+                {/* Outside the part's box, inside the card: watching a price is
+                    an action on the part, not a third place to buy it. The slot
+                    is always there so every row's box ends at the same place —
+                    a part with nothing watchable (see lookupPriceTargets) shows
+                    no bell rather than a dead one, and a card mixing the two
+                    would otherwise have ragged edges. */}
+                <div className="flex w-8 shrink-0 items-center justify-center">
+                  {priceTarget && (
+                    <PriceAlertBell
+                      target={priceTarget}
+                      partLabel={partLabel}
+                      onSubscriptionChange={(sub) =>
+                        setSubscription(part.part_id, sub)
+                      }
+                    />
                   )}
-                  <MarketplaceButton
-                    url={amazonUrl}
-                    label="Amazon"
-                    icon={FaAmazon}
-                    className="mp-btn mp-btn-amazon"
-                    partLabel={partLabel}
-                  />
-                  <MarketplaceButton
-                    url={ebayUrl}
-                    label="eBay"
-                    icon={FaEbay}
-                    className="mp-btn mp-btn-ebay"
-                    partLabel={partLabel}
-                  />
                 </div>
               </div>
             )

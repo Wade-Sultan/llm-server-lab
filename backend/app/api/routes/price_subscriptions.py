@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.auth import verify_firebase_token
+from app.core.auth import optional_firebase_token, verify_firebase_token
 from app.core.db import get_async_db
 from app.crud import price_subscriptions as crud
 from app.models.price_subscription import PriceSubscription
@@ -14,6 +14,7 @@ from app.models.user import User
 from app.schemas.price_subscription import (
     PriceSubscriptionCreate,
     PriceSubscriptionOut,
+    PriceTargetLookup,
     TargetSubscriberCount,
 )
 
@@ -23,10 +24,15 @@ router = APIRouter(tags=["price-subscriptions"])
 # pricing ETL (app/services/pricing_etl/alerts.py) and delivered by commerce;
 # these routes only manage who is waiting for what.
 #
-# Nothing in the frontend calls these yet — this is the machinery, in place and
-# testable, ahead of the UI. Dispatch is separately gated by
-# settings.PRICE_ALERTS_ENABLED, so subscribing is safe before then: rows are
-# recorded and evaluated, and no mail leaves the cluster.
+# The bell on each build-card part row is the client (frontend
+# components/assistant-ui/price-alert.tsx), with the settings page listing what
+# a user is watching. Dispatch is separately gated by
+# settings.PRICE_ALERTS_ENABLED, so subscribing is safe before that is on: rows
+# are recorded and evaluated, and no mail leaves the cluster.
+#
+# Every target the client names is a pc_parts id, because that is the only
+# identifier a build carries — resolve_price_target redirects the grouped types
+# to the row the ETL actually prices, so what gets stored is always watchable.
 
 
 async def _resolve_user(db: AsyncSession, token: dict) -> User:
@@ -72,6 +78,15 @@ async def _resolve_user(db: AsyncSession, token: dict) -> User:
     return user
 
 
+async def _existing_user(db: AsyncSession, token: dict) -> User | None:
+    """The caller's users row, or None. Unlike _resolve_user this provisions
+    nothing: a caller with no row cannot have subscribed to anything, and
+    reading their (empty) subscriptions is not a reason to create an account."""
+    return (
+        await db.execute(select(User).where(User.firebase_uid == token.get("uid")))
+    ).scalar_one_or_none()
+
+
 def _to_out(
     sub: PriceSubscription,
     *,
@@ -105,18 +120,21 @@ async def create_price_subscription(
 ) -> PriceSubscriptionOut:
     """Watch a part's price. Repeat calls for the same target update the
     threshold and re-anchor the baseline rather than erroring."""
-    target = await crud.resolve_target(db, payload.target_kind, payload.target_id)
+    target = await crud.resolve_price_target(db, payload.target_kind, payload.target_id)
     if target is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Unknown part"
         )
 
     user = await _resolve_user(db, token)
+    # target.kind/target.id rather than the payload's: a GPU is watched through
+    # its chipset, and storing what the client sent would be a subscription
+    # against a column nothing ever writes.
     sub = await crud.subscribe(
         db,
         user_id=user.id,
-        target_kind=payload.target_kind,
-        target_id=payload.target_id,
+        target_kind=target.kind,
+        target_id=target.id,
         threshold_cents=payload.threshold_cents,
         baseline_price_cents=target.street_price_cents,
     )
@@ -135,12 +153,9 @@ async def list_price_subscriptions(
 ) -> list[PriceSubscriptionOut]:
     """The caller's own subscriptions, newest first. Active only by default;
     include_inactive adds the ones already alerted on or canceled."""
-    firebase_uid = token.get("uid")
-    user = (
-        await db.execute(select(User).where(User.firebase_uid == firebase_uid))
-    ).scalar_one_or_none()
     # No row means nothing can have been subscribed, so this is an empty list
     # rather than a reason to provision an account (mirrors /conversations).
+    user = await _existing_user(db, token)
     if user is None:
         return []
 
@@ -154,6 +169,79 @@ async def list_price_subscriptions(
                 sub,
                 target_name=target.name if target else None,
                 current_price_cents=target.street_price_cents if target else None,
+            )
+        )
+    return out
+
+
+# How many parts one lookup will resolve. A build card asks about its own parts
+# — eight or so — and the cap is here so a hand-written URL cannot turn one
+# request into an unbounded fan-out of per-target queries.
+_LOOKUP_LIMIT = 40
+
+
+@router.get("/price-subscriptions/lookup", response_model=list[PriceTargetLookup])
+async def lookup_price_targets(
+    part_ids: str,
+    token: dict | None = Depends(optional_firebase_token),
+    db: AsyncSession = Depends(get_async_db),
+) -> list[PriceTargetLookup]:
+    """Resolve build-card parts to the targets a user can actually watch.
+
+    One call per card rather than one per part, and optionally authenticated:
+    the price and watcher count are public catalog facts, while `subscription`
+    is filled in only for a signed-in caller, so the same request serves the
+    shared-build page and the chat.
+
+    Parts that resolve to nothing — unpriced, or an exact with no group — are
+    omitted rather than returned empty. The card hides the bell for those,
+    which is better than offering an alert that could never fire.
+    """
+    ids: list[uuid.UUID] = []
+    for raw in part_ids.split(","):
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            ids.append(uuid.UUID(raw))
+        except ValueError:
+            # A build can carry "" for a name the catalog never resolved. Skip
+            # it — one unresolvable part is not a bad request for the rest.
+            continue
+        if len(ids) >= _LOOKUP_LIMIT:
+            break
+
+    # The caller's live subscriptions, keyed by target, so N parts cost one
+    # query rather than one apiece.
+    mine: dict[tuple[str, uuid.UUID], PriceSubscription] = {}
+    if token is not None:
+        user = await _existing_user(db, token)
+        if user is not None:
+            for sub in await crud.list_for_user(db, user.id):
+                mine[(sub.target_kind, sub.target_id)] = sub
+
+    out: list[PriceTargetLookup] = []
+    for part_id in ids:
+        target = await crud.resolve_price_target(db, "pc_part", part_id)
+        if target is None:
+            continue
+        active, _total = await crud.get_counts(db, target.kind, target.id)
+        sub = mine.get((target.kind, target.id))
+        out.append(
+            PriceTargetLookup(
+                part_id=part_id,
+                target_kind=target.kind,
+                target_id=target.id,
+                target_name=target.name,
+                current_price_cents=target.street_price_cents,
+                active_count=active,
+                subscription=_to_out(
+                    sub,
+                    target_name=target.name,
+                    current_price_cents=target.street_price_cents,
+                )
+                if sub is not None
+                else None,
             )
         )
     return out
@@ -176,10 +264,7 @@ async def delete_price_subscription(
 ) -> None:
     """Stop watching. Canceled rather than deleted, so the target's total
     subscriber count still reflects that someone once cared."""
-    firebase_uid = token.get("uid")
-    user = (
-        await db.execute(select(User).where(User.firebase_uid == firebase_uid))
-    ).scalar_one_or_none()
+    user = await _existing_user(db, token)
     if user is None or not await crud.cancel(
         db, user_id=user.id, subscription_id=subscription_id
     ):
