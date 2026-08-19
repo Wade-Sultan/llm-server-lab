@@ -81,7 +81,7 @@ spec:
   # nodes by SSD_TOTAL_GB quota, so this is the term to expect on a genuinely
   # cold cluster. A low-priority balloon pod holding 2Gi would remove it, at the
   # cost of reserving the memory this floor exists to release.
-  minReplicaCount: 0
+  minReplicaCount: 1
 
   # 8 x 8 concurrency = 64 turns in flight. A ceiling, not a target: at the
   # worker's prod resources (250m/2Gi requested) a fully scaled-out pool is 16Gi
