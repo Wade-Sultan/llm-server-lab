@@ -63,20 +63,20 @@ export default function AboutPage() {
               added to your order.
             </p>
             <p>
-              Palladium's recommendations are not connected to commissions: Builds are
-              put together from compatibility and the price of the part, and a
-              part is not ranked higher for paying more.
+              Palladium's recommendations are not connected to commissions:
+              Builds are put together from compatibility and the price of the
+              part, and a part is not ranked higher for paying more.
             </p>
           </Section>
 
           <Section title="How eBay data is handled">
             <p>
               Palladium does not connect to eBay's API and does not take in eBay
-              listing data. The only thing we keep for the eBay button is the link itself
-              (a filtered search URL set up through eBay Partner Network) and
-              nothing else. We do not store item records, seller information, or prices.
-              The affiliate tracking is added to that link at the moment the
-              page is served.
+              listing data. The only thing we keep for the eBay button is the
+              link itself (a filtered search URL set up through eBay Partner
+              Network) and nothing else. We do not store item records, seller
+              information, or prices. The affiliate tracking is added to that
+              link at the moment the page is served.
             </p>
             <p>
               Those links are also kept apart from the parts data. They are held

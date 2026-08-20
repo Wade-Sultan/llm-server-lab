@@ -21,9 +21,8 @@ import { cn } from "@/lib/utils"
 export function AffiliateDisclosure({ className }: { className?: string }) {
   return (
     <p className={cn("text-muted-foreground text-xs", className)}>
-      As an eBay Partner Network member, Palladium earns a commission
-      on qualifying purchases made through the links below at no extra cost to
-      you.
+      As an eBay Partner Network member, Palladium earns a commission on
+      qualifying purchases made through the links below at no extra cost to you.
     </p>
   )
 }

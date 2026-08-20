@@ -142,6 +142,58 @@ SQL
 literal, so the password is never typed into a file and never needs hand
 quoting.
 
+### If psql cannot reach the instance
+
+Create the roles through the Cloud SQL API instead. This needs neither psql nor
+the browser, so it is the way out when the proxy is misbehaving and the only
+alternative would be pasting passwords into Studio:
+
+```bash
+gcloud sql users create palladium_admin \
+  --instance="${INSTANCE##*:}" --project=$PROJECT --password="$ADMIN_PW"
+gcloud sql users create palladium_commerce \
+  --instance="${INSTANCE##*:}" --project=$PROJECT --password="$COMMERCE_PW"
+```
+
+Passing `--password="$ADMIN_PW"` rather than the literal keeps the value out of
+shell history — history records the line you typed, not what it expanded to.
+
+The `GRANT CONNECT` and `GRANT USAGE` from the block above still have to be
+run, but they contain no secrets, so Cloud SQL Studio is fine for those.
+
+Then check what the API actually gave you. Roles created this way are not
+identical to `CREATE ROLE` ones — Cloud SQL grants them `cloudsqlsuperuser`,
+which is broader than this boundary wants:
+
+```sql
+SELECT r.rolname, r.rolsuper, r.rolbypassrls,
+       ARRAY(SELECT b.rolname FROM pg_auth_members m
+             JOIN pg_roles b ON m.roleid = b.oid
+             WHERE m.member = r.oid) AS member_of
+FROM pg_roles r
+WHERE r.rolname IN ('palladium_admin','palladium_commerce');
+```
+
+`rolbypassrls` must be `f` for both. A role with `BYPASSRLS` ignores every
+policy in this runbook, silently — the migration would apply, the verification
+in step 7 would report the policies present, and the boundary would not exist.
+If either says `t`, fix it before going further:
+
+```sql
+ALTER ROLE palladium_commerce NOBYPASSRLS;
+ALTER ROLE palladium_admin    NOBYPASSRLS;
+```
+
+`cloudsqlsuperuser` membership does not by itself grant privileges on
+`palladium_app`'s tables, so it does not defeat the grants — but it is more
+than either service needs, and dropping it costs nothing:
+
+```sql
+REVOKE cloudsqlsuperuser FROM palladium_commerce;
+```
+
+Leave admin's alone if Prisma migrations or extensions need it.
+
 ## 4. Grant each role the rest of its working set
 
 These are plain SQL, so Cloud SQL Studio is a fine place to run them if the
