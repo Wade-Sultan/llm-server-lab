@@ -67,12 +67,27 @@ def add_policy(op, policy: RLSPolicy) -> None:
         f"  TO {policy.role}",
     ]
 
-    if policy.using:
+    # Postgres accepts only one of the two clauses for some commands, and
+    # rejects the statement outright for the rest: USING filters rows that
+    # already exist, WITH CHECK validates rows being written, and a SELECT or
+    # DELETE writes nothing while an INSERT reads nothing.
+    #
+    #   SELECT / DELETE  USING only      ("WITH CHECK cannot be applied to ...")
+    #   INSERT           WITH CHECK only ("only WITH CHECK expression allowed")
+    #   UPDATE / ALL     both
+    allows_using = policy.command != "INSERT"
+    allows_check = policy.command in ("ALL", "INSERT", "UPDATE")
+
+    if policy.using and allows_using:
         parts.append(f"  USING ({policy.using})")
 
-    check_expr = policy.with_check or policy.using
-    if check_expr:
-        parts.append(f"  WITH CHECK ({check_expr})")
+    if allows_check:
+        # For the commands that take both, an unspecified WITH CHECK falls back
+        # to the USING expression, which is Postgres' own default and keeps a
+        # read-what-you-may-write policy from needing it spelled twice.
+        check_expr = policy.with_check or policy.using
+        if check_expr:
+            parts.append(f"  WITH CHECK ({check_expr})")
 
     sql = "\n".join(parts)
     op.execute(text(sql))
