@@ -1224,7 +1224,6 @@ async def _assemble_dspy_build(state: Any, db) -> dict:
     *_cents column in this codebase (street_price_cents, etc).
     """
     from app.crud.components import get_part_by_name, resolve_part_price_cents
-    from app.crud.reference_builds import get_amazon_urls_by_part
 
     resolved: list[tuple[str, str, Any, int | None, int]] = []
     total_cents = 0
@@ -1248,10 +1247,9 @@ async def _assemble_dspy_build(state: Any, db) -> dict:
                 total_cents += price_cents * quantity
             resolved.append((component, name, part, price_cents, quantity))
 
-    amazon_urls = await get_amazon_urls_by_part(
-        db, [part.id for _, _, part, _, _ in resolved if part is not None]
-    )
-
+    # No amazon_url: the builder's database role cannot read `listings` (see
+    # the RLS migration adding the listings policies), so marketplace links are
+    # resolved in the browser from the commerce service's live listings.
     parts = [
         {
             "component": component,
@@ -1263,7 +1261,6 @@ async def _assemble_dspy_build(state: Any, db) -> dict:
             "approx_price": price_cents,
             "quantity": quantity,
             "part_id": str(part.id) if part is not None else "",
-            "amazon_url": amazon_urls.get(part.id) if part is not None else None,
         }
         for component, name, part, price_cents, quantity in resolved
     ]

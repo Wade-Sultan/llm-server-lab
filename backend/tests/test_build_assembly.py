@@ -51,7 +51,7 @@ def _state(**overrides):
 
 @pytest.fixture
 def db(monkeypatch):
-    """Stub the three catalog lookups _assemble_dspy_build makes."""
+    """Stub the two catalog lookups _assemble_dspy_build makes."""
 
     async def _get_part_by_name(_db, name):
         if name not in _PRICES:
@@ -61,12 +61,8 @@ def db(monkeypatch):
     async def _resolve_price(_db, part):
         return _PRICES.get(part.name)
 
-    async def _amazon(_db, _ids):
-        return {}
-
     monkeypatch.setattr("app.crud.components.get_part_by_name", _get_part_by_name)
     monkeypatch.setattr("app.crud.components.resolve_part_price_cents", _resolve_price)
-    monkeypatch.setattr("app.crud.reference_builds.get_amazon_urls_by_part", _amazon)
     return object()
 
 

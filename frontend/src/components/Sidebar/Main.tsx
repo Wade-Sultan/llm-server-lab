@@ -5,6 +5,7 @@ import {
   BookOpen,
   ChevronRight,
   Hammer,
+  Info,
   MessagesSquare,
   Newspaper,
   Sparkles,
@@ -41,6 +42,7 @@ const items: Item[] = [
   { icon: Hammer, title: "New Build", path: "/build/new" },
   { icon: MessagesSquare, title: "My Builds", path: "/buildhistory" },
   { icon: BookOpen, title: "Guides", path: "/guides" },
+  { icon: Info, title: "About", path: "/about" },
 ]
 
 type MoreItem = {

@@ -16,6 +16,7 @@ import {
   usePriceTargets,
 } from "@/components/assistant-ui/price-alert"
 import { useChatConversation } from "@/components/Chat/chatruntimeprovider"
+import { AffiliateDisclosure } from "@/components/Common/AffiliateDisclosure"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -249,6 +250,10 @@ export const BuildCard: DataMessagePartComponent<BuildData> = (props) => {
             </Badge>
           </div>
           <CardDescription>{data.description}</CardDescription>
+          {/* Above the parts list, not in the footer: the disclosure has to be
+              readable before the first buy button, not after it. See
+              AffiliateDisclosure for the rule this satisfies. */}
+          <AffiliateDisclosure className="mt-1" />
         </CardHeader>
         <CardContent className="flex flex-col gap-2">
           {data.parts.map((part) => {
