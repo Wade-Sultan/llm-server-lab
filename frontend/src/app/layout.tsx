@@ -17,6 +17,14 @@ const dmSans = DM_Sans({
   variable: "--font-dm-sans",
 })
 
+// Impact's site-verification snippet uses a non-standard `value` attribute
+// instead of `content`, which neither Next's Metadata API nor React's `<meta>`
+// types will emit. The cast is what lets the attribute through verbatim.
+const impactSiteVerification = {
+  name: "impact-site-verification",
+  value: "0c78d9ac-952a-4533-82e5-d2ad88e82a4e",
+} as React.MetaHTMLAttributes<HTMLMetaElement>
+
 export const metadata: Metadata = {
   title: "Palladium",
   description:
@@ -38,6 +46,7 @@ export default function RootLayout({
       className={`${raleway.variable} ${dmSans.variable}`}
     >
       <head>
+        <meta {...impactSiteVerification} />
         {/*
           Applies the stored theme before first paint, so a dark-mode user does
           not get a white flash while React hydrates. It has to be an inline
