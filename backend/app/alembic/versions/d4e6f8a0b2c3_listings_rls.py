@@ -29,8 +29,11 @@ Create Date: 2026-08-20 00:00:00.000000
 
 """
 
+import logging
+
 from alembic import op
 from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError
 
 from app.db.rls import RLSPolicy, add_policy, disable_rls, drop_policy, enable_rls
 
@@ -43,6 +46,8 @@ ADMIN_ROLE = "palladium_admin"
 COMMERCE_ROLE = "palladium_commerce"
 BUILDER_ROLE = "palladium_app"
 
+logger = logging.getLogger(__name__)
+
 # listings holds the eBay rows directly (an eBay listing is a base row with no
 # subtype — see admin/src/lib/listings.ts), so the base table is the one that
 # matters. The subtypes are covered too: amazon_listings today, ebay_listings
@@ -50,33 +55,59 @@ BUILDER_ROLE = "palladium_app"
 TABLES = ("listings", "amazon_listings", "ebay_listings")
 
 
-def _require_roles() -> None:
-    """Fail with a usable message rather than a bare 'role does not exist'.
+def _ensure_roles() -> None:
+    """Make sure the three roles exist, creating them where that is allowed.
 
-    The roles are created by the runbook, not here: creating them needs
-    CREATEROLE, which the migration role does not have on Cloud SQL, and the
-    passwords have to come from the secret store rather than a committed file.
+    Two environments, two right answers. Under docker-compose — CI, Tilt, a
+    local database — POSTGRES_USER is palladium_app and it is the container's
+    superuser, so the roles can simply be created and the migration is testable
+    like any other. On Cloud SQL palladium_app has no CREATEROLE, and the
+    passwords have to come from the secret store rather than from here, so the
+    only useful thing this can do is stop with instructions.
+
+    Roles created here are NOLOGIN and passwordless on purpose: enough to be a
+    policy grantee, not enough to be an account. Granting them LOGIN and a
+    password is a deliberate operator step, never a side effect of a migration.
+
+    One consequence worth knowing: under compose, palladium_app is the
+    container's superuser, and a superuser passes every privilege check and
+    bypasses RLS. So the boundary does NOT bite locally — a query added to the
+    builder that reads `listings` will work on a dev machine and fail in prod,
+    where palladium_app is an ordinary role. Verify the lockout against the
+    real database, not this one.
     """
-    missing = [
-        role
-        for role in (ADMIN_ROLE, COMMERCE_ROLE, BUILDER_ROLE)
-        if op.get_bind()
-        .execute(text("SELECT 1 FROM pg_roles WHERE rolname = :r"), {"r": role})
-        .first()
-        is None
-    ]
-    if missing:
-        raise RuntimeError(
-            f"missing database role(s): {', '.join(missing)}. Create each with "
-            "LOGIN and a password, GRANT CONNECT on this database and USAGE on "
-            "schema public, then point admin's DATABASE_URL at palladium_admin "
-            "and commerce's at palladium_commerce. The builder keeps "
-            "palladium_app. Run this migration only once they exist."
+    bind = op.get_bind()
+    for role in (ADMIN_ROLE, COMMERCE_ROLE, BUILDER_ROLE):
+        exists = bind.execute(
+            text("SELECT 1 FROM pg_roles WHERE rolname = :r"), {"r": role}
+        ).first()
+        if exists is not None:
+            continue
+        try:
+            # A savepoint, so a refused CREATE ROLE leaves the surrounding
+            # migration transaction usable enough to raise a real message
+            # instead of failing later as "current transaction is aborted".
+            with bind.begin_nested():
+                bind.execute(text(f'CREATE ROLE "{role}" NOLOGIN'))
+        except DBAPIError as exc:
+            raise RuntimeError(
+                f"missing database role: {role}, and this connection may not "
+                "create it. Create each of palladium_admin and "
+                "palladium_commerce with LOGIN and a password, GRANT CONNECT "
+                "on this database and USAGE on schema public, then point "
+                "admin's DATABASE_URL at palladium_admin and commerce's at "
+                "palladium_commerce. The builder keeps palladium_app."
+            ) from exc
+        logger.warning(
+            "created role %s as NOLOGIN with no password — it can hold policies "
+            "but nothing can connect as it until an operator grants LOGIN and a "
+            "password",
+            role,
         )
 
 
 def upgrade():
-    _require_roles()
+    _ensure_roles()
 
     for table in TABLES:
         # Table privileges first: RLS narrows what a role may see, it does not

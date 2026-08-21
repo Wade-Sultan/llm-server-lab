@@ -79,20 +79,54 @@ export default function AboutPage() {
               link at the moment the page is served.
             </p>
             <p>
-              Those links are also kept apart from the parts data. They are held
-              and served by a separate commerce service that reads a link and
-              hands it to your browser. The recommender that assembles builds is
-              its own service and never loads them — it works from Palladium's
-              parts catalog and that catalog's own prices.
+              Those links are also kept apart from the parts data, and not by
+              convention: the database enforces it. The recommender that
+              assembles builds connects with an account that has no access to
+              the listings tables at all, so it cannot read an eBay link
+              whatever its code asks for; it works from Palladium's parts
+              catalog and that catalog's own prices. The commerce service that
+              serves the links to your browser connects with a different
+              account, one that can read them but not change them. Writing a
+              listing is possible only from the admin tool.
             </p>
             <p>
-              The result is that no eBay data reaches an AI model. Nothing from
-              eBay is put into a model's context, and nothing from eBay enters
-              the records Palladium keeps to measure and improve its
-              recommendations; those hold catalog parts and catalog prices.
-              Because none is taken in, none is retained — there is nothing from
-              eBay sitting in a model, in training data, or in any set used to
-              tune the system.
+              The result is that no eBay listing data reaches an AI model. It is
+              never placed in a model's context, and it never enters the records
+              Palladium keeps to measure and improve its recommendations; those
+              hold catalog parts and catalog prices. Because nothing is taken in
+              from eBay, there is nothing to retain. No eBay listing data sits
+              in a model, in training data, or in any set used to tune the
+              system.
+            </p>
+          </Section>
+
+          <Section title="Where prices come from">
+            <p>
+              The price shown against a part is an estimate, not a quote from
+              any one shop. Once a night Palladium looks up the parts in its
+              catalog through SerpApi, a third-party service that returns Google
+              Shopping results. It searches on the part's own name and nothing
+              else. No information about you or the build you are working on is
+              sent, and the whole job runs against a fixed monthly search
+              budget.
+            </p>
+            <p>
+              Each result is then judged on its title. Whole prebuilt systems,
+              bundles, multipacks, accessories, and anything sold as used,
+              refurbished, open-box, or for parts are dropped, along with
+              anything that doesn't closely match the part being priced. What is
+              left is trimmed of outliers, and the middle value of the rest
+              becomes the part's approximate price. That is why a build is
+              labelled approximate: it is the middle of a spread of what
+              retailers are asking, not an offer anyone has made to you.
+            </p>
+            <p>
+              Because these are Google Shopping results, the merchants in them
+              vary, and eBay is sometimes one of them. Where that happens, an
+              eBay merchant's price counts toward the estimate like any other
+              retailer's. That figure comes out of Google's results rather than
+              from eBay itself. Palladium still makes no request to eBay and
+              still holds no eBay listing data.
             </p>
           </Section>
 
