@@ -21,8 +21,7 @@ Note the residual hole that leaves: whichever role owns these tables can still
 DROP POLICY or set NO FORCE. Ownership currently sits with the migration role,
 so this stops accidental reads — a future query in the builder returns nothing
 — rather than a determined one. Moving ownership to palladium_admin closes it,
-at the cost of listings DDL no longer running under the builder's role; see
-deploy/runbooks/listings-rls-roles.md.
+at the cost of listings DDL no longer running under the builder's role.
 
 Revision ID: d4e6f8a0b2c3
 Revises: c1d3e5f7a9b2
@@ -68,9 +67,11 @@ def _require_roles() -> None:
     ]
     if missing:
         raise RuntimeError(
-            f"missing database role(s): {', '.join(missing)}. Create them and "
-            "point each service's credentials at the right one before running "
-            "this migration — see deploy/runbooks/listings-rls-roles.md."
+            f"missing database role(s): {', '.join(missing)}. Create each with "
+            "LOGIN and a password, GRANT CONNECT on this database and USAGE on "
+            "schema public, then point admin's DATABASE_URL at palladium_admin "
+            "and commerce's at palladium_commerce. The builder keeps "
+            "palladium_app. Run this migration only once they exist."
         )
 
 

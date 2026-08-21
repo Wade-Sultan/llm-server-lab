@@ -71,6 +71,7 @@ dist
 # they carry no project-specific identifiers.
 deploy/observability.md
 deploy/messaging.md
+deploy/runbooks/
 deployment.md
 development.md
 
