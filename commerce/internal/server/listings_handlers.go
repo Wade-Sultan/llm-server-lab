@@ -18,7 +18,7 @@ import (
 // a discriminated union.
 type listingDTO struct {
 	ID                 string     `json:"id"`
-	PartID             string     `json:"part_id"`
+	PartID             *string    `json:"part_id"`
 	ListingType        string     `json:"listing_type"`
 	Marketplace        string     `json:"marketplace"`
 	URL                *string    `json:"url"`
@@ -96,12 +96,20 @@ func (h *handlers) noteListingFailure(partID, reason, detail string) {
 
 // clearListingFailure closes the open failure for a part, if there is one.
 // Same detached, best-effort contract as noteListingFailure.
-func (h *handlers) clearListingFailure(partID string) {
+// partID is nil for a listing that targets a group rather than one part. Such
+// a listing does close the coverage gap for every part in that group, but
+// resolving those rows is the writer's job (admin does it at creation time),
+// and commerce cannot write listings at all under the RLS split — so there is
+// nothing useful to do here but return.
+func (h *handlers) clearListingFailure(partID *string) {
+	if partID == nil {
+		return
+	}
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if err := h.store.ResolveListingFailure(ctx, partID); err != nil {
-			h.logger.Error("resolve listing failure", "part_id", partID, "err", err)
+		if err := h.store.ResolveListingFailure(ctx, *partID); err != nil {
+			h.logger.Error("resolve listing failure", "part_id", *partID, "err", err)
 		}
 	}()
 }

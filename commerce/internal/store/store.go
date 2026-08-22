@@ -256,8 +256,10 @@ func (s *Store) DeleteUserByFirebaseUID(ctx context.Context, firebaseUID string)
 // "amazon" listing_type is populated in practice today, so Amazon-specific
 // columns are plain nullable fields here rather than a separate type.
 type Listing struct {
-	ID                 string
-	PartID             string
+	ID string
+	// Nil when the listing targets a group rather than one part — see
+	// partOrGroupMatchFmt and the ck_listings_one_target constraint.
+	PartID             *string
 	ListingType        string
 	Marketplace        string
 	URL                *string
@@ -285,6 +287,26 @@ const listingColumns = `
 
 const listingFromJoin = `FROM listings l LEFT JOIN amazon_listings a ON a.id = l.id`
 
+// partOrGroupMatchFmt selects the listings that apply to one part: its own,
+// plus any attached to a group it belongs to. Each subselect yields NULL for a
+// part of another type, and NULL equals nothing, so the unrelated branches are
+// simply false without needing a part_type check here.
+//
+// %[1]d is the placeholder index for the part id, which it uses five times.
+const partOrGroupMatchFmt = `(
+	    l.part_id          = $%[1]d
+	 OR l.gpu_chipset_id   = (SELECT gpu_chipset_id   FROM gpus           WHERE id = $%[1]d)
+	 OR l.psu_group_id     = (SELECT psu_group_id     FROM psus           WHERE id = $%[1]d)
+	 OR l.ram_group_id     = (SELECT ram_group_id     FROM ram_kits       WHERE id = $%[1]d)
+	 OR l.storage_group_id = (SELECT storage_group_id FROM storage_drives WHERE id = $%[1]d)
+	)`
+
+// A part's own listing outranks its group's, so a board with a specific link
+// keeps it while every other board of the chipset falls back to the generic
+// one. Callers take the first row per marketplace, which makes this ordering
+// the override rule rather than a cosmetic sort.
+const specificFirstOrder = ` ORDER BY (l.part_id IS NULL), l.created_at`
+
 func scanListing(row interface{ Scan(dest ...any) error }) (*Listing, error) {
 	var l Listing
 	if err := row.Scan(
@@ -310,13 +332,13 @@ func (s *Store) ListListings(ctx context.Context, f ListingFilter) ([]*Listing, 
 	args := []any{}
 	if f.PartID != nil {
 		args = append(args, *f.PartID)
-		query += fmt.Sprintf(" AND l.part_id = $%d", len(args))
+		query += " AND " + fmt.Sprintf(partOrGroupMatchFmt, len(args))
 	}
 	if f.Marketplace != nil {
 		args = append(args, *f.Marketplace)
 		query += fmt.Sprintf(" AND l.marketplace = $%d", len(args))
 	}
-	query += " ORDER BY l.created_at"
+	query += specificFirstOrder
 	args = append(args, f.Limit)
 	query += fmt.Sprintf(" LIMIT $%d", len(args))
 	args = append(args, f.Skip)
@@ -344,7 +366,7 @@ func (s *Store) CountListings(ctx context.Context, f ListingFilter) (int, error)
 	args := []any{}
 	if f.PartID != nil {
 		args = append(args, *f.PartID)
-		query += fmt.Sprintf(" AND l.part_id = $%d", len(args))
+		query += " AND " + fmt.Sprintf(partOrGroupMatchFmt, len(args))
 	}
 	if f.Marketplace != nil {
 		args = append(args, *f.Marketplace)
@@ -378,9 +400,9 @@ func (s *Store) PartExists(ctx context.Context, partID string) (bool, error) {
 
 func (s *Store) GetListingsByPartID(ctx context.Context, partID string) ([]*Listing, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT `+listingColumns+` `+listingFromJoin+`
-		 WHERE l.part_id = $1 AND l.is_active = true
-		 ORDER BY l.created_at`, partID)
+		`SELECT `+listingColumns+` `+listingFromJoin+
+			` WHERE l.is_active = true AND `+fmt.Sprintf(partOrGroupMatchFmt, 1)+
+			specificFirstOrder, partID)
 	if err != nil {
 		return nil, err
 	}

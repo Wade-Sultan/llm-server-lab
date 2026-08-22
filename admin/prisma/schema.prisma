@@ -44,21 +44,37 @@ model PcPart {
   @@map("pc_parts")
 }
 
+// A listing targets exactly one of: a part, or one of the four part groups.
+// The DB enforces that with ck_listings_one_target (see the Alembic migration
+// e5a7c9b1d3f5) — Prisma cannot express "exactly one of these five", so a
+// write that sets two or none fails at the database rather than here.
+//
+// Group targeting is for eBay, whose listings are filtered search URLs: one
+// "RTX 3090" search is right for every partner board of that chipset.
 model Listing {
-  id                 String    @id @default(uuid()) @db.Uuid
-  partId             String    @map("part_id") @db.Uuid
-  part               PcPart    @relation(fields: [partId], references: [id], onDelete: Cascade)
-  listingType        String    @map("listing_type")
+  id     String  @id @default(uuid()) @db.Uuid
+  partId String? @map("part_id") @db.Uuid
+  part   PcPart? @relation(fields: [partId], references: [id], onDelete: Cascade)
+
+  gpuChipsetId       String?       @map("gpu_chipset_id") @db.Uuid
+  gpuChipset         GpuChipset?   @relation(fields: [gpuChipsetId], references: [id], onDelete: Cascade)
+  psuGroupId         String?       @map("psu_group_id") @db.Uuid
+  psuGroup           PsuGroup?     @relation(fields: [psuGroupId], references: [id], onDelete: Cascade)
+  ramGroupId         String?       @map("ram_group_id") @db.Uuid
+  ramGroup           RamGroup?     @relation(fields: [ramGroupId], references: [id], onDelete: Cascade)
+  storageGroupId     String?       @map("storage_group_id") @db.Uuid
+  storageGroup       StorageGroup? @relation(fields: [storageGroupId], references: [id], onDelete: Cascade)
+  listingType        String        @map("listing_type")
   marketplace        String
   url                String?
-  priceAmount        Int?      @map("price_amount")
-  currency           String?   @default("USD")
-  imageUrl           String?   @map("image_url")
-  isActive           Boolean   @default(true) @map("is_active")
-  fetchedAt          DateTime? @map("fetched_at")
-  priceLastUpdatedAt DateTime? @map("price_last_updated_at")
-  createdAt          DateTime  @default(now()) @map("created_at")
-  updatedAt          DateTime  @updatedAt @map("updated_at")
+  priceAmount        Int?          @map("price_amount")
+  currency           String?       @default("USD")
+  imageUrl           String?       @map("image_url")
+  isActive           Boolean       @default(true) @map("is_active")
+  fetchedAt          DateTime?     @map("fetched_at")
+  priceLastUpdatedAt DateTime?     @map("price_last_updated_at")
+  createdAt          DateTime      @default(now()) @map("created_at")
+  updatedAt          DateTime      @updatedAt @map("updated_at")
 
   amazonListing AmazonListing?
 
@@ -123,6 +139,7 @@ model GpuChipset {
   updatedAt           DateTime @updatedAt @map("updated_at")
 
   variants Gpu[]
+  listings Listing[]
 
   @@map("gpu_chipsets")
 }
@@ -145,6 +162,7 @@ model PsuGroup {
   updatedAt           DateTime @updatedAt @map("updated_at")
 
   variants Psu[]
+  listings Listing[]
 
   @@map("psu_groups")
 }
@@ -169,6 +187,7 @@ model RamGroup {
   updatedAt        DateTime @updatedAt @map("updated_at")
 
   variants RamKit[]
+  listings Listing[]
 
   @@map("ram_groups")
 }
@@ -190,6 +209,7 @@ model StorageGroup {
   updatedAt        DateTime @updatedAt @map("updated_at")
 
   variants StorageDrive[]
+  listings Listing[]
 
   @@map("storage_groups")
 }

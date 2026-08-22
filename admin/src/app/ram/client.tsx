@@ -22,7 +22,7 @@ import { createRam, updateRam, deleteRam, type RamFormData } from './actions';
 
 type RamWithPart = RamKit & {
   pcPart: PcPart & { listings: (Listing & { amazonListing: AmazonListing | null })[] };
-  group: { name: string };
+  group: { id: string; name: string };
 };
 type GroupOption = { id: string; name: string };
 
@@ -140,7 +140,12 @@ export function RamTable({ data, groups }: { data: RamWithPart[]; groups: GroupO
     {
       id: 'listings', header: 'Listings',
       cell: ({ row }) => (
-        <ListingsDialog partId={row.original.pcPart.id} partName={row.original.pcPart.name} listings={row.original.pcPart.listings} />
+        <ListingsDialog
+          partId={row.original.pcPart.id}
+          partName={row.original.pcPart.name}
+          group={{ kind: 'ramGroup', id: row.original.group.id, name: row.original.group.name }}
+          listings={row.original.pcPart.listings}
+        />
       ),
     },
     { id: 'isActive', accessorFn: (r) => r.pcPart.isActive, header: 'Active',

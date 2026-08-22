@@ -18,10 +18,22 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Input } from '@/components/ui/input';
 import { asinSchema, ebayUrlSchema } from '@/lib/utils';
+import { Checkbox } from '@/components/ui/checkbox';
 import {
   createAmazonListing, updateAmazonListing, createEbayListing, updateEbayListing, deleteListing,
-  type AmazonListingFormData, type EbayListingFormData,
+  type AmazonListingFormData, type EbayListingFormData, type ListingTarget,
 } from '@/lib/listings';
+
+/**
+ * The group this part belongs to, when it has one — a GPU's chipset, a PSU's
+ * group, and so on. Present only for the four part types the catalog groups;
+ * absent for a CPU or a case, which are one-of-a-kind.
+ */
+export type PartGroup = {
+  kind: Exclude<ListingTarget['kind'], 'part'>;
+  id: string;
+  name: string;
+};
 
 type ListingWithAmazon = Listing & { amazonListing: AmazonListing | null };
 
@@ -106,11 +118,13 @@ const ebaySchema = z.object({
 function EbayListingForm({
   listing,
   partId,
+  group,
   onSuccess,
   onCancel,
 }: {
   listing: ListingWithAmazon | null;
   partId: string;
+  group?: PartGroup;
   onSuccess: () => void;
   onCancel: () => void;
 }) {
@@ -121,6 +135,9 @@ function EbayListingForm({
     },
   });
   const [error, setError] = useState<string | null>(null);
+  // Off by default: attaching to the group is the broader claim, so it should
+  // be a thing you chose rather than a thing you failed to notice.
+  const [applyToGroup, setApplyToGroup] = useState(false);
 
   async function onSubmit(data: EbayListingFormData) {
     setError(null);
@@ -128,7 +145,9 @@ function EbayListingForm({
       if (listing) {
         await updateEbayListing(listing.id, data);
       } else {
-        await createEbayListing(partId, data);
+        const target: ListingTarget =
+          applyToGroup && group ? { kind: group.kind, id: group.id } : { kind: 'part', id: partId };
+        await createEbayListing(target, data);
       }
       onSuccess();
     } catch (e) {
@@ -148,6 +167,27 @@ function EbayListingForm({
             </FormItem>
           )}
         />
+        {/* Only when creating: an existing listing's target is fixed, and the
+            edit form only changes the URL. */}
+        {group && !listing && (
+          <div className="flex items-start gap-2 rounded-md border p-3">
+            <Checkbox
+              id="apply-to-group"
+              checked={applyToGroup}
+              onCheckedChange={(v) => setApplyToGroup(v === true)}
+              className="mt-0.5"
+            />
+            <div className="space-y-1">
+              <label htmlFor="apply-to-group" className="text-sm font-medium leading-none cursor-pointer">
+                Use for all of {group.name}
+              </label>
+              <p className="text-xs text-muted-foreground">
+                Applies to every variant of {group.name}, including ones added later.
+                A variant with its own eBay listing keeps it.
+              </p>
+            </div>
+          </div>
+        )}
         <p className="text-xs text-muted-foreground">
           Build a filtered search on eBay and paste the resulting URL. Affiliate tracking (your eBay Partner
           Network campaign) is appended automatically when the link is served.
@@ -164,7 +204,7 @@ function EbayListingForm({
   );
 }
 
-export function ListingsDialog({ partId, partName, listings }: { partId: string; partName: string; listings: ListingWithAmazon[] }) {
+export function ListingsDialog({ partId, partName, group, listings }: { partId: string; partName: string; group?: PartGroup; listings: ListingWithAmazon[] }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [filter, setFilter] = useState<MarketplaceFilter>('all');
@@ -202,6 +242,7 @@ export function ListingsDialog({ partId, partName, listings }: { partId: string;
               <EbayListingForm
                 listing={editingListing}
                 partId={partId}
+                group={group}
                 onSuccess={handleSuccess}
                 onCancel={() => { setAddingType(null); setEditingListing(null); }}
               />

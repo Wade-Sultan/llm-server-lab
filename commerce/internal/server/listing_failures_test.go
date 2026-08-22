@@ -127,7 +127,14 @@ func newFailureHandlers(st dataStore, m mailer, opsEmail string) *handlers {
 }
 
 func listing(partID string) *store.Listing {
-	return &store.Listing{ID: "l1", PartID: partID, ListingType: "amazon", Marketplace: "amazon", IsActive: true}
+	return &store.Listing{ID: "l1", PartID: &partID, ListingType: "amazon", Marketplace: "amazon", IsActive: true}
+}
+
+// groupListing is the other shape a row can take: attached to a part group
+// rather than a part, so PartID is nil. It exists to keep the failure paths
+// honest about a listing that has no single part to resolve.
+func groupListing() *store.Listing {
+	return &store.Listing{ID: "l2", ListingType: "ebay", Marketplace: "ebay", IsActive: true}
 }
 
 // --- Recording ---------------------------------------------------------------
@@ -241,6 +248,22 @@ func TestCreatingAListingResolvesTheFailure(t *testing.T) {
 	}
 	if got := st.expectResolved(t); got != partID {
 		t.Errorf("resolved %q, want %q", got, partID)
+	}
+}
+
+// A listing attached to a part group has no single part whose failure row it
+// could resolve. The interesting property is not that nothing is resolved but
+// that nothing panics on the way: clearListingFailure dereferences PartID.
+func TestAGroupListingResolvesNoFailure(t *testing.T) {
+	st := newFailureStore()
+	h := newFailureHandlers(st, newFakeMailer(), "ops@example.com")
+
+	h.clearListingFailure(groupListing().PartID)
+
+	select {
+	case got := <-st.resolved:
+		t.Errorf("resolved %q; a group listing names no part to resolve", got)
+	case <-time.After(200 * time.Millisecond):
 	}
 }
 

@@ -25,7 +25,7 @@ import { createGpu, updateGpu, deleteGpu, type GpuFormData } from './actions';
 
 type GpuWithPart = Gpu & {
   pcPart: PcPart & { listings: (Listing & { amazonListing: AmazonListing | null })[] };
-  chipset: { name: string };
+  chipset: { id: string; name: string };
 };
 type ChipsetOption = { id: string; name: string };
 
@@ -174,7 +174,12 @@ export function GpuTable({ data, chipsets }: { data: GpuWithPart[]; chipsets: Ch
     {
       id: 'listings', header: 'Listings',
       cell: ({ row }) => (
-        <ListingsDialog partId={row.original.pcPart.id} partName={row.original.pcPart.name} listings={row.original.pcPart.listings} />
+        <ListingsDialog
+          partId={row.original.pcPart.id}
+          partName={row.original.pcPart.name}
+          group={{ kind: 'gpuChipset', id: row.original.chipset.id, name: row.original.chipset.name }}
+          listings={row.original.pcPart.listings}
+        />
       ),
     },
     {

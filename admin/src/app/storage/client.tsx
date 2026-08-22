@@ -22,7 +22,7 @@ import { createStorage, updateStorage, deleteStorage, type StorageFormData } fro
 
 type StorageWithPart = StorageDrive & {
   pcPart: PcPart & { listings: (Listing & { amazonListing: AmazonListing | null })[] };
-  group: { name: string };
+  group: { id: string; name: string };
 };
 type GroupOption = { id: string; name: string };
 
@@ -133,7 +133,12 @@ export function StorageTable({ data, groups }: { data: StorageWithPart[]; groups
     {
       id: 'listings', header: 'Listings',
       cell: ({ row }) => (
-        <ListingsDialog partId={row.original.pcPart.id} partName={row.original.pcPart.name} listings={row.original.pcPart.listings} />
+        <ListingsDialog
+          partId={row.original.pcPart.id}
+          partName={row.original.pcPart.name}
+          group={{ kind: 'storageGroup', id: row.original.group.id, name: row.original.group.name }}
+          listings={row.original.pcPart.listings}
+        />
       ),
     },
     { id: 'isActive', accessorFn: (r) => r.pcPart.isActive, header: 'Active',

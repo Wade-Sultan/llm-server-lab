@@ -2,7 +2,8 @@ import { COMMERCE_BASE } from "@/lib/commerce"
 
 export interface Listing {
   id: string
-  part_id: string
+  /** Null when the listing targets a part group rather than one part. */
+  part_id: string | null
   listing_type: string
   marketplace: string
   url: string | null
