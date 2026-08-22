@@ -161,8 +161,8 @@ function EbayListingForm({
         <FormField control={form.control} name="url"
           render={({ field }) => (
             <FormItem>
-              <FormLabel>eBay search URL</FormLabel>
-              <FormControl><Input {...field} placeholder="https://www.ebay.com/sch/i.html?_nkw=..." /></FormControl>
+              <FormLabel>eBay URL</FormLabel>
+              <FormControl><Input {...field} placeholder="https://www.ebay.com/sch/i.html?_nkw=… or https://ebay.us/…" /></FormControl>
               <FormMessage />
             </FormItem>
           )}

@@ -97,9 +97,13 @@ export const asinSchema = z
   .min(1, 'ASIN is required')
   .refine((v) => /^[A-Z0-9]{10}$/i.test(v), { message: 'ASIN must be 10 characters (letters/numbers)' });
 
-// eBay listings store a filtered search-results URL (built via eBay Partner
-// Network); commerce appends EPN affiliate tracking at read time. Validate it
-// parses as an http(s) URL on an eBay host.
+// eBay listings store either a filtered search-results URL or one of EPN's
+// shortened https://ebay.us/aBcDeF links. Both pass the host check below —
+// `^ebay\.` matches the shortener's bare domain as well as www.ebay.com.
+//
+// The two are handled differently downstream: commerce appends EPN tracking to
+// a search URL at read time, and leaves a short link alone because it already
+// carries its attribution inside the redirect (internal/listings/affiliate.go).
 export const ebayUrlSchema = z
   .string()
   .min(1, 'URL is required')
@@ -110,4 +114,4 @@ export const ebayUrlSchema = z
     } catch {
       return false;
     }
-  }, { message: 'Must be a valid eBay URL (e.g. https://www.ebay.com/sch/...)' });
+  }, { message: 'Must be a valid eBay URL (a search link, or a short https://ebay.us/... link)' });

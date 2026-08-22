@@ -4,6 +4,7 @@ package listings
 
 import (
 	"fmt"
+	"net/url"
 	"strings"
 )
 
@@ -39,14 +40,34 @@ func EbayURL(storedURL *string, campaignID string) string {
 	if storedURL == nil || *storedURL == "" {
 		return ""
 	}
-	url := *storedURL
-	if campaignID == "" || strings.Contains(url, "campid=") {
-		return url
+	link := *storedURL
+	if campaignID == "" || strings.Contains(link, "campid=") || isEPNShortLink(link) {
+		return link
 	}
 	sep := "?"
-	if strings.Contains(url, "?") {
+	if strings.Contains(link, "?") {
 		sep = "&"
 	}
-	return url + sep + "mkevt=1&mkcid=1&mkrid=" + ebayUSRotationID +
+	return link + sep + "mkevt=1&mkcid=1&mkrid=" + ebayUSRotationID +
 		"&campid=" + campaignID + "&toolid=10001"
+}
+
+// isEPNShortLink reports whether raw is one of eBay Partner Network's own
+// shortened links, the https://ebay.us/aBcDeF form its link generator hands
+// out.
+//
+// Those already carry their attribution inside the redirect they expand to, so
+// the tracking this file appends does not belong on them: at best it is
+// duplicated on the far side, and at worst the extra query string travels no
+// further than the shortener, which is not obliged to forward it. The stored
+// link is already the complete affiliate link, so it goes out untouched.
+//
+// Matched on the host rather than a prefix so that a path or query containing
+// the string "ebay.us" cannot pass for one.
+func isEPNShortLink(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(u.Hostname(), "ebay.us")
 }

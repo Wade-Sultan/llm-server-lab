@@ -37,6 +37,9 @@ func TestEbayURL(t *testing.T) {
 	noQuery := "https://www.ebay.com/deals"
 	empty := ""
 	prewrapped := "https://www.ebay.com/sch/i.html?_nkw=RTX+4070&campid=5338999999"
+	short := "https://ebay.us/aBcDeF"
+	shortUpper := "https://EBAY.US/aBcDeF"
+	fakeShort := "https://www.ebay.com/sch/i.html?_nkw=ebay.us"
 	track := "&mkevt=1&mkcid=1&mkrid=" + ebayUSRotationID + "&campid=5338999999&toolid=10001"
 
 	cases := []struct {
@@ -51,6 +54,13 @@ func TestEbayURL(t *testing.T) {
 		{"appends tracking to url with existing query", &search, "5338999999", search + track},
 		{"appends tracking to url without query", &noQuery, "5338999999", noQuery + "?" + "mkevt=1&mkcid=1&mkrid=" + ebayUSRotationID + "&campid=5338999999&toolid=10001"},
 		{"already-wrapped url is returned verbatim", &prewrapped, "5338999999", prewrapped},
+		// EPN's own short links arrive complete: the attribution is inside the
+		// redirect, so appending campid to the outside is at best duplication.
+		{"epn short link is returned verbatim", &short, "5338999999", short},
+		{"short link host match is case-insensitive", &shortUpper, "5338999999", shortUpper},
+		// Host-matched, not substring-matched: "ebay.us" in a query string is
+		// still a full ebay.com search that needs wrapping.
+		{"ebay.us inside a query is not a short link", &fakeShort, "5338999999", fakeShort + track},
 	}
 
 	for _, c := range cases {
