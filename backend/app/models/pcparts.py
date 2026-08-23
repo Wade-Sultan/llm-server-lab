@@ -169,10 +169,17 @@ class PCPart(Base):
 
 
 # --- Component groups ---------------------------------------------------------
-# A "group" holds the intrinsic spec shared across every purchasable variant of
-# the same part (e.g. one GPUChipset row per "RTX 5080", shared by every MSI /
-# Gigabyte / PNY board). Groups are NOT pc_parts rows — they carry no price and
-# no listings; those live on the exact (the PCPart subclass) that FKs the group.
+# A "group" holds what is shared across every purchasable variant of the same
+# part (e.g. one GPUChipset row per "RTX 5080", shared by every MSI / Gigabyte
+# / PNY board). Groups are NOT pc_parts rows: nothing FKs them from pc_parts,
+# and the link runs the other way, from the PCPart subclass (gpus.
+# gpu_chipset_id and siblings).
+#
+# What lives on the group has grown. It began as intrinsic spec only, then took
+# street_price_cents (f6a7b8c9d0e1), and now takes listings too
+# (e5a7c9b1d3f5) — one eBay search URL is right for every board of a chipset.
+# The direction of the FK is why resolving a part's group costs a lookup in its
+# subtype table rather than a column read on pc_parts.
 
 
 class GPUChipset(Base):

@@ -287,19 +287,49 @@ const listingColumns = `
 
 const listingFromJoin = `FROM listings l LEFT JOIN amazon_listings a ON a.id = l.id`
 
-// partOrGroupMatchFmt selects the listings that apply to one part: its own,
-// plus any attached to a group it belongs to. Each subselect yields NULL for a
-// part of another type, and NULL equals nothing, so the unrelated branches are
-// simply false without needing a part_type check here.
+// groupMatchByPartType maps a part_type to the one clause that finds its
+// group's listings. The keys are pc_parts.part_type values, which are
+// SQLAlchemy's polymorphic identities — note "ramkit" and "storagedrive"
+// rather than "ram" and "storage" (backend/app/models/pcparts.py).
 //
-// %[1]d is the placeholder index for the part id, which it uses five times.
-const partOrGroupMatchFmt = `(
-	    l.part_id          = $%[1]d
-	 OR l.gpu_chipset_id   = (SELECT gpu_chipset_id   FROM gpus           WHERE id = $%[1]d)
-	 OR l.psu_group_id     = (SELECT psu_group_id     FROM psus           WHERE id = $%[1]d)
-	 OR l.ram_group_id     = (SELECT ram_group_id     FROM ram_kits       WHERE id = $%[1]d)
-	 OR l.storage_group_id = (SELECT storage_group_id FROM storage_drives WHERE id = $%[1]d)
-	)`
+// Only these four part types have a group. A CPU, motherboard, cooler, case or
+// fan is not a variant of anything, so its listings are found by part_id alone
+// and its lookup reads no subtype table at all. That matters beyond the saved
+// work: a query that named all four tables regardless of type coupled every
+// part's read path to all of them, which is how a missing grant on
+// storage_drives took down CPU buy buttons.
+//
+// %[1]d is the placeholder index holding the part id.
+var groupMatchByPartType = map[string]string{
+	"gpu":          `l.gpu_chipset_id   = (SELECT gpu_chipset_id   FROM gpus           WHERE id = $%[1]d)`,
+	"psu":          `l.psu_group_id     = (SELECT psu_group_id     FROM psus           WHERE id = $%[1]d)`,
+	"ramkit":       `l.ram_group_id     = (SELECT ram_group_id     FROM ram_kits       WHERE id = $%[1]d)`,
+	"storagedrive": `l.storage_group_id = (SELECT storage_group_id FROM storage_drives WHERE id = $%[1]d)`,
+}
+
+// partOrGroupMatch builds the predicate selecting the listings that apply to
+// one part: its own, plus its group's when it has one.
+//
+// An unknown part id yields the part-only predicate rather than an error —
+// it simply matches nothing, which is what a filter on a nonexistent part
+// should do. Callers that owe the caller a 404 (getListingsByPart) check
+// separately.
+func (s *Store) partOrGroupMatch(ctx context.Context, partID string, argIdx int) (string, error) {
+	own := fmt.Sprintf(`l.part_id = $%d`, argIdx)
+
+	partType, err := s.PartType(ctx, partID)
+	if errors.Is(err, ErrNotFound) {
+		return own, nil
+	}
+	if err != nil {
+		return "", err
+	}
+	clause, grouped := groupMatchByPartType[partType]
+	if !grouped {
+		return own, nil
+	}
+	return "(" + own + " OR " + fmt.Sprintf(clause, argIdx) + ")", nil
+}
 
 // A part's own listing outranks its group's, so a board with a specific link
 // keeps it while every other board of the chipset falls back to the generic
@@ -332,7 +362,11 @@ func (s *Store) ListListings(ctx context.Context, f ListingFilter) ([]*Listing, 
 	args := []any{}
 	if f.PartID != nil {
 		args = append(args, *f.PartID)
-		query += " AND " + fmt.Sprintf(partOrGroupMatchFmt, len(args))
+		match, err := s.partOrGroupMatch(ctx, *f.PartID, len(args))
+		if err != nil {
+			return nil, err
+		}
+		query += " AND " + match
 	}
 	if f.Marketplace != nil {
 		args = append(args, *f.Marketplace)
@@ -366,7 +400,11 @@ func (s *Store) CountListings(ctx context.Context, f ListingFilter) (int, error)
 	args := []any{}
 	if f.PartID != nil {
 		args = append(args, *f.PartID)
-		query += " AND " + fmt.Sprintf(partOrGroupMatchFmt, len(args))
+		match, err := s.partOrGroupMatch(ctx, *f.PartID, len(args))
+		if err != nil {
+			return 0, err
+		}
+		query += " AND " + match
 	}
 	if f.Marketplace != nil {
 		args = append(args, *f.Marketplace)
@@ -392,6 +430,18 @@ func (s *Store) GetListingByID(ctx context.Context, id string) (*Listing, error)
 
 // PartExists checks pc_parts, matching the 404 "PCPart not found" behavior of
 // the Python route's read_listings_by_part.
+// PartType returns a part's pc_parts.part_type, which decides whether it has a
+// group whose listings it should inherit. ErrNotFound when no such part.
+func (s *Store) PartType(ctx context.Context, partID string) (string, error) {
+	var partType string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT part_type FROM pc_parts WHERE id = $1`, partID).Scan(&partType)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	return partType, err
+}
+
 func (s *Store) PartExists(ctx context.Context, partID string) (bool, error) {
 	var exists bool
 	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM pc_parts WHERE id = $1)`, partID).Scan(&exists)
@@ -399,9 +449,13 @@ func (s *Store) PartExists(ctx context.Context, partID string) (bool, error) {
 }
 
 func (s *Store) GetListingsByPartID(ctx context.Context, partID string) ([]*Listing, error) {
+	match, err := s.partOrGroupMatch(ctx, partID, 1)
+	if err != nil {
+		return nil, err
+	}
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT `+listingColumns+` `+listingFromJoin+
-			` WHERE l.is_active = true AND `+fmt.Sprintf(partOrGroupMatchFmt, 1)+
+			` WHERE l.is_active = true AND `+match+
 			specificFirstOrder, partID)
 	if err != nil {
 		return nil, err

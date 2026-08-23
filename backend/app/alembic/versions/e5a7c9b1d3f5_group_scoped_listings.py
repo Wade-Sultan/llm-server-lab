@@ -72,8 +72,45 @@ def upgrade():
 
     op.create_check_constraint("ck_listings_one_target", "listings", _ONE_TARGET)
 
+    # Resolving a part's listings now reads the subtype table that holds its
+    # group id, so commerce needs those four tables as well as the ones it
+    # already had. This grant lives in the migration rather than the role
+    # runbook because it is this migration's query that creates the need —
+    # split them up and the read path 500s with "permission denied for table
+    # gpus" the moment the new commerce build ships.
+    #
+    # Guarded: the role is absent in environments that predate the RLS split,
+    # and a GRANT to a missing role is an error, not a no-op.
+    op.execute(
+        sa.text(
+            """
+            DO $$
+            BEGIN
+                IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'palladium_commerce') THEN
+                    GRANT SELECT ON gpus, psus, ram_kits, storage_drives TO palladium_commerce;
+                END IF;
+            END
+            $$;
+            """
+        )
+    )
+
 
 def downgrade():
+    op.execute(
+        sa.text(
+            """
+            DO $$
+            BEGIN
+                IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'palladium_commerce') THEN
+                    REVOKE SELECT ON gpus, psus, ram_kits, storage_drives FROM palladium_commerce;
+                END IF;
+            END
+            $$;
+            """
+        )
+    )
+
     # Group listings have no part to fall back to, so they are dropped rather
     # than silently reattached to something they were never about.
     op.execute(sa.text("DELETE FROM listings WHERE part_id IS NULL"))

@@ -44,6 +44,11 @@ export const initialAgentState: ChatAgentState = {
 }
 
 /**
+ * One thread message per state message, always. See ONE BUBBLE PER TURN below.
+ */
+const NEVER_JOIN = { joinStrategy: "none" } as const
+
+/**
  * `toThreadMessages` does the assistant-ui bookkeeping — ids, statuses, message
  * metadata — that a hand-built `ThreadMessageLike[]` does not satisfy. This
  * callback only has to say what each message *is*.
@@ -51,14 +56,36 @@ export const initialAgentState: ChatAgentState = {
  * The BuildCard is rendered by `makeAssistantDataUI({name: "build"})`, which
  * looks for a data part of that name — the same shape `ConversationLoader`
  * rebuilds from persisted metadata, so BuildCard itself is untouched.
+ *
+ * ONE BUBBLE PER TURN. `convertExternalMessages` starts a new thread message
+ * only when it sees a user or system message, so by default it concatenates a
+ * run of consecutive assistant messages into a single bubble. Every other turn
+ * here is answering something the user typed, so that default is invisible —
+ * except after a case pick, which is a click on a card and therefore carries no
+ * user message. The picker's turn and the turn that finishes the build are two
+ * adjacent assistant messages, and joining them rendered the whole thing as one
+ * reply: the case prompt, the cards, the build lead-in and the BuildCard all in
+ * one bubble, with the picker wedged in the middle of prose from two different
+ * turns instead of reading as the reply it is.
+ *
+ * `joinStrategy: "none"` keeps each state message its own bubble. That is also
+ * a contract with the server, not only a cosmetic choice: assistant-ui ids a
+ * converted message by its position in the *converted* list, and
+ * `rewind_prefix` in backend/app/services/transport.py reads `parentId` back as
+ * an index into state. Every join silently shifts the two apart, so an edit
+ * made after a case pick would rewind the conversation to the wrong message.
  */
 const messageConverter = createMessageConverter<ChatMessageState>(
-  (message): ThreadMessageLike => {
+  (message): ThreadMessageLike & { convertConfig: typeof NEVER_JOIN } => {
     if (
       message.role !== "assistant" ||
       (!message.build && !message.case_options)
     ) {
-      return { role: message.role, content: message.content }
+      return {
+        role: message.role,
+        content: message.content,
+        convertConfig: NEVER_JOIN,
+      }
     }
 
     // Picker above the card: the options appear mid-turn, before the build
@@ -80,6 +107,7 @@ const messageConverter = createMessageConverter<ChatMessageState>(
     return {
       role: "assistant",
       content: [{ type: "text", text: message.content }, ...parts],
+      convertConfig: NEVER_JOIN,
     }
   },
 )
